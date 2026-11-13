@@ -227,7 +227,7 @@ def do_specify(cfg: Config, idea: str, run_id: str | None = None,
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     if h.name == "claude":
-        prompt = prompts.specify_prompt(idea)
+        prompt = prompts.specify_prompt(idea, cfg.root)
     else:
         prompt = (f"/speckit-specify {idea}\n\n{prompts.NO_QUESTIONS}"
                   if h.name == "claude" else
@@ -242,7 +242,7 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
             dry_run: bool = False) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
-    prompt = (prompts.plan_prompt(stack) if h.name == "claude"
+    prompt = (prompts.plan_prompt(stack, cfg.root) if h.name == "claude"
               else f"Stack and constraints: {stack}\n\n{prompts.NO_QUESTIONS}\n\n"
                    f"Run the Spec Kit planning flow (speckit-plan skill).")
     return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(),
@@ -304,9 +304,10 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
     artifact = cfg.runs_dir / rid / "artifacts" / skill
     spec = prompts.SKILL_SPECS[skill]
     if h.name == "claude":
-        prompt = prompts.skill_prompt(skill, args, artifact)
+        prompt = prompts.skill_prompt(skill, args, artifact, cfg.root)
     else:
-        prompt = prompts.skill_prompt_for(h.name, skill, args, artifact, cfg.egm_path() or cfg.root)
+        prompt = prompts.skill_prompt_for(h.name, skill, args, artifact,
+                                          cfg.egm_path() or cfg.root, cfg.root)
     res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(),
                    stream=stream, dry_run=dry_run)
     res.writes = spec.get("writes", "")  # type: ignore[attr-defined]

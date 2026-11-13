@@ -424,3 +424,52 @@ def test_implement_requires_confirmation(tmp_path):
     code = C.main(["--root", str(tmp_path), "--json", "implement"])
     assert code == 3                                   # refused, nothing written
     assert not (tmp_path / ".speckfish" / "runs").exists()
+
+
+# ---------- markdown input files ----------
+def test_read_input_inlines_small_files(tmp_path):
+    from speckfish.prompts import read_input
+    f = tmp_path / "plantilla.md"
+    f.write_text("# Principios\n1. tests primero\n", encoding="utf-8")
+    text, src = read_input("@plantilla.md", tmp_path)
+    assert "tests primero" in text and "source material" in text
+    assert src == f
+    assert str(f).replace("\\", "/") in text
+
+
+def test_read_input_accepts_bare_relative_path(tmp_path):
+    from speckfish.prompts import read_input
+    (tmp_path / "docs").mkdir()
+    f = tmp_path / "docs" / "constitucion.md"
+    f.write_text("calidad\n", encoding="utf-8")
+    text, src = read_input("docs/constitucion.md", tmp_path)
+    assert "calidad" in text and src is not None
+
+
+def test_read_input_leaves_normal_text_alone():
+    from speckfish.prompts import read_input
+    text, src = read_input("una CLI de tareas en JSON", None)
+    assert text == "una CLI de tareas en JSON" and src is None
+
+
+def test_read_input_references_big_files(tmp_path):
+    from speckfish.prompts import read_input, INLINE_LIMIT
+    f = tmp_path / "grande.md"
+    f.write_text("x" * (INLINE_LIMIT + 100), encoding="utf-8")
+    text, src = read_input("@grande.md", tmp_path)
+    assert "read that file" in text and "x" * 50 not in text
+
+
+def test_missing_input_file_fails_loudly(tmp_path):
+    from speckfish.prompts import read_input
+    with pytest.raises(SystemExit):
+        read_input("@no-existe.md", tmp_path)
+
+
+def test_constitution_uses_markdown_template(tmp_path):
+    from speckfish.prompts import skill_prompt
+    f = tmp_path / "constitution-template.md"
+    f.write_text("# Constitución\n- Sin dependencias externas\n", encoding="utf-8")
+    p = skill_prompt("constitution", "@constitution-template.md", tmp_path / "art", tmp_path)
+    assert "Sin dependencias externas" in p
+    assert p.startswith("/speckit-constitution")

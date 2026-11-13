@@ -29,12 +29,13 @@ PROFILES = {
 }
 
 
-def specify_prompt(idea: str) -> str:
-    return f"/speckit-specify {idea.strip()}\n\n{NO_QUESTIONS}"
+def specify_prompt(idea: str, cfg_root: Path | None = None) -> str:
+    body, _src = expand_input(idea, cfg_root)
+    return f"/speckit-specify {body}\n\n{NO_QUESTIONS}"
 
 
-def plan_prompt(stack: str) -> str:
-    stack = (stack or "").strip()
+def plan_prompt(stack: str, cfg_root: Path | None = None) -> str:
+    stack, _src = expand_input((stack or "").strip(), cfg_root)
     extra = f"Stack and constraints: {stack}\n\n" if stack else ""
     return f"/speckit-plan {stack}\n\n{extra}{NO_QUESTIONS}"
 
@@ -148,12 +149,13 @@ SCHEMAS = {"review": REVIEW_SCHEMA, "drift": DRIFT_SCHEMA,
 SKILL_SPECS = {
     "constitution": {
         "skill": "speckit-constitution",
-        "hint": "principles or values for the project",
+        "hint": "principles, or @path/to/template.md",
         "args_required": False,
         "default_args": ("no principles were given: propose a short, concrete constitution that fits "
                          "this project (quality gates, testing, review, docs) and mark every invented "
                          "rule as a proposal for the team to ratify"),
         "writes": ".specify/memory/constitution.md",
+        "template_ok": True,
     },
     "tasks": {
         "skill": "speckit-tasks",
@@ -205,11 +207,13 @@ SKILL_SPECS = {
 }
 
 
-def skill_prompt(skill: str, args: str, artifact_dir: Path) -> str:
+def skill_prompt(skill: str, args: str, artifact_dir: Path,
+                 cfg_root: Path | None = None) -> str:
     """Prompt for a Spec Kit skill that is not specify/plan."""
     spec = SKILL_SPECS[skill]
     given = (args or "").strip()
-    body = given or spec["default_args"]
+    body, source = expand_input(given, cfg_root)
+    body = body or spec["default_args"]
     head = f"/{spec['skill']}" + (f" {body}" if body else "")
     parts = [head, NO_QUESTIONS]
     note = spec.get("headless_note")
@@ -218,11 +222,50 @@ def skill_prompt(skill: str, args: str, artifact_dir: Path) -> str:
     return "\n\n".join(parts)
 
 
+# --- input from a file: `--from file.md` or `@file.md` as the argument ---
+
+INLINE_LIMIT = 12000  # bytes; above this the agent gets the path instead of the content
+
+
+def read_input(value: str, cfg_root: Path | None = None) -> tuple[str, Path | None]:
+    """Resolve an argument that points at a Markdown/text file.
+
+    Returns (text_to_put_in_the_prompt, source_path). Small files are inlined so the agent does not
+    have to spend a turn reading them; big ones are referenced by absolute path.
+    """
+    raw = (value or "").strip().strip('"').strip("'")
+    if raw.startswith("@"):
+        raw = raw[1:].strip()
+    else:
+        # only treat a bare value as a path when it clearly is one
+        looks_like_path = ("/" in raw or "\\" in raw) and Path(raw).suffix.lower() in (
+            ".md", ".markdown", ".txt", ".rst")
+        if not looks_like_path:
+            return (value or "").strip(), None
+    p = Path(raw).expanduser()
+    if not p.is_absolute() and cfg_root is not None:
+        p = Path(cfg_root) / p
+    if not p.is_file():
+        raise SystemExit(f"input file not found: {raw}")
+    size = p.stat().st_size
+    if size > INLINE_LIMIT:
+        return (f"Use the content of {norm(p)} as the source material (read that file; "
+                f"{size} bytes)."), p
+    text = p.read_text(encoding="utf-8", errors="replace").strip()
+    return (f"Use this content from {norm(p)} as the source material:\n\n"
+            f"<<<\n{text}\n>>>"), p
+
+
+def expand_input(value: str, cfg_root: Path | None = None) -> tuple[str, Path | None]:
+    return read_input(value, cfg_root)
+
+
 def skill_prompt_for(harness: str, skill: str, args: str, artifact_dir: Path,
-                     egm_root: Path) -> str:
+                     egm_root: Path, cfg_root: Path | None = None) -> str:
     """Same, for harnesses without slash commands: point at the installed skill file."""
     spec = SKILL_SPECS[skill]
-    given = (args or "").strip() or spec["default_args"]
+    body, _src = expand_input((args or "").strip(), cfg_root)
+    given = body or spec["default_args"]
     docs = {"copilot": "docs/copilot.md", "codex": "docs/codex.md"}.get(harness, "docs/claude.md")
     parts = [f"Read {docs} of the Spec Kit project and run the `{spec['skill']}` skill"
              f"{' with: ' + given if given else ''}.", NO_QUESTIONS]

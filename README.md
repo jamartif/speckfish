@@ -200,6 +200,27 @@ Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integ
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+### Passing a Markdown file as input
+
+Any step that takes text accepts a file instead: prefix the argument with `@`, or pass a path that
+clearly is one (`.md`, `.markdown`, `.txt`, `.rst`). Small files (under 12 KB) are inlined into the
+prompt; bigger ones are referenced by absolute path so the agent reads them itself.
+
+```bash
+speckfish constitution @.specify/memory/constitution-template.md   # your own principles file
+speckfish constitution docs/team-constitution.md                 # same, without the @
+speckfish specify @docs/brief.md                                 # a written brief instead of a line
+speckfish plan @docs/stack.md                                    # constraints from a document
+speckfish checklist @docs/quality.md
+```
+
+Real run on this machine: `constitution @constitution-template.md` produced a Spec Kit
+`constitution.md` with the five principles of the template formalised (with its version/Sync Impact
+Report), 133 s, 1.33 AI credits with Copilot.
+
+Relative paths resolve against `--root`; a missing file fails loudly instead of being sent as text.
+`review` and `drift` take a path natively — they do not need the `@`.
+
 ### Use it from VS Code (Copilot, Claude, Codex)
 
 `speckfish editors` writes the entry points each tool documents, so the same steps are one
