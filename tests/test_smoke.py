@@ -473,3 +473,60 @@ def test_constitution_uses_markdown_template(tmp_path):
     p = skill_prompt("constitution", "@constitution-template.md", tmp_path / "art", tmp_path)
     assert "Sin dependencias externas" in p
     assert p.startswith("/speckit-constitution")
+
+
+# ---------- CLI surface: version, config, runs ----------
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["--version"])
+    assert exc.value.code == 0
+    assert "speckfish" in capsys.readouterr().out
+
+
+def test_config_roundtrip(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    assert C.main(["--root", str(tmp_path), "config", "profile=none"]) == 0
+    stored = (tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8")
+    assert '"profile": "none"' in stored
+    assert C.main(["--root", str(tmp_path), "config", "nope=1"]) == 3      # unknown key
+    assert C.main(["--root", str(tmp_path), "config", "no-equals"]) == 3
+
+
+def test_run_totals_sums_cost_and_flags_mixed_units():
+    from speckfish.steps import run_totals
+    steps = {"a": {"cost": 0.5, "cost_unit": "usd", "duration_s": 10.0},
+             "b": {"cost": 1.25, "cost_unit": "usd", "duration_s": 5.5}}
+    out = run_totals(steps)
+    assert out["cost"] == 1.75 and out["duration_s"] == 15.5 and "cost_note" not in out
+
+    mixed = run_totals({"a": {"cost": 0.5, "cost_unit": "usd", "duration_s": 1.0},
+                        "b": {"cost": 2.0, "cost_unit": "credits", "duration_s": 1.0}})
+    assert "mixed units" in mixed["cost_note"]
+
+
+def test_clean_runs_keeps_newest(tmp_path):
+    from speckfish.steps import clean_runs
+    cfg = Config(root=tmp_path)
+    for name in ("20260101-000001", "20260102-000001", "20260103-000001"):
+        (cfg.runs_dir / name).mkdir(parents=True)
+        (cfg.runs_dir / name / "state.json").write_text("{}", encoding="utf-8")
+    out = clean_runs(cfg, keep=2)
+    assert out["removed"] == ["20260101-000001"]
+    assert sorted(p.name for p in cfg.runs_dir.iterdir()) == ["20260102-000001", "20260103-000001"]
+
+
+def test_pipeline_with_tasks_and_analyze(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    monkeypatch.setattr(S, "get_harness", lambda cfg=None, name=None: ClaudeHarness(cfg))
+    egm = tmp_path / "egm"
+    (egm / "skills" / "x").mkdir(parents=True)
+    (egm / "plugin.json").write_text('{"version": "0"}', encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(egm)
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    for f in ("spec.md", "plan.md"):
+        (tmp_path / "specs" / "001-x" / f).write_text("# x", encoding="utf-8")
+    out = S.do_pipeline(cfg, "idea", "stack", None, gate=False, with_drift=False,
+                        with_tasks=True, with_analyze=True, stream=False, dry_run=True)
+    assert list(out["steps"]) == ["specify", "plan", "tasks", "analyze", "review"]

@@ -10,6 +10,7 @@ from . import steps as S
 from .config import Config, norm
 from .harnesses import get_harness
 from .prompts import SKILL_SPECS
+from . import __version__
 
 EXIT_OK, EXIT_BLOCKERS, EXIT_ERROR, EXIT_ENV = 0, 1, 2, 3
 
@@ -127,6 +128,8 @@ def normalize_argv(argv: list[str]) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--version", action="version", version=f"speckfish {__version__}",
+                        help="show the version and exit")
     common.add_argument("--root", default=".", help="project root (default: cwd)")
     common.add_argument("--harness", default=None, help="claude | copilot | codex (default: auto)")
     common.add_argument("--model", default=None,
@@ -177,6 +180,9 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--gate", action="store_true", help="stop when a step fails or there are blockers")
     sp.add_argument("--with-drift", action="store_true",
                     help="also run drift at the end (skipped if --gate stopped the chain)")
+    sp.add_argument("--with-tasks", action="store_true", help="also generate tasks.md before the review")
+    sp.add_argument("--with-analyze", action="store_true",
+                    help="also run the spec/plan/tasks consistency analysis before the review")
 
     sp = sub.add_parser("editors", help="generate VS Code tasks and agent slash commands")
     sp.add_argument("--targets", default="vscode,copilot,claude,codex",
@@ -196,7 +202,13 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
 
-    sub.add_parser("runs", help="list runs")
+    sp = sub.add_parser("config", help="show or change the project defaults")
+    sp.add_argument("set", nargs="?", default=None,
+                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify)")
+
+    sp = sub.add_parser("runs", help="list runs")
+    sp.add_argument("--clean", action="store_true", help="delete old runs, keeping --keep newest")
+    sp.add_argument("--keep", type=int, default=10, help="how many runs to keep (default: 10)")
     sp = sub.add_parser("show", help="details of a run")
     sp.add_argument("run_id", nargs="?", default=None)
     return p
@@ -266,17 +278,58 @@ def main(argv: list[str] | None = None) -> int:
             res = S.do_skill(cfg, args.cmd, args.args, args.run_id, h, stream, args.dry_run)
         elif args.cmd == "pipeline":
             out = S.do_pipeline(cfg, args.description, args.stack, args.target,
-                                args.gate, args.with_drift, stream, args.dry_run)
+                                args.gate, args.with_drift, args.with_tasks, args.with_analyze,
+                                stream, args.dry_run)
             emit(out, as_json, json.dumps(out, indent=2, ensure_ascii=False))
             if not out.get("ok"):
                 return EXIT_ERROR
             if any((s.get("blockers") or []) for s in out["steps"].values()):
                 return EXIT_BLOCKERS
             return EXIT_OK
+        elif args.cmd == "config":
+            from dataclasses import asdict
+            if args.set:
+                if "=" not in args.set:
+                    emit({"error": "expected KEY=VALUE"}, as_json, "expected KEY=VALUE")
+                    return EXIT_ENV
+                key, value = args.set.split("=", 1)
+                key = key.strip()
+                allowed = {"harness", "model", "profile", "egm_root", "specify"}
+                if key not in allowed:
+                    msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
+                    emit({"error": msg}, as_json, f"ERROR: {msg}")
+                    return EXIT_ENV
+                setattr(cfg, key, value.strip())
+                path = cfg.save()
+                emit({"saved": norm(path), key: value.strip()}, as_json,
+                     f"saved {key}={value.strip()} → {norm(path)}")
+                return EXIT_OK
+            data = asdict(cfg)
+            data.pop("root", None)
+            human = [f"{k}: {v}" for k, v in data.items()]
+            emit(data, as_json, "\n".join(human))
+            return EXIT_OK
         elif args.cmd == "runs":
             base = cfg.runs_dir
             runs = sorted([p.name for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
-            emit({"runs": runs}, as_json, "\n".join(runs) or "(no runs)")
+            if args.clean:
+                out = S.clean_runs(cfg, args.keep)
+                emit(out, as_json, f"removed {len(out['removed'])} run(s); kept "
+                                   f"{len(out['kept'])}")
+                return EXIT_OK
+            rows = []
+            for rid in runs:
+                summary = S.run_summary(cfg, rid)
+                rows.append({"run": rid, "steps": list((summary.get("steps") or {}).keys()),
+                             "cost": summary.get("cost"), "cost_unit": summary.get("cost_unit"),
+                             "duration_s": summary.get("duration_s")})
+            human = []
+            for r in rows:
+                cost = f"{r['cost']} {r['cost_unit']}" if r["cost"] else "-"
+                dur = f"{r['duration_s']}s" if r["duration_s"] else "-"
+                human.append(f"{r['run']}  steps={len(r['steps'])}  cost={cost}  "
+                             f"{dur}  [{','.join(r['steps'])}]")
+            emit({"runs": rows}, as_json, "\n".join(human) or "(no runs)")
             return EXIT_OK
         elif args.cmd == "show":
             base = cfg.runs_dir
@@ -287,9 +340,17 @@ def main(argv: list[str] | None = None) -> int:
             if not rid or not (base / rid).exists():
                 emit({"error": "run not found"}, as_json, "run not found")
                 return EXIT_ERROR
-            state = base / rid / "state.json"
-            data = json.loads(state.read_text(encoding="utf-8")) if state.exists() else {}
-            emit(data, as_json, json.dumps(data, indent=2, ensure_ascii=False))
+            data = S.run_summary(cfg, rid)
+            human = [f"run {rid}: {len(data.get('steps') or {})} step(s)"]
+            for step, info in (data.get("steps") or {}).items():
+                cost = f"{info.get('cost')} {info.get('cost_unit')}" if info.get("cost") else "-"
+                human.append(f"  {step:<12} {info.get('status'):<7} {info.get('duration_s')}s  "
+                             f"cost={cost}  model={info.get('model') or '-'}  "
+                             f"blockers={info.get('blockers')}")
+            if data.get("cost"):
+                human.append(f"total: {data['cost']} {data.get('cost_unit')} in "
+                             f"{data.get('duration_s')}s")
+            emit(data, as_json, "\n".join(human))
             return EXIT_OK
         else:
             return EXIT_ERROR

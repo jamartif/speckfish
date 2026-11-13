@@ -2,6 +2,11 @@
 
 **Headless orchestrator for [Spec Kit](https://github.com/github/spec-kit) + [Elephant-Goldfish Model (EGM)](https://github.com/google/elephant-goldfish-model) over agent CLIs.**
 
+[![tests](https://github.com/jamartif/speckfish/actions/workflows/tests.yml/badge.svg)](https://github.com/jamartif/speckfish/actions/workflows/tests.yml)
+[![release](https://github.com/jamartif/speckfish/actions/workflows/release.yml/badge.svg)](https://github.com/jamartif/speckfish/releases)
+[![python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
+[![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
 `speckfish` turns the "specify → plan → review with Goldfish" loop into commands you can run
 from a terminal or from CI. One agent subprocess per step, per-run artifacts, a
 machine-readable verdict and exit codes you can automate against.
@@ -191,7 +196,15 @@ speckfish review --interactive      # EGM asks, you answer
 speckfish drift                     # drift between spec/code
 
 speckfish pipeline "idea" --stack "..." --gate --with-drift
-speckfish runs && speckfish show
+speckfish pipeline "idea" --stack "..." --with-tasks --with-analyze --gate
+
+# housekeeping
+speckfish --version
+speckfish config                         # show project defaults
+speckfish config harness=copilot         # store them in .speckfish/config.json
+speckfish runs                           # steps, cost and duration per run
+speckfish show                           # per-step table + run total
+speckfish runs --clean --keep 5          # prune old runs
 ```
 
 Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integration installs).

@@ -341,24 +341,35 @@ def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
 
 
 def do_pipeline(cfg: Config, idea: str, stack: str = "", target: str | None = None,
-                gate: bool = False, with_drift: bool = False,
-                stream: bool = True, dry_run: bool = False) -> dict:
+                gate: bool = False, with_drift: bool = False, with_tasks: bool = False,
+                with_analyze: bool = False, stream: bool = True,
+                dry_run: bool = False) -> dict:
+    """specify → plan → (tasks) → (analyze) → review → (drift), one run, with an optional gate."""
     h = get_harness(cfg)
     rid = ensure_run(cfg, None)
-    results = {"run_id": rid, "harness": h.name, "steps": {}}
-    for name, fn, kwargs in (
-        ("specify", do_specify, {"idea": idea}),
-        ("plan", do_plan, {"stack": stack}),
-        ("review", do_review, {"target": target}),
-    ):
-        res = fn(cfg, **kwargs, run_id=rid, harness=h, stream=stream, dry_run=dry_run)
-        results["steps"][name] = res.to_dict()
-        if gate and not res.ok and name != "review":
-            results["stopped_at"] = name
+    results = {"run_id": rid, "harness": h.name, "steps": {}, "writes": {}}
+    plan_of_steps: list[tuple[str, str]] = [("specify", "idea"), ("plan", "stack")]
+    if with_tasks:
+        plan_of_steps.append(("tasks", "tasks"))
+    if with_analyze:
+        plan_of_steps.append(("analyze", "analyze"))
+    plan_of_steps.append(("review", "review"))
+
+    for step, kind in plan_of_steps:
+        if kind == "idea":
+            res = do_specify(cfg, idea, rid, h, stream, dry_run)
+        elif kind == "stack":
+            res = do_plan(cfg, stack, rid, h, stream, dry_run)
+        elif kind == "review":
+            res = do_review(cfg, target, rid, h, stream=stream, dry_run=dry_run)
+        else:
+            res = do_skill(cfg, step, "", rid, h, stream, dry_run)
+        results["steps"][step] = res.to_dict()
+        blocked = bool(res.blockers) if step == "review" else False
+        if gate and (not res.ok or blocked):
+            results["stopped_at"] = step
             break
-        if gate and name == "review" and res.blockers:
-            results["stopped_at"] = name
-            break
+
     if with_drift:
         if results.get("stopped_at"):
             # the gate already stopped the chain: auditing drift now would review a half-built story
@@ -366,8 +377,55 @@ def do_pipeline(cfg: Config, idea: str, stack: str = "", target: str | None = No
         else:
             res = do_drift(cfg, run_id=rid, harness=h, stream=stream, dry_run=dry_run)
             results["steps"]["drift"] = res.to_dict()
+
     results["ok"] = all(s.get("ok") for s in results["steps"].values())
+    results.update(run_totals(results["steps"]))
     run_dir = cfg.runs_dir / rid
     (run_dir / "pipeline.json").write_text(json.dumps(results, indent=2, ensure_ascii=False),
                                            encoding="utf-8")
     return results
+
+
+def run_totals(steps: dict) -> dict:
+    """Aggregate cost and duration for a run (costs are only summed when the unit matches)."""
+    total_cost, unit = 0.0, None
+    total_time = 0.0
+    mixed = False
+    for res in steps.values():
+        cost = res.get("cost")
+        if cost:
+            if unit is None:
+                unit = res.get("cost_unit")
+            elif unit != res.get("cost_unit"):
+                mixed = True
+            total_cost += float(cost)
+        total_time += float(res.get("duration_s") or 0)
+    out = {"duration_s": round(total_time, 1)}
+    if unit:
+        out["cost"] = round(total_cost, 3)
+        out["cost_unit"] = unit
+        if mixed:
+            out["cost_note"] = "mixed units (some steps reported a different currency/credit unit)"
+    return out
+
+
+def run_summary(cfg: Config, run_id: str) -> dict:
+    """Read state.json for a run and add totals."""
+    state_path = cfg.runs_dir / run_id / "state.json"
+    if not state_path.exists():
+        return {}
+    state = json.loads(state_path.read_text(encoding="utf-8"))
+    state.update(run_totals(state.get("steps", {})))
+    return state
+
+
+def clean_runs(cfg: Config, keep: int = 10) -> dict:
+    """Delete old run directories, keeping the newest `keep`."""
+    import shutil as _shutil
+    runs = sorted([p for p in cfg.runs_dir.iterdir() if p.is_dir()]) if cfg.runs_dir.exists() else []
+    doomed = runs[:-keep] if keep > 0 else runs
+    removed = []
+    for p in doomed:
+        _shutil.rmtree(p, ignore_errors=True)
+        removed.append(p.name)
+    return {"kept": [p.name for p in runs[-keep:]] if keep > 0 else [], "removed": removed}
