@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.19
+
+- New `language` setting (default `en`): every prompt ends with *"Write every document, report and
+  answer in English, regardless of the language of the input material"*, so specs, plans and reports
+  no longer follow the language of the brief. `speckfish config language=es` switches a project back
+  to Spanish.
+- Test data and fixtures no longer carry Spanish text (except the EGM report fixture, which is a real
+  Spanish output kept on purpose to prove the parser handles both languages).
+
 ## 0.1.18
 
 - `speckfish features`: lists every feature under `specs/`, which artifacts each one has (spec/plan/

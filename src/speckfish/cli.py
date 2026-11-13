@@ -224,7 +224,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
-                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify)")
+                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language)")
 
     sub.add_parser("features", help="list features under specs/ and which one is active")
 
@@ -356,7 +356,7 @@ def main(argv: list[str] | None = None) -> int:
                     return EXIT_ENV
                 key, value = args.set.split("=", 1)
                 key = key.strip()
-                allowed = {"harness", "model", "profile", "egm_root", "specify"}
+                allowed = {"harness", "model", "profile", "egm_root", "specify", "language"}
                 if key not in allowed:
                     msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
                     emit({"error": msg}, as_json, f"ERROR: {msg}")

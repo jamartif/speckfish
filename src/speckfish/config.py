@@ -17,6 +17,7 @@ DEFAULTS = {
     "specify": "auto",            # auto | uv | binary
     "model": "",                  # forwarded to the harness when set
     "profile": "speckit",         # review criteria profile
+    "language": "en",             # language of the generated specs/plans/reports
     "timeouts": {"init": 300, "specify": 600, "plan": 600, "review": 1200, "drift": 600},
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
                 "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
@@ -52,6 +53,7 @@ class Config:
     specify: str = "auto"
     model: str = ""
     profile: str = "speckit"
+    language: str = "en"
     timeouts: dict = field(default_factory=lambda: dict(DEFAULTS["timeouts"]))
     budgets: dict = field(default_factory=lambda: json.loads(json.dumps(DEFAULTS["budgets"])))
 
@@ -67,7 +69,7 @@ class Config:
         cfg = cls(root=root)
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
-            for k in ("harness", "egm_root", "specify", "model", "profile"):
+            for k in ("harness", "egm_root", "specify", "model", "profile", "language"):
                 if k in data:
                     setattr(cfg, k, data[k])
             for k in ("timeouts", "budgets"):
