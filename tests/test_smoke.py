@@ -559,3 +559,68 @@ def test_generate_removes_commands_from_the_old_prefix(tmp_path):
     assert not (prompts / "speckfish-review.prompt.md").exists()
     assert (cmds / "mine.md").exists()
     assert (cmds / "spfish-review.md").exists()
+
+
+# ---------- specify --split (a big brief into independent features) ----------
+def test_split_prompt_asks_for_json_and_expands_files(tmp_path):
+    from speckfish.prompts import split_prompt
+    f = tmp_path / "brief.md"
+    f.write_text("# Brief\n- exportar CSV\n- etiquetas\n", encoding="utf-8")
+    p = split_prompt("@brief.md", 4, tmp_path)
+    assert "exportar CSV" in p
+    assert "Answer ONLY with JSON" in p
+    assert "at most 4 features" in p
+
+
+def test_extract_features_from_structured_and_from_raw_text():
+    from speckfish.runner import StepResult
+    from speckfish.steps import extract_features
+
+    structured = StepResult(step="split", ok=True, exit_code=0, duration_s=1.0,
+                            structured={"features": [{"title": "A", "description": "aa"},
+                                                     {"title": "B", "description": "bb"}]})
+    assert [f["title"] for f in extract_features(structured)] == ["A", "B"]
+
+    # Copilot/Codex: no --json-schema, the JSON arrives as prose
+    raw = StepResult(step="split", ok=True, exit_code=0, duration_s=1.0,
+                     raw_tail='Here you go:\n{"features":[{"title":"X","description":"xx"}]}\nDone')
+    assert [f["title"] for f in extract_features(raw)] == ["X"]
+
+    empty = StepResult(step="split", ok=True, exit_code=0, duration_s=1.0, raw_tail="no json here")
+    assert extract_features(empty) == []
+
+
+def test_split_creates_one_spec_per_feature(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    calls = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        calls.append(step)
+        if step == "specify-split":
+            return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                              structured={"features": [{"title": "uno", "description": "d1"},
+                                                       {"title": "dos", "description": "d2"},
+                                                       {"title": "tres", "description": "d3"}]})
+        assert "/speckit-specify" in prompt
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0)
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    out = S.do_specify_split(cfg, "brief", None, harness=ClaudeHarness(cfg))
+    assert out["features"] == ["uno", "dos", "tres"]
+    assert calls == ["specify-split", "specify-1", "specify-2", "specify-3"]
+    assert (tmp_path / ".speckfish" / "runs" / out["run_id"] / "split.json").exists()
+
+
+def test_split_dry_run_calls_the_agent_once(tmp_path, monkeypatch):
+    from speckfish import steps as S
+
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    out = S.do_specify_split(cfg, "brief", "rid", harness=ClaudeHarness(cfg), dry_run=True)
+    assert out["dry_run"] is True
+    assert list(out["steps"]) == ["split"]
+    assert out["steps"]["split"]["error"] == "dry-run"

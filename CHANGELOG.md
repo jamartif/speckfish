@@ -3,6 +3,13 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.16
+
+- `speckfish specify --split [--max-features N]`: inventories a big brief as JSON and runs one
+  `/speckit-specify` per independent feature. Spec Kit itself creates exactly one feature per
+  invocation, so a multi-idea brief used to end up in a single mixed spec (verified: a 3-request
+  brief produced one spec containing all three).
+
 ## 0.1.15
 
 - Workflow `pr.yml`: validates the PR title (Conventional Commits), labels by type and size and
