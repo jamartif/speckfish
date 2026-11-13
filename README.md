@@ -184,6 +184,37 @@ speckfish runs && speckfish show
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+### Use it from VS Code (Copilot, Claude, Codex)
+
+`speckfish editors` writes the entry points each tool documents, so the same steps are one
+slash command or one task away:
+
+```bash
+speckfish editors                     # vscode + copilot + claude + codex
+speckfish editors --targets claude    # only what you use
+speckfish init --editors              # do it together with the project setup
+```
+
+| Target | Files | How you invoke it |
+|---|---|---|
+| `vscode` | `.vscode/tasks.json` | Command Palette → **Run Task** → *Speckfish: review* (works with any agent, no extension needed) |
+| `copilot` | `.github/prompts/speckfish-*.prompt.md` | Copilot Chat: `/speckfish-review`, `/speckfish-specify`, `/speckfish-plan`, `/speckfish-drift`, `/speckfish-doctor` |
+| `claude` | `.claude/commands/speckfish-*.md` | Claude Code: `/speckfish-review` (custom slash commands, merged into skills) |
+| `codex` | `$CODEX_HOME/prompts/speckfish-*.md` (default `~/.codex/prompts`) | Codex CLI/IDE: `/prompts:speckfish-review` |
+
+Every generated file runs the real CLI in the integrated terminal and then tells the agent to read
+`.speckfish/runs/<id>/state.json` and the Markdown reports, so the chat answer contains the verdict
+and costs instead of a guess. They never edit the documents themselves.
+
+Two details that matter:
+
+- The generated command is auto-detected: `speckfish` when the binary works, `python -m speckfish`
+  when Device Guard blocks it (override with `--command`).
+- Codex prompts are user-global (that is where Codex looks), not per-repo: point them elsewhere with
+  `--codex-home`. Everything else lives in the repo and can be committed.
+
+`--no-force` keeps files you have already edited.
+
 ### Which agent runs, and which model
 
 `speckfish init --integration all` only writes **Spec Kit skills** for every agent. It does not

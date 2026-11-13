@@ -1,0 +1,225 @@
+"""Generate editor/agent entry points so `speckfish` is usable from VS Code.
+
+Per tool, using the formats its documentation defines:
+
+- VS Code tasks      -> .vscode/tasks.json          (Command Palette: Run Task, works for every agent)
+- GitHub Copilot     -> .github/prompts/*.prompt.md (Copilot Chat slash commands, `agent:` frontmatter)
+- Claude Code        -> .claude/commands/*.md       (custom slash commands; merged into skills)
+- Codex CLI / IDE    -> $CODEX_HOME/prompts/*.md    (slash commands as /prompts:<name>, user-global)
+
+Everything is generated from the same per-step definitions, so commands stay in sync with the CLI.
+"""
+from __future__ import annotations
+
+import json
+import os
+import shutil
+from pathlib import Path
+
+from .config import Config, norm, run_cmd
+
+STEPS = {
+    "specify": {
+        "title": "Speckfish: specify",
+        "desc": "Create spec.md for a feature idea (Spec Kit).",
+        "args": ["specify"],
+        "input": {"id": "idea", "prompt": "Feature description for speckfish specify"},
+        "hint": "<feature description>",
+        "ph_arg": "the feature description",
+    },
+    "plan": {
+        "title": "Speckfish: plan",
+        "desc": "Generate plan.md and design artifacts (Spec Kit).",
+        "args": ["plan"],
+        "input": {"id": "stack", "prompt": "Stack and constraints for speckfish plan"},
+        "hint": "<stack and constraints>",
+        "ph_arg": "the stack and constraints",
+    },
+    "review": {
+        "title": "Speckfish: review",
+        "desc": "Goldfish review of plan.md with clean-context subagents (EGM).",
+        "args": ["review"],
+        "hint": "[document path]",
+        "ph_arg": "an optional document path",
+    },
+    "review-interactive": {
+        "title": "Speckfish: review (interactive)",
+        "desc": "Same review, but EGM asks you questions in the terminal.",
+        "args": ["review", "--interactive"],
+        "hint": "[document path]",
+        "ph_arg": "an optional document path",
+    },
+    "drift": {
+        "title": "Speckfish: drift",
+        "desc": "Check whether the code still matches the design documents.",
+        "args": ["drift"],
+        "hint": "[specs directory]",
+        "ph_arg": "an optional specs directory",
+    },
+    "doctor": {
+        "title": "Speckfish: doctor",
+        "desc": "Check environment, agent CLI, Spec Kit and EGM.",
+        "args": ["doctor"],
+        "hint": "",
+        "ph_arg": "no arguments",
+    },
+}
+
+
+def detect_command(cfg: Config) -> str:
+    """The command that actually runs on this machine.
+
+    On Windows with Device Guard the generated `speckfish.exe` is blocked, so the module form
+    (`python -m speckfish`) is preferred whenever the binary cannot even answer --help.
+    """
+    exe = shutil.which("speckfish")
+    if exe:
+        code, out, err = run_cmd([exe, "--help"], timeout=60)
+        if code == 0 and "usage" in (out or err).lower():
+            return "speckfish"
+    return "python -m speckfish"
+
+
+# ---------------- VS Code tasks ----------------
+
+def tasks_json(cmd: str) -> dict:
+    tasks = []
+    for key, spec in STEPS.items():
+        argv = spec["args"]
+        task = {
+            "label": spec["title"],
+            "detail": spec["desc"],
+            "type": "shell",
+            "command": cmd,
+            "args": argv + (["${input:%s}" % spec["input"]["id"]] if spec.get("input") else []),
+            "problemMatcher": [],
+            "presentation": {"reveal": "always", "panel": "dedicated", "clear": True},
+        }
+        if key == "review-interactive":
+            task["presentation"]["panel"] = "dedicated"
+        tasks.append(task)
+    inputs = [{"id": s["input"]["id"], "type": "promptString", "description": s["input"]["prompt"]}
+              for s in STEPS.values() if s.get("input")]
+    return {"version": "2.0.0", "tasks": tasks, "inputs": inputs}
+
+
+# ---------------- GitHub Copilot prompt files ----------------
+
+COPILOT_TMPL = """---
+name: 'speckfish-{key}'
+description: '{desc}'
+agent: 'agent'
+argument-hint: '{hint}'
+---
+
+Run the repository's planning pipeline for {ph_arg}.
+
+1. Execute this in the integrated terminal (do not re-implement it by hand):
+
+   ```
+   {cmd} {cli}{argpart}
+   ```
+
+   If the user gave no argument, run it without one. `--dry-run` first if they want to see the
+   command that would run.
+2. When it finishes, read the newest run under `.speckfish/runs/` (`state.json` and the reports in
+   `artifacts/`) and summarise: verdict, blockers/majors/nits, cost, and the paths of the reports.
+3. Do not edit the design documents or the code unless the user asks. Your job here is to run the
+   step and explain its result.
+"""
+
+
+def copilot_prompt(key: str, spec: dict, cmd: str) -> str:
+    cli = " ".join(spec["args"])
+    argpart = " ${input:args}" if spec["hint"] else ""
+    return COPILOT_TMPL.format(key=key, desc=spec["desc"], hint=spec["hint"] or "",
+                               ph_arg=spec["args"][0], cmd=cmd, cli=cli, argpart=argpart)
+
+
+# ---------------- Claude Code slash commands ----------------
+
+CLAUDE_TMPL = """---
+description: {desc}
+argument-hint: {hint}
+allowed-tools: Bash, Read, Glob, Grep
+---
+
+Run `{cmd} {cli}{argpart}` from the repository root (no argument is fine; the CLI picks the
+latest feature) and then read the newest `.speckfish/runs/*/state.json` plus the Markdown reports
+it produced. Report back: verdict, blockers/majors/nits, cost, and the report paths.
+
+Rules: never edit `spec.md`/`plan.md` or the source code during this command; if the CLI fails,
+show the last lines of `.speckfish/runs/<id>/logs/{step}.log` and stop.
+"""
+
+
+def claude_command(key: str, spec: dict, cmd: str) -> str:
+    cli = " ".join(spec["args"])
+    argpart = " $ARGUMENTS" if spec["hint"] else ""
+    return CLAUDE_TMPL.format(desc=spec["desc"], hint=spec["hint"] or "",
+                              cmd=cmd, cli=cli, step=spec["args"][0], argpart=argpart)
+
+
+# ---------------- Codex prompts ----------------
+
+CODEX_TMPL = """---
+description: {desc}
+argument-hint: {hint}
+---
+
+Execute `{cmd} {cli}{argpart}` in the project root, then open the newest
+`.speckfish/runs/*/state.json` and the reports under `artifacts/`. Summarise the verdict,
+blockers/majors/nits, the cost and the report paths. Do not modify the documents or the code;
+if the command fails, quote the tail of its log and stop.
+"""
+
+
+def codex_prompt(key: str, spec: dict, cmd: str) -> str:
+    cli = " ".join(spec["args"])
+    argpart = " $ARGUMENTS" if spec["hint"] else ""
+    return CODEX_TMPL.format(desc=spec["desc"], hint=spec["hint"] or "", cmd=cmd, cli=cli,
+                             argpart=argpart)
+
+
+# ---------------- generator ----------------
+
+def generate(cfg: Config, targets: list[str] | None = None, cmd: str | None = None,
+             codex_home: str | None = None, force: bool = True) -> dict:
+    """Write the editor entry points. Returns what was written (and what was left alone)."""
+    root = cfg.root
+    cmd = cmd or detect_command(cfg)
+    wanted = targets or ["vscode", "copilot", "claude", "codex"]
+    written: list[str] = []
+    skipped: list[dict] = []
+
+    def put(path: Path, content: str) -> None:
+        if path.exists() and not force:
+            skipped.append({"path": norm(path), "reason": "exists (use --force)"})
+            return
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+        written.append(norm(path))
+
+    if "vscode" in wanted:
+        put(root / ".vscode" / "tasks.json",
+            json.dumps(tasks_json(cmd), indent=2, ensure_ascii=False) + "\n")
+
+    if "copilot" in wanted:
+        for key, spec in STEPS.items():
+            put(root / ".github" / "prompts" / f"speckfish-{key}.prompt.md",
+                copilot_prompt(key, spec, cmd))
+
+    if "claude" in wanted:
+        for key, spec in STEPS.items():
+            put(root / ".claude" / "commands" / f"speckfish-{key}.md",
+                claude_command(key, spec, cmd))
+
+    if "codex" in wanted:
+        home = Path(codex_home or os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+        for key, spec in STEPS.items():
+            put(home / "prompts" / f"speckfish-{key}.md", codex_prompt(key, spec, cmd))
+
+    return {"root": norm(root), "command": cmd, "written": written, "skipped": skipped,
+            "steps": list(STEPS), "codex_dir": norm(Path(codex_home or os.environ.get("CODEX_HOME")
+                                                         or (Path.home() / ".codex")) / "prompts")
+            if "codex" in wanted else None}

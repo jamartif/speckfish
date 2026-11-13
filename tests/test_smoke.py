@@ -325,3 +325,63 @@ def test_pipeline_gate_skips_drift_when_stopped(tmp_path, monkeypatch):
     assert out.get("stopped_at") == "specify"
     assert "drift" not in out["steps"]
     assert "gate stopped at" in out.get("drift_skipped", "")
+
+
+# ---------- editor entry points ----------
+def test_tasks_json_structure():
+    from speckfish.editors import tasks_json, STEPS
+    data = tasks_json("python -m speckfish")
+    assert data["version"] == "2.0.0"
+    assert len(data["tasks"]) == len(STEPS)
+    labels = [t["label"] for t in data["tasks"]]
+    assert "Speckfish: review" in labels and "Speckfish: review (interactive)" in labels
+    assert {i["id"] for i in data["inputs"]} == {"idea", "stack"}
+    for t in data["tasks"]:
+        assert t["command"] == "python -m speckfish"
+        assert t["type"] == "shell" and t["problemMatcher"] == []
+
+
+def test_copilot_prompt_frontmatter():
+    from speckfish.editors import copilot_prompt, STEPS
+    txt = copilot_prompt("review", STEPS["review"], "speckfish")
+    assert txt.startswith("---\n")
+    assert "name: 'speckfish-review'" in txt
+    assert "agent: 'agent'" in txt
+    assert "speckfish review" in txt
+
+
+def test_claude_command_only_takes_arguments_when_useful():
+    from speckfish.editors import claude_command, STEPS
+    with_args = claude_command("review", STEPS["review"], "speckfish")
+    no_args = claude_command("doctor", STEPS["doctor"], "speckfish")
+    assert "$ARGUMENTS" in with_args
+    assert "$ARGUMENTS" not in no_args
+    assert "allowed-tools" in with_args
+
+
+def test_generate_writes_every_target(tmp_path):
+    from speckfish.editors import generate
+    codex_home = tmp_path / "codexhome"
+    cfg = Config(root=tmp_path)
+    out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish",
+                   str(codex_home), force=True)
+    assert (tmp_path / ".vscode" / "tasks.json").exists()
+    assert (tmp_path / ".github" / "prompts" / "speckfish-review.prompt.md").exists()
+    assert (tmp_path / ".claude" / "commands" / "speckfish-review.md").exists()
+    assert (codex_home / "prompts" / "speckfish-review.md").exists()
+    assert len(out["written"]) == 1 + 3 * 6
+    assert out["command"] == "speckfish"
+
+    # --no-force keeps user edits
+    (tmp_path / ".vscode" / "tasks.json").write_text("{}", encoding="utf-8")
+    out2 = generate(cfg, ["vscode"], "speckfish", None, force=False)
+    assert out2["written"] == [] and out2["skipped"]
+    assert (tmp_path / ".vscode" / "tasks.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_generate_subset_of_targets(tmp_path):
+    from speckfish.editors import generate
+    cfg = Config(root=tmp_path)
+    out = generate(cfg, ["claude"], "speckfish", None, force=True)
+    assert all(".claude/commands" in p.replace("\\", "/") for p in out["written"])
+    assert not (tmp_path / ".vscode").exists()

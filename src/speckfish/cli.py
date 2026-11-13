@@ -143,6 +143,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--integration", default=None,
                     help="claude | copilot | codex | all | comma list (default: every installed agent)")
     sp.add_argument("--no-egm", action="store_true", help="do not clone/install EGM")
+    sp.add_argument("--editors", action="store_true",
+                    help="also generate VS Code tasks and agent slash commands")
 
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
 
@@ -175,6 +177,15 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--with-drift", action="store_true",
                     help="also run drift at the end (skipped if --gate stopped the chain)")
 
+    sp = sub.add_parser("editors", help="generate VS Code tasks and agent slash commands")
+    sp.add_argument("--targets", default="vscode,copilot,claude,codex",
+                    help="comma list of: vscode, copilot, claude, codex (default: all)")
+    sp.add_argument("--command", default=None,
+                    help="command the generated tasks call (default: auto-detect)")
+    sp.add_argument("--codex-home", default=None,
+                    help="Codex home directory for its prompts (default: $CODEX_HOME or ~/.codex)")
+    sp.add_argument("--no-force", action="store_true", help="do not overwrite existing files")
+
     sub.add_parser("runs", help="list runs")
     sp = sub.add_parser("show", help="details of a run")
     sp.add_argument("run_id", nargs="?", default=None)
@@ -192,8 +203,23 @@ def main(argv: list[str] | None = None) -> int:
     as_json = args.json
     stream = not args.quiet
     try:
+        if args.cmd == "editors":
+            from .editors import generate
+            targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+            gen = generate(cfg, targets, args.command, args.codex_home, force=not args.no_force)
+            human = [f"command: {gen['command']}",
+                     f"written: {len(gen['written'])}"]
+            human += [f"  {p}" for p in gen["written"]]
+            if gen.get("codex_dir"):
+                human.append(f"codex prompts (user-global): {gen['codex_dir']}")
+            if gen["skipped"]:
+                human += [f"skipped: {s['path']} ({s['reason']})" for s in gen["skipped"]]
+            emit(gen, as_json, "\n".join(human))
+            return EXIT_OK
+
         if args.cmd == "init":
-            out = S.do_init(cfg, args.integration, skip_egm=args.no_egm)
+            out = S.do_init(cfg, args.integration, skip_egm=args.no_egm,
+                            editors=getattr(args, "editors", False))
             ok_int = ", ".join(out.get("installed") or []) or "none"
             failed = [a["integration"] for a in out["actions"]
                       if a.get("integration") and not a.get("specify_init")]
