@@ -137,7 +137,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub = p.add_subparsers(dest="cmd", required=True)
 
     sp = sub.add_parser("init", help="prepare the project: git + specify init + EGM")
-    sp.add_argument("--integration", default=None, help="claude | copilot | codex (default: auto)")
+    sp.add_argument("--integration", default=None,
+                    help="claude | copilot | codex | all | comma list (default: every installed agent)")
     sp.add_argument("--no-egm", action="store_true", help="do not clone/install EGM")
 
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
@@ -187,7 +188,14 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if args.cmd == "init":
             out = S.do_init(cfg, args.integration, skip_egm=args.no_egm)
-            emit(out, as_json, f"init ok: harness={out.get('harness')} egm={out.get('egm_root')}")
+            ok_int = ", ".join(out.get("installed") or []) or "none"
+            failed = [a["integration"] for a in out["actions"]
+                      if a.get("integration") and not a.get("specify_init")]
+            human = [f"integrations installed: {ok_int}"]
+            if failed:
+                human.append(f"failed: {', '.join(failed)}")
+            human.append(f"egm: {out.get('egm_root')}")
+            emit(out, as_json, "\n".join(human))
             return EXIT_OK if all(a.get("specify_init", True) for a in out["actions"]) else EXIT_ERROR
         if args.cmd == "doctor":
             info = S.do_doctor(cfg)

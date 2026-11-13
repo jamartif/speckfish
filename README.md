@@ -134,11 +134,44 @@ Two Windows details worth knowing:
 
 On macOS and Linux the regular `speckfish` command works.
 
+### Which agents does `init` set up?
+
+`specify init --integration X` writes the Spec Kit skills **for one agent only** and records it in
+`.specify/integration.json`. By default `speckfish init` picks every agent CLI it finds installed
+(`claude`, `copilot`, `codex`) and runs Spec Kit once per integration; the skills land in each
+agent's own folder:
+
+| Integration | Where the skills go |
+|---|---|
+| `claude` | `.claude/skills/speckit-*` |
+| `copilot` | `.github/skills/speckit-*` |
+| `codex` | `.agents/skills/speckit-*` |
+
+```bash
+speckfish init                       # auto: every installed agent CLI
+speckfish init --integration all     # claude + copilot + codex, even if a CLI is missing
+speckfish init --integration copilot,claude
+```
+
+Two caveats worth knowing, both measured on Spec Kit 1.3.2:
+
+- `integration.json` keeps only the **last** integration that ran (`installed_integrations` shows
+  one entry). The previously written skill folders stay on disk and keep working; re-run
+  `speckfish init` if that file drifts.
+- Passing `--integration` twice to `specify` in one call does not merge: the last one wins. That is
+  why `speckfish` runs Spec Kit once per integration instead of a single combined call.
+- If an agent CLI is not installed, `speckfish` adds `--ignore-agent-tools` so Spec Kit still writes
+  its skills instead of aborting.
+
+EGM is independent of this: it is a single plugin mounted with `--plugin-dir vendor/egm`, so the
+review works with any of the three agents regardless of which Spec Kit integration you installed.
+
 ## Usage
 
 ```bash
 speckfish doctor                    # environment, harness, specify and EGM
 speckfish init                      # git init + specify init + clone EGM into vendor/egm
+speckfish init --integration all    # install Spec Kit skills for claude, copilot and codex
 speckfish specify "a JSON task CLI"
 speckfish plan "Python 3.12, stdlib only"
 speckfish review                    # reviews plan.md of the latest feature

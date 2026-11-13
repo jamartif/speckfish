@@ -224,3 +224,18 @@ def test_doctor_summary_is_readable():
     assert "specify-cli 1.3.2" in out
     assert "not found" in out
     assert "{" not in out                       # no JSON dumps
+
+
+# ---------- multi-integration init ----------
+def test_resolve_integrations_modes():
+    from speckfish.steps import resolve_integrations
+    assert resolve_integrations("all") == ["claude", "copilot", "codex"]
+    assert resolve_integrations("copilot,claude") == ["copilot", "claude"]
+    auto = resolve_integrations(None)          # only what is installed here
+    assert auto and all(x in ("claude", "copilot", "codex") for x in auto)
+
+
+def test_resolve_integrations_rejects_unknown():
+    from speckfish.steps import resolve_integrations
+    with pytest.raises(SystemExit):
+        resolve_integrations("claude,gemini")

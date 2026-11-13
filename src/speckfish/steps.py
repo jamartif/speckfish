@@ -89,6 +89,39 @@ def ensure_run(cfg: Config, run_id: str | None) -> str:
 
 # ---------------- init / doctor ----------------
 
+SUPPORTED_INTEGRATIONS = ["claude", "copilot", "codex"]
+
+
+def resolve_integrations(spec: str | None) -> list[str]:
+    """Turn the --integration value into the list of Spec Kit integrations to install.
+
+    "all" installs every supported integration; "auto" (default) picks every agent CLI
+    that is actually installed, falling back to the detected harness.
+    Comma-separated values are honoured: "claude,copilot".
+    """
+    raw = (spec or "auto").strip().lower()
+    if raw in ("all", "*"):
+        return list(SUPPORTED_INTEGRATIONS)
+    if raw != "auto":
+        items = [x.strip() for x in raw.split(",") if x.strip()]
+        unknown = [x for x in items if x not in SUPPORTED_INTEGRATIONS]
+        if unknown:
+            raise SystemExit(f"unknown integration(s): {', '.join(unknown)} "
+                             f"(supported: {', '.join(SUPPORTED_INTEGRATIONS)} or 'all')")
+        return items
+    installed = [name for name in SUPPORTED_INTEGRATIONS if which(name)]
+    return installed or ["claude"]
+
+
+def harness_for_integration(cfg: Config, integration: str) -> Harness:
+    try:
+        return get_harness(cfg, integration)
+    except SystemExit:
+        # the adapter exists even when its CLI is not installed: used only for its metadata
+        from .harnesses import REGISTRY
+        return REGISTRY[integration](cfg)
+
+
 def do_init(cfg: Config, integration: str | None, force_git: bool = True,
             skip_egm: bool = False) -> dict:
     root = cfg.root
@@ -96,24 +129,30 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
     if not (root / ".git").exists() and force_git:
         code, o, e = run_cmd([find_git(), "init"], cwd=root, timeout=120)
         out["actions"].append({"git_init": code == 0, "detail": (o or e)[-300:]})
-    harness_name = integration or "auto"
-    if harness_name == "auto":
-        h = get_harness(cfg)
-    else:
-        h = get_harness(cfg, harness_name)
-    integration_name, extra = h.spec_kit_integration()
-    args = ["init", "--here", "--force", "--non-interactive",
-            "--integration", integration_name] + extra
-    code, o, e = run_specify(cfg, args, root, timeout=300)
-    out["actions"].append({"specify_init": code == 0, "integration": integration_name,
-                           "argv": specify_argv(cfg) + args,
-                           "detail": (o or e)[-600:]})
+    integrations = resolve_integrations(integration)
+    for name in integrations:
+        h = harness_for_integration(cfg, name)
+        sk_integration, extra = h.spec_kit_integration()
+        args = ["init", "--here", "--force", "--non-interactive",
+                "--integration", sk_integration] + extra
+        if not which(name):
+            # Spec Kit aborts when the agent CLI is missing; the skills are still useful
+            args.append("--ignore-agent-tools")
+        code, o, e = run_specify(cfg, args, root, timeout=300)
+        out["actions"].append({"integration": name, "specify_init": code == 0,
+                               "argv": specify_argv(cfg) + args,
+                               "detail": banner_free_tail(o or e, keep=2)})
     if not skip_egm and not cfg.egm_path():
         out["actions"].append(install_egm(cfg))
     egm = cfg.egm_path()
     out["egm_root"] = norm(egm) if egm else None
-    out["harness"] = h.name
+    out["integrations"] = integrations
+    out["installed"] = [a["integration"] for a in out["actions"]
+                        if a.get("specify_init") and a.get("integration")]
+    out["harness"] = integrations[0] if integrations else None
     out["config"] = norm(cfg.save())
+    out["note"] = ("Spec Kit keeps only the last integration in .specify/integration.json; "
+                   "the skills of the others stay on disk. Re-run `speckfish init` to repair.")
     (cfg.state_dir / "init.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
                                              encoding="utf-8")
     return out
