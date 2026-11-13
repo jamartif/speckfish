@@ -131,6 +131,7 @@ class ClaudeHarness(Harness):
             "result_text": (data.get("result") or "")[:3000],
             "subagents": int((data.get("subagent_stats") or {}).get("spawned") or 0),
             "premium_requests": None,
+            "model": _dominant_model(data.get("modelUsage") or {}),
         }
         if not res["cost_usd"]:
             res["raw_tail"] = (stdout or stderr)[-1500:]
@@ -183,6 +184,7 @@ class CopilotHarness(Harness):
         """Copilot JSONL: message deltas, credits and subagents."""
         by_msg: dict[str, list[str]] = {}
         order: list[str] = []
+        models: dict[str, int] = {}
         credits = None
         premium = None
         subagents = 0
@@ -211,6 +213,10 @@ class CopilotHarness(Harness):
                 by_msg[mid] = [data["content"]]
             elif t == "subagent.started":
                 subagents += 1
+            elif t == "model.call_final_result" and isinstance(data.get("model"), str):
+                models[data["model"]] = models.get(data["model"], 0) + 1
+            elif t == "session.model_change" and isinstance(data.get("model"), str):
+                models[data["model"]] = models.get(data["model"], 0) + 1
             elif t == "session.usage_checkpoint":
                 nano = data.get("totalNanoAiu")
                 if isinstance(nano, (int, float)):
@@ -233,6 +239,7 @@ class CopilotHarness(Harness):
             "credits": credits,
             "premium_requests": premium,
             "subagents": subagents,
+            "model": _dominant_model(models),
             "session_ms": session_ms,
             "text_tail": text[-3000:] or (stderr or "")[-1500:],
             "exit_code": exit_code,
@@ -260,12 +267,16 @@ class CodexHarness(Harness):
         argv = (self.prefix() or ["codex"]) + ["exec", "--skip-git-repo-check", prompt]
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
+        if self.cfg.model:
+            argv += ["--model", self.cfg.model]
         return StepInvocation(argv=argv, schema_supported=False)
 
     def build_interactive(self, kind, prompt, cwd, artifact_dir, egm_root):
         argv = (self.prefix() or ["codex"])
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
+        if self.cfg.model:
+            argv += ["--model", self.cfg.model]
         argv += [prompt]
         return StepInvocation(argv=argv, interactive=True)
 
@@ -274,6 +285,21 @@ class CodexHarness(Harness):
 
 
 REGISTRY = {"claude": ClaudeHarness, "copilot": CopilotHarness, "codex": CodexHarness}
+
+
+def _dominant_model(usage: dict) -> str | None:
+    """Name of the model that did most work, from Claude `modelUsage` or a Copilot tally."""
+    if not isinstance(usage, dict) or not usage:
+        return None
+    best, best_weight = None, -1
+    for name, info in usage.items():
+        if isinstance(info, dict):
+            weight = (info.get("outputTokens") or 0) + (info.get("output_tokens") or 0)
+        else:
+            weight = info if isinstance(info, (int, float)) else 0
+        if weight > best_weight:
+            best, best_weight = name, weight
+    return best
 
 
 def detect_order() -> list[str]:

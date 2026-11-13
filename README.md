@@ -184,6 +184,35 @@ speckfish runs && speckfish show
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+### Which agent runs, and which model
+
+`speckfish init --integration all` only writes **Spec Kit skills** for every agent. It does not
+decide who runs the steps. The executor is picked independently, from `--harness`, `SPECKFISH_HARNESS`
+or `.speckfish/config.json`, and defaults to `auto` = the first agent CLI found installed, in this
+order: **claude → copilot → codex**.
+
+| Question | How it is decided |
+|---|---|
+| Which agent runs `specify`/`plan`/`review` | `--harness claude\|copilot\|codex` (also accepted after the subcommand), `SPECKFISH_HARNESS`, or `harness` in `.speckfish/config.json`; default `auto` |
+| Which model | you do not choose one by default: the agent CLI uses its own default/pinned model. Force it with `--model <name>` (forwarded to `claude --model`, `copilot --model`, `codex --model`) |
+| What actually ran | every step records `harness` and `model` in `state.json` and `<step>.result.json`; the summary line prints `model: …` |
+
+Measured on this machine (defaults, no `--model`):
+
+| Harness | Model the CLI picked | Where it comes from |
+|---|---|---|
+| Claude Code | `claude-sonnet-5-5` | `modelUsage` in the JSON result |
+| Copilot CLI | `gpt-6-luna` (with `mai-code-1.1-flash` for short turns) | `model.call_final_result` events in the JSONL |
+| Codex CLI | n/a | not tested here |
+
+```bash
+speckfish specify "a JSON task CLI"                     # auto → claude on this machine
+speckfish specify "a JSON task CLI" --harness copilot   # same work, Copilot
+speckfish review --model claude-opus-4                 # pin the model for one step
+```
+
+Mixing is fine: skills installed for all three, execution with whichever agent you point at.
+
 ### Headless vs interactive
 
 | Mode | Command | Behaviour |

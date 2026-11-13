@@ -239,3 +239,52 @@ def test_resolve_integrations_rejects_unknown():
     from speckfish.steps import resolve_integrations
     with pytest.raises(SystemExit):
         resolve_integrations("claude,gemini")
+
+
+# ---------- agent / model reporting ----------
+def test_claude_reports_dominant_model():
+    import json as _json
+    cfg = Config(root=Path("."))
+    payload = _json.dumps({
+        "result": "ok", "total_cost_usd": 0.97, "num_turns": 4,
+        "modelUsage": {
+            "claude-haiku-4": {"inputTokens": 10, "outputTokens": 100},
+            "claude-sonnet-5-5": {"inputTokens": 10, "outputTokens": 9000},
+        },
+    })
+    out = ClaudeHarness(cfg).parse_output(payload, "", 0)
+    assert out["model"] == "claude-sonnet-5-5"          # the one that did the work
+
+
+def test_copilot_reports_dominant_model():
+    cfg = Config(root=Path("."))
+    lines = [
+        '{"type":"model.call_final_result","data":{"model":"gpt-6-luna"}}',
+        '{"type":"model.call_final_result","data":{"model":"gpt-6-luna"}}',
+        '{"type":"model.call_final_result","data":{"model":"mai-code-1.1-flash"}}',
+        '{"type":"subagent.started","data":{}}',
+        '{"type":"session.usage_checkpoint","data":{"totalNanoAiu":630000000}}',
+    ]
+    out = CopilotHarness(cfg).parse_output("\n".join(lines), "", 0)
+    assert out["model"] == "gpt-6-luna"
+    assert out["credits"] == 0.63
+    assert out["subagents"] == 1
+
+
+def test_model_flag_reaches_every_harness(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.model = "claude-sonnet-5-5"
+    for H in (ClaudeHarness, CopilotHarness):
+        inv = H(cfg).build("review", "p", tmp_path, tmp_path / "a", tmp_path / "e",
+                           budget=None, timeout=60, schema=None)
+        assert "--model" in inv.argv and "claude-sonnet-5-5" in inv.argv
+    inv = CodexHarness(cfg).build("review", "p", tmp_path, tmp_path / "a", tmp_path / "e",
+                                  None, 60, None)
+    assert "--model" in inv.argv
+
+
+def test_summary_shows_model():
+    from speckfish.cli import summarize
+    out = summarize({"step": "review", "ok": True, "exit_code": 0, "duration_s": 1.0,
+                     "model": "gpt-6-luna"})
+    assert "model: gpt-6-luna" in out

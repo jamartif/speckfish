@@ -34,6 +34,7 @@ class StepResult:
     artifact_dir: str = ""
     subagents: int = 0
     premium_requests: int | None = None
+    model: str | None = None
     interactive: bool = False
     raw_tail: str = ""
 
@@ -166,7 +167,7 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                   "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
                   "blockers": len(res.blockers), "reports": res.reports,
                   "exit_code": res.exit_code, "harness": harness.name,
-                  "interactive": res.interactive})
+                  "model": res.model, "interactive": res.interactive})
     state["steps"][step] = entry
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / f"{step}.result.json").write_text(
@@ -198,6 +199,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.structured = parsed.get("structured")
     res.subagents = int(parsed.get("subagents") or 0)
     res.premium_requests = parsed.get("premium_requests")
+    res.model = parsed.get("model") or (cfg.model or None)
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
         res.error = f"timeout after {timeout}s"

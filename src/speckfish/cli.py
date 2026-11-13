@@ -23,7 +23,8 @@ def emit(obj, as_json: bool, human: str | None = None) -> None:
 def summarize(res: dict) -> str:
     lines = [f"run: {res.get('run_id', '-')}  step: {res.get('step')}  ok: {res.get('ok')}"
              f"  exit: {res.get('exit_code')}  {res.get('duration_s')}s"
-             + (f"  cost: {res.get('cost')} {res.get('cost_unit')}" if res.get("cost") else "")]
+             + (f"  cost: {res.get('cost')} {res.get('cost_unit')}" if res.get("cost") else "")
+             + (f"  model: {res.get('model')}" if res.get("model") else "")]
     if res.get("meets_standard") is not None:
         lines.append(f"meets standard: {res['meets_standard']}  "
                      f"blockers: {len(res.get('blockers') or [])}  majors: {res.get('majors')}  "
@@ -91,7 +92,7 @@ def exit_for(res: dict) -> int:
     return EXIT_OK
 
 
-GLOBAL_FLAGS_VALUE = {"--root", "--harness"}
+GLOBAL_FLAGS_VALUE = {"--root", "--harness", "--model"}
 GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run"}
 
 
@@ -127,6 +128,8 @@ def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--root", default=".", help="project root (default: cwd)")
     common.add_argument("--harness", default=None, help="claude | copilot | codex (default: auto)")
+    common.add_argument("--model", default=None,
+                        help="model passed to the agent CLI (default: the CLI's own choice)")
     common.add_argument("--json", action="store_true", help="JSON output on stdout")
     common.add_argument("--stream", action="store_true", default=True,
                         help="forward agent output to stderr (default)")
@@ -183,6 +186,8 @@ def main(argv: list[str] | None = None) -> int:
     cfg = Config.load(Path(args.root))
     if args.harness:
         cfg.harness = args.harness
+    if args.model:
+        cfg.model = args.model
     as_json = args.json
     stream = not args.quiet
     try:
