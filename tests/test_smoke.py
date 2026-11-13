@@ -293,6 +293,8 @@ def test_summary_shows_model():
 # ---------- pipeline composition ----------
 def test_pipeline_dry_run_lists_all_steps(tmp_path, monkeypatch):
     from speckfish import steps as S
+    # hermetic: CI has no agent CLI installed, so inject the adapter instead of detecting one
+    monkeypatch.setattr(S, "get_harness", lambda cfg=None, name=None: ClaudeHarness(cfg))
     egm = tmp_path / "egm"
     (egm / "skills" / "egm-review").mkdir(parents=True)
     (egm / "plugin.json").write_text('{"version": "0.0.0"}', encoding="utf-8")
