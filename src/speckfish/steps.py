@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -15,6 +16,40 @@ from .runner import StepResult, run_interactive, run_step, run_dir_for, new_run_
 # ---------------- infrastructura ----------------
 
 SPECIFY_VIA_UV = ["uv", "tool", "run", "--from", "specify-cli", "specify"]
+
+# Spec Kit prints an ASCII-art banner; these characters never appear in real output we want.
+BANNER_CHARS = set("█▓▒░▄▀■□▪▫╔╗╚╝║═╠╣╦╩╬╭╮╯╰─│┌┐└┘├┤┬┴┼")
+
+
+def banner_free_tail(text: str, keep: int = 2) -> list[str]:
+    """Drop the block-character banner from a CLI output, keeping the last useful lines."""
+    lines = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not line:
+            continue
+        if sum(ch in BANNER_CHARS for ch in line) > 3:
+            continue
+        lines.append(line)
+    return lines[-keep:]
+
+
+def parse_specify_version(text: str) -> str:
+    """Pull a readable version out of `specify version` output."""
+    blob = text or ""
+    m = re.search(r"CLI\s*Version\s*([\w.\-]+)", blob, re.I)
+    version = m.group(1) if m else ""
+    if not version:
+        m = re.search(r"specify-cli\s+v?([\w.\-]+)", blob, re.I)
+        version = m.group(1) if m else ""
+    if not version:
+        m = re.search(r"\bv?(\d+\.\d+\.\d+)\b", blob)
+        version = m.group(1) if m else ""
+    py = re.search(r"Python\s*([\w.\-]+)", blob, re.I)
+    parts = [f"specify-cli {version}" if version else "specify-cli (unknown version)"]
+    if py:
+        parts.append(f"Python {py.group(1)}")
+    return " · ".join(parts)
 
 
 def specify_argv(cfg: Config) -> list[str]:
@@ -116,8 +151,10 @@ def do_doctor(cfg: Config) -> dict:
         argv = None
     if argv:
         code, o, e = run_cmd(argv + ["version"], timeout=180)
+        out = o or e
         info["specify"] = {"argv": argv, "ok": code == 0,
-                           "detail": (o or e).strip().splitlines()[:3]}
+                           "version": parse_specify_version(out),
+                           "detail": banner_free_tail(out)}
     # egm
     egm = cfg.egm_path()
     info["egm"] = {"path": norm(egm) if egm else None, "present": bool(egm)}

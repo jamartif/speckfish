@@ -179,3 +179,48 @@ def test_module_entrypoint_is_importable():
     import importlib
     m = importlib.import_module("speckfish.__main__")
     assert hasattr(m, "main")
+
+
+# ---------- doctor output hygiene ----------
+BANNER = """
+               ███████╗██████╗ ███████╗ ██████╗██╗███████╗██╗   ██╗
+               ██╔════╝██╔══██╗██╔════╝██╔════╝██║██╔════╝╚██╗ ██╔╝
+               ╚════██║██╔═══╝ ██╔══╝  ██║     ██║██╔══╝    ╚██╔╝
+     CLI Version    1.3.2
+          Python    3.12.0
+        Platform    Windows
+"""
+
+
+def test_parse_specify_version_extracts_numbers():
+    from speckfish.steps import parse_specify_version
+    got = parse_specify_version(BANNER)
+    assert "1.3.2" in got and "3.12.0" in got
+    assert "█" not in got
+
+
+def test_banner_free_tail_drops_ascii_art():
+    from speckfish.steps import banner_free_tail
+    lines = banner_free_tail(BANNER, keep=2)
+    assert all("█" not in l and "╗" not in l for l in lines)
+    assert lines[-1].startswith("Platform") or "3.12.0" in lines[-1]
+
+
+def test_doctor_summary_is_readable():
+    from speckfish.cli import doctor_summary
+    info = {
+        "root": "C:/x",
+        "harness": {"harness": "claude", "version": "2.1.323", "verified": True,
+                    "installed": True},
+        "specify": {"ok": True, "version": "specify-cli 1.3.2 · Python 3.12.0",
+                    "argv": ["C:/bin/specify.EXE"], "detail": []},
+        "egm": {"present": False, "path": None},
+        "project": {"has_git": True, "has_specify": True, "has_claude_skills": False,
+                    "feature": None},
+        "tools": {"git": {"installed": True}, "uv": {"installed": True}},
+    }
+    out = doctor_summary(info)
+    assert "cli.Version" not in out
+    assert "specify-cli 1.3.2" in out
+    assert "not found" in out
+    assert "{" not in out                       # no JSON dumps

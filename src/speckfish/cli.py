@@ -42,6 +42,46 @@ def summarize(res: dict) -> str:
     return "\n".join(lines)
 
 
+def doctor_summary(info: dict) -> str:
+    """Human-readable doctor output (nothing but facts, no JSON dumps, no ASCII banners)."""
+    lines = [f"root: {info.get('root')}"]
+
+    h = info.get("harness") or {}
+    if h.get("error"):
+        lines.append(f"harness: MISSING — {h['error']}")
+    else:
+        flags = "verified" if h.get("verified") else "unverified adapter"
+        lines.append(f"harness: {h.get('harness')} {h.get('version', '')} ({flags})")
+
+    s = info.get("specify") or {}
+    if s.get("error"):
+        lines.append(f"specify: MISSING — {s['error']}")
+    else:
+        state = "ok" if s.get("ok") else "FAILED"
+        lines.append(f"specify: {s.get('version', 'unknown')}  [{state}]")
+        lines.append(f"         via {' '.join(s.get('argv') or [])}")
+
+    e = info.get("egm") or {}
+    if e.get("present"):
+        skills = e.get("skills") or []
+        lines.append(f"egm:     {e.get('version')} at {e.get('path')}  ({len(skills)} skills)")
+    else:
+        lines.append("egm:     not found — run `speckfish init` (or set egm_root in "
+                     ".speckfish/config.json)")
+
+    p = info.get("project") or {}
+    yn = lambda v: "yes" if v else "no"
+    lines.append(f"project: git={yn(p.get('has_git'))} specify={yn(p.get('has_specify'))} "
+                 f"agent-skills={yn(p.get('has_claude_skills'))}")
+    if p.get("feature"):
+        lines.append(f"         latest feature: {p['feature']}")
+    tools = info.get("tools") or {}
+    missing = [t for t, v in tools.items() if not v.get("installed")]
+    if missing:
+        lines.append(f"tools:   missing {', '.join(missing)}")
+    return "\n".join(lines)
+
+
 def exit_for(res: dict) -> int:
     if not res.get("ok"):
         return EXIT_ERROR
@@ -151,12 +191,7 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_OK if all(a.get("specify_init", True) for a in out["actions"]) else EXIT_ERROR
         if args.cmd == "doctor":
             info = S.do_doctor(cfg)
-            human = [f"root: {info['root']}",
-                     f"harness: {json.dumps(info.get('harness'), ensure_ascii=False)}",
-                     f"specify: {json.dumps(info.get('specify'), ensure_ascii=False)}",
-                     f"egm: {json.dumps(info.get('egm'), ensure_ascii=False)}",
-                     f"project: {json.dumps(info.get('project'), ensure_ascii=False)}"]
-            emit(info, as_json, "\n".join(human))
+            emit(info, as_json, doctor_summary(info))
             ok = (info.get("harness") or {}).get("installed") and \
                  (info.get("specify") or {}).get("ok") and (info.get("egm") or {}).get("present")
             return EXIT_OK if ok else EXIT_ENV
