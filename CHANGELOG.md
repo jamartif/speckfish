@@ -3,6 +3,11 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.12
+
+- Fix: `config`, `runs`, `show` and `--version` no longer fail when no agent CLI is installed (the
+  harness is resolved lazily, only by the commands that actually run an agent).
+
 ## 0.1.11
 
 - `speckfish --version`.
