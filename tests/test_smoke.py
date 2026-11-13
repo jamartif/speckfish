@@ -60,6 +60,7 @@ def test_copilot_prompt_does_not_use_slash_command():
 
 # ---------- report parsing ----------
 def test_parse_real_consolidated_report():
+    # Deliberately a REAL Spanish EGM report: the parser has to cope with both languages.
     out = parse_consolidated(FIX)
     assert out["meets_standard"] is False
     assert len(out["blockers"]) == 2
@@ -415,8 +416,8 @@ def test_every_speckit_skill_has_a_command():
 
 def test_skill_prompt_shapes():
     from speckfish import prompts as P
-    con = P.skill_prompt("constitution", "calidad primero", Path("/tmp/a"))
-    assert con.startswith("/speckit-constitution calidad primero")
+    con = P.skill_prompt("constitution", "quality first", Path("/tmp/a"))
+    assert con.startswith("/speckit-constitution quality first")
     assert "nobody can answer questions" in con.lower()
 
     auto = P.skill_prompt("constitution", "", Path("/tmp/a"))
@@ -460,8 +461,8 @@ def test_read_input_accepts_bare_relative_path(tmp_path):
 
 def test_read_input_leaves_normal_text_alone():
     from speckfish.prompts import read_input
-    text, src = read_input("una CLI de tareas en JSON", None)
-    assert text == "una CLI de tareas en JSON" and src is None
+    text, src = read_input("a JSON task CLI", None)
+    assert text == "a JSON task CLI" and src is None
 
 
 def test_read_input_references_big_files(tmp_path):
@@ -481,9 +482,9 @@ def test_missing_input_file_fails_loudly(tmp_path):
 def test_constitution_uses_markdown_template(tmp_path):
     from speckfish.prompts import skill_prompt
     f = tmp_path / "constitution-template.md"
-    f.write_text("# Constitución\n- Sin dependencias externas\n", encoding="utf-8")
+    f.write_text("# Constitution\n- No external dependencies\n", encoding="utf-8")
     p = skill_prompt("constitution", "@constitution-template.md", tmp_path / "art", tmp_path)
-    assert "Sin dependencias externas" in p
+    assert "No external dependencies" in p
     assert p.startswith("/speckit-constitution")
 
 
@@ -603,15 +604,15 @@ def test_split_creates_one_spec_per_feature(tmp_path, monkeypatch):
         calls.append(step)
         if step == "specify-split":
             return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
-                              structured={"features": [{"title": "uno", "description": "d1"},
-                                                       {"title": "dos", "description": "d2"},
-                                                       {"title": "tres", "description": "d3"}]})
+                              structured={"features": [{"title": "one", "description": "d1"},
+                                                       {"title": "two", "description": "d2"},
+                                                       {"title": "three", "description": "d3"}]})
         assert "/speckit-specify" in prompt
         return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0)
 
     monkeypatch.setattr(S, "run_step", fake_run_step)
     out = S.do_specify_split(cfg, "brief", None, harness=ClaudeHarness(cfg))
-    assert out["features"] == ["uno", "dos", "tres"]
+    assert out["features"] == ["one", "two", "three"]
     assert calls == ["specify-split", "specify-1", "specify-2", "specify-3"]
     assert (tmp_path / ".speckfish" / "runs" / out["run_id"] / "split.json").exists()
 
@@ -642,7 +643,7 @@ def test_split_review_runs_egm_per_spec(tmp_path, monkeypatch):
     def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
         if step == "specify-split":
             return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
-                              structured={"features": [{"title": "uno", "description": "d"}]})
+                              structured={"features": [{"title": "one", "description": "d"}]})
         return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
                           structured={"feature_dir": str(feat_dir)})
 
@@ -721,3 +722,34 @@ def test_msys_style_root_is_understood_on_windows():
     if not is_windows():
         pytest.skip("Windows only")
     assert _native("/c/Users/x/repo") == Path("C:/Users/x/repo")
+
+
+# ---------- output language ----------
+def test_language_line_defaults_to_english():
+    from speckfish.prompts import language_line
+    assert "in English" in language_line("en")
+    assert "in Spanish" in language_line("es")
+    assert language_line("") == ""
+    assert "in Klingon" in language_line("klingon")     # unknown code still works
+
+
+def test_prompts_carry_the_language_instruction(tmp_path):
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+    assert cfg.language == "en"                          # English by default
+    out = S.with_language("do the thing", cfg)
+    assert out.startswith("do the thing") and "in English" in out
+    assert S.with_language(out, cfg).count("in English") == 1   # never twice
+
+    cfg.language = "es"
+    assert "in Spanish" in S.with_language("do the thing", cfg)
+    cfg.language = ""
+    assert S.with_language("do the thing", cfg) == "do the thing"
+
+
+def test_language_is_a_config_key(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    assert C.main(["--root", str(tmp_path), "config", "language=es"]) == 0
+    stored = (tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8")
+    assert '"language": "es"' in stored

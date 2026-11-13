@@ -12,6 +12,19 @@ INTERACTIVE = ("Interactive session with a human operator: ask every open questi
                "(presets, scope, ambiguities) and wait for the answer before continuing. "
                "The operator can answer in this terminal.")
 
+# --- output language (config: `language = "en"`) ---
+LANGUAGE_NAMES = {"en": "English", "es": "Spanish", "fr": "French", "de": "German",
+                  "pt": "Portuguese", "it": "Italian"}
+
+
+def language_line(lang: str | None) -> str:
+    """Instruction that keeps generated specs, plans and reports in one language."""
+    if not lang:
+        return ""
+    name = LANGUAGE_NAMES.get(lang.lower()) or lang.capitalize()
+    return (f"Write every document, report and answer in {name}, regardless of the language of "
+            f"the input material.")
+
 # --- criteria profile: removes format noise when reviewing Spec Kit artifacts ---
 PROFILES = {
     "speckit": (

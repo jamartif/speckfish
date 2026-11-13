@@ -290,13 +290,21 @@ def find_feature(cfg: Config, wanted: str) -> Path:
 
 # ---------------- agent steps ----------------
 
+def with_language(prompt: str, cfg: Config) -> str:
+    """Append the output-language instruction once, so every artifact uses the same language."""
+    line = prompts.language_line(getattr(cfg, "language", "") or "")
+    if line and line not in prompt:
+        return prompt + "\n\n" + line
+    return prompt
+
+
 def do_specify(cfg: Config, idea: str, run_id: str | None = None,
                harness: Harness | None = None, stream: bool = True,
                dry_run: bool = False, review: bool = False) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     if h.name == "claude":
-        prompt = prompts.specify_prompt(idea, cfg.root)
+        prompt = with_language(prompts.specify_prompt(idea, cfg.root), cfg)
     else:
         prompt = (f"/speckit-specify {idea}\n\n{prompts.NO_QUESTIONS}"
                   if h.name == "claude" else
@@ -333,7 +341,7 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     fdir = set_active_feature(cfg, find_feature(cfg, feature)) if feature else active_feature(cfg)
-    prompt = (prompts.plan_prompt(stack, cfg.root, fdir) if h.name == "claude"
+    prompt = (with_language(prompts.plan_prompt(stack, cfg.root, fdir), cfg) if h.name == "claude"
               else f"Stack and constraints: {stack}\n\n{prompts.NO_QUESTIONS}\n\n"
                    f"Work on the feature in {norm(fdir) if fdir else 'the current feature'}."
                    f"\n\nRun the Spec Kit planning flow (speckit-plan skill).")
@@ -374,12 +382,12 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
     if h.name == "claude":
         if not egm:
             raise SystemExit("EGM not found: run `speckfish init` or set egm_root in .speckfish/config.json")
-        prompt = prompts.review_prompt(doc, artifact, profile or cfg.profile, stage,
-                                       interactive=interactive)
+        prompt = with_language(prompts.review_prompt(doc, artifact, profile or cfg.profile, stage,
+                                                     interactive=interactive), cfg)
     else:
-        prompt = prompts.egm_prompt_for(h.name, "review", str(doc), artifact,
-                                        egm or cfg.root, profile or cfg.profile, stage,
-                                        interactive=interactive)
+        prompt = with_language(prompts.egm_prompt_for(
+            h.name, "review", str(doc), artifact, egm or cfg.root,
+            profile or cfg.profile, stage, interactive=interactive), cfg)
     if interactive:
         # the agent takes over this terminal: it asks, the operator answers
         return run_interactive(cfg, h, "review", prompt, cfg.root, rid, egm, dry_run=dry_run)
@@ -401,10 +409,10 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
     elif skill in ("tasks", "analyze", "checklist", "clarify", "converge", "implement"):
         fdir = active_feature(cfg)
     if h.name == "claude":
-        prompt = prompts.skill_prompt(skill, args, artifact, cfg.root, fdir)
+        prompt = with_language(prompts.skill_prompt(skill, args, artifact, cfg.root, fdir), cfg)
     else:
-        prompt = prompts.skill_prompt_for(h.name, skill, args, artifact,
-                                          cfg.egm_path() or cfg.root, cfg.root)
+        prompt = with_language(prompts.skill_prompt_for(
+            h.name, skill, args, artifact, cfg.egm_path() or cfg.root, cfg.root), cfg)
     res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(),
                    stream=stream, dry_run=dry_run)
     res.writes = spec.get("writes", "")  # type: ignore[attr-defined]
@@ -425,7 +433,7 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
     rid = ensure_run(cfg, run_id)
     out: dict = {"run_id": rid, "harness": h.name, "steps": {}, "features": []}
 
-    inventory = run_step(cfg, h, "specify-split", prompts.split_prompt(material, max_features, cfg.root),
+    inventory = run_step(cfg, h, "specify-split", with_language(prompts.split_prompt(material, max_features, cfg.root), cfg),
                          cfg.root, rid, cfg.egm_path(), schema=prompts.SPLIT_SCHEMA,
                          stream=stream, dry_run=dry_run)
     out["steps"]["split"] = inventory.to_dict()
@@ -499,9 +507,10 @@ def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
     if h.name == "claude":
         if not egm:
             raise SystemExit("EGM not found: run `speckfish init`")
-        prompt = prompts.drift_prompt(str(d), artifact)
+        prompt = with_language(prompts.drift_prompt(str(d), artifact), cfg)
     else:
-        prompt = prompts.egm_prompt_for(h.name, "drift", str(d), artifact, egm or cfg.root)
+        prompt = with_language(prompts.egm_prompt_for(h.name, "drift", str(d), artifact,
+                                                      egm or cfg.root), cfg)
     return run_step(cfg, h, "drift", prompt, cfg.root, rid, egm,
                     schema=prompts.SCHEMAS["drift"], stream=stream, dry_run=dry_run)
 

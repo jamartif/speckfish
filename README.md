@@ -350,6 +350,24 @@ Two details that matter:
 
 `--no-force` keeps files you have already edited.
 
+### Language of the generated artifacts
+
+Everything `speckfish` produces (specs, plans, reports, answer text) is written in **English by
+default**, whatever language the input is in — including when your brief is in Spanish:
+
+```bash
+speckfish config                      # language: en
+speckfish specify @docs/brief-es.md   # spec.md comes out in English
+speckfish config language=es          # switch the whole project back to Spanish
+```
+
+The instruction is appended to every prompt (`Write every document, report and answer in English,
+regardless of the language of the input material`), so it applies to `specify`, `plan`, `review`,
+`drift` and every Spec Kit skill. Set `language=` to any code you like (`en`, `es`, `fr`, `de`, `pt`,
+`it`; anything else is used as-is, capitalised).
+
+The CLI's own messages, help, README and workflows are in English.
+
 ### Which agent runs, and which model
 
 `speckfish init --integration all` only writes **Spec Kit skills** for every agent. It does not
