@@ -172,7 +172,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stack", default="")
     sp.add_argument("--target", default=None)
     sp.add_argument("--gate", action="store_true", help="stop when a step fails or there are blockers")
-    sp.add_argument("--with-drift", action="store_true")
+    sp.add_argument("--with-drift", action="store_true",
+                    help="also run drift at the end (skipped if --gate stopped the chain)")
 
     sub.add_parser("runs", help="list runs")
     sp = sub.add_parser("show", help="details of a run")

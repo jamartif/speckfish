@@ -288,3 +288,40 @@ def test_summary_shows_model():
     out = summarize({"step": "review", "ok": True, "exit_code": 0, "duration_s": 1.0,
                      "model": "gpt-6-luna"})
     assert "model: gpt-6-luna" in out
+
+
+# ---------- pipeline composition ----------
+def test_pipeline_dry_run_lists_all_steps(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    egm = tmp_path / "egm"
+    (egm / "skills" / "egm-review").mkdir(parents=True)
+    (egm / "plugin.json").write_text('{"version": "0.0.0"}', encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(egm)
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    (tmp_path / "specs" / "001-x" / "plan.md").write_text("# p", encoding="utf-8")
+    out = S.do_pipeline(cfg, "idea", "stack", None, gate=False, with_drift=True,
+                        stream=False, dry_run=True)
+    assert list(out["steps"]) == ["specify", "plan", "review", "drift"]
+    assert out["steps"]["drift"]["error"] == "dry-run"
+
+
+def test_pipeline_gate_skips_drift_when_stopped(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+
+    class Boom:
+        name = "claude"
+
+    def failing(*a, **k):
+        from speckfish.runner import StepResult
+        return StepResult(step="plan", ok=False, exit_code=2, duration_s=0.0, error="boom")
+
+    monkeypatch.setattr(S, "do_specify", failing)
+    monkeypatch.setattr(S, "get_harness", lambda cfg=None, name=None: Boom())
+    out = S.do_pipeline(cfg, "idea", "stack", None, gate=True, with_drift=True,
+                        stream=False, dry_run=True)
+    assert out.get("stopped_at") == "specify"
+    assert "drift" not in out["steps"]
+    assert "gate stopped at" in out.get("drift_skipped", "")

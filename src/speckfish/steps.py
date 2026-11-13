@@ -337,9 +337,13 @@ def do_pipeline(cfg: Config, idea: str, stack: str = "", target: str | None = No
         if gate and name == "review" and res.blockers:
             results["stopped_at"] = name
             break
-    if with_drift and not dry_run:
-        res = do_drift(cfg, run_id=rid, harness=h, stream=stream, dry_run=dry_run)
-        results["steps"]["drift"] = res.to_dict()
+    if with_drift:
+        if results.get("stopped_at"):
+            # the gate already stopped the chain: auditing drift now would review a half-built story
+            results["drift_skipped"] = f"gate stopped at {results['stopped_at']}"
+        else:
+            res = do_drift(cfg, run_id=rid, harness=h, stream=stream, dry_run=dry_run)
+            results["steps"]["drift"] = res.to_dict()
     results["ok"] = all(s.get("ok") for s in results["steps"].values())
     run_dir = cfg.runs_dir / rid
     (run_dir / "pipeline.json").write_text(json.dumps(results, indent=2, ensure_ascii=False),
