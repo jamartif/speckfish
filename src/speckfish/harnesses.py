@@ -29,6 +29,7 @@ class StepInvocation:
 
 class Harness:
     name = "base"
+    echo_stdout = False        # True only for harnesses whose stdout is human readable
     supports_schema = False
     supports_budget = False
     verified = False
@@ -247,6 +248,7 @@ class CopilotHarness(Harness):
 
 class CodexHarness(Harness):
     name = "codex"
+    echo_stdout = True         # `codex exec` prints prose, not JSON
     supports_schema = False
     supports_budget = False
     verified = False
