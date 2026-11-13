@@ -36,6 +36,7 @@ class StepResult:
     subagents: int = 0
     premium_requests: int | None = None
     model: str | None = None
+    denials: list = field(default_factory=list)
     writes: str = ""
     interactive: bool = False
     raw_tail: str = ""
@@ -197,6 +198,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.subagents = int(parsed.get("subagents") or 0)
     res.premium_requests = parsed.get("premium_requests")
     res.model = parsed.get("model") or (cfg.model or None)
+    res.denials = parsed.get("denials") or []
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
         res.error = f"timeout after {timeout}s"
