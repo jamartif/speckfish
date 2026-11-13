@@ -542,3 +542,21 @@ def test_pipeline_with_tasks_and_analyze(tmp_path, monkeypatch):
     out = S.do_pipeline(cfg, "idea", "stack", None, gate=False, with_drift=False,
                         with_tasks=True, with_analyze=True, stream=False, dry_run=True)
     assert list(out["steps"]) == ["specify", "plan", "tasks", "analyze", "review"]
+
+
+def test_generate_removes_commands_from_the_old_prefix(tmp_path):
+    from speckfish.editors import generate
+    cfg = Config(root=tmp_path)
+    prompts = tmp_path / ".github" / "prompts"
+    cmds = tmp_path / ".claude" / "commands"
+    prompts.mkdir(parents=True)
+    cmds.mkdir(parents=True)
+    (prompts / "speckfish-review.prompt.md").write_text("old", encoding="utf-8")
+    (cmds / "speckfish-review.md").write_text("old", encoding="utf-8")
+    (cmds / "mine.md").write_text("user file", encoding="utf-8")   # not ours: never touched
+
+    out = generate(cfg, ["copilot", "claude"], "speckfish", None, force=True)
+    assert len(out["removed"]) == 2
+    assert not (prompts / "speckfish-review.prompt.md").exists()
+    assert (cmds / "mine.md").exists()
+    assert (cmds / "spfish-review.md").exists()

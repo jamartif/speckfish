@@ -239,6 +239,8 @@ def main(argv: list[str] | None = None) -> int:
             human += [f"  {p}" for p in gen["written"]]
             if gen.get("codex_dir"):
                 human.append(f"codex prompts (user-global): {gen['codex_dir']}")
+            if gen.get("removed"):
+                human.append(f"removed {len(gen['removed'])} stale command(s) from the old prefix")
             if gen["skipped"]:
                 human += [f"skipped: {s['path']} ({s['reason']})" for s in gen["skipped"]]
             emit(gen, as_json, "\n".join(human))
