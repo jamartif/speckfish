@@ -23,6 +23,7 @@ class StepInvocation:
     stdin: str | None = None
     schema_supported: bool = False
     cost_unit: str = "usd"
+    interactive: bool = False
 
 
 class Harness:
@@ -57,6 +58,11 @@ class Harness:
     def build(self, kind: str, prompt: str, cwd: Path, artifact_dir: Path,
               egm_root: Path | None, budget: float | None,
               timeout: int, schema: dict | None) -> StepInvocation:
+        raise NotImplementedError
+
+    # ---- interactive (no -p: the human drives the dialogue) ----
+    def build_interactive(self, kind: str, prompt: str, cwd: Path,
+                          artifact_dir: Path, egm_root: Path | None) -> StepInvocation:
         raise NotImplementedError
 
     # ---- output parsing ----
@@ -96,6 +102,18 @@ class ClaudeHarness(Harness):
         if self.cfg.model:
             argv += ["--model", self.cfg.model]
         return StepInvocation(argv=argv, schema_supported=bool(schema))
+
+    def build_interactive(self, kind, prompt, cwd, artifact_dir, egm_root):
+        argv = (self.prefix() or ["claude"]) + [
+            prompt,
+            "--permission-mode", "acceptEdits",
+            "--allowedTools", "Bash", "Write", "Edit", "Read", "Glob", "Grep", "Agent",
+        ]
+        if egm_root:
+            argv += ["--plugin-dir", norm(egm_root)]
+        if self.cfg.model:
+            argv += ["--model", self.cfg.model]
+        return StepInvocation(argv=argv, interactive=True)
 
     def parse_output(self, stdout, stderr, exit_code):
         data = {}
@@ -150,6 +168,16 @@ class CopilotHarness(Harness):
         if self.cfg.model:
             argv += ["--model", self.cfg.model]
         return StepInvocation(argv=argv, schema_supported=False)
+
+    def build_interactive(self, kind, prompt, cwd, artifact_dir, egm_root):
+        argv = (self.prefix() or ["copilot"]) + ["--allow-all-tools", "--allow-all-paths"]
+        if egm_root:
+            argv += ["--plugin-dir", norm(egm_root), "--add-dir", norm(egm_root),
+                     "--agent", "egm:egm"]
+        if self.cfg.model:
+            argv += ["--model", self.cfg.model]
+        argv += [prompt]
+        return StepInvocation(argv=argv, interactive=True)
 
     def parse_output(self, stdout, stderr, exit_code):
         """Copilot JSONL: message deltas, credits and subagents."""
@@ -233,6 +261,13 @@ class CodexHarness(Harness):
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
         return StepInvocation(argv=argv, schema_supported=False)
+
+    def build_interactive(self, kind, prompt, cwd, artifact_dir, egm_root):
+        argv = (self.prefix() or ["codex"])
+        if egm_root:
+            argv += ["--add-dir", norm(egm_root)]
+        argv += [prompt]
+        return StepInvocation(argv=argv, interactive=True)
 
     def parse_output(self, stdout, stderr, exit_code):
         return {"text_tail": (stdout or stderr)[-3000:], "exit_code": exit_code}

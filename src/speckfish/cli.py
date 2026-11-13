@@ -116,6 +116,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--stage", default="uninterrupted", help="uninterrupted | feature_spec | implementation | 5..9")
     sp.add_argument("--target-file", default="plan.md", help="default document")
     sp.add_argument("--run-id", default=None)
+    sp.add_argument("--interactive", action="store_true",
+                    help="run the agent in this terminal so it can ask you questions")
 
     sp = sub.add_parser("drift", help="drift between designs and code")
     sp.add_argument("target", nargs="?", default=None, help="specs directory (default: latest feature)")
@@ -165,7 +167,8 @@ def main(argv: list[str] | None = None) -> int:
             res = S.do_plan(cfg, args.stack, args.run_id, h, stream, args.dry_run)
         elif args.cmd == "review":
             res = S.do_review(cfg, args.target, args.run_id, h, args.profile,
-                              args.stage, stream, args.dry_run, args.target_file)
+                              args.stage, stream, args.dry_run, args.target_file,
+                              interactive=getattr(args, "interactive", False))
         elif args.cmd == "drift":
             res = S.do_drift(cfg, args.target, args.run_id, h, stream, args.dry_run)
         elif args.cmd == "pipeline":

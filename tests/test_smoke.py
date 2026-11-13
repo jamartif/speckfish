@@ -10,7 +10,7 @@ from speckfish import prompts
 from speckfish.cli import build_parser, normalize_argv, exit_for
 from speckfish.config import Config, parse_consolidated, find_report
 from speckfish.harnesses import ClaudeHarness, CopilotHarness, CodexHarness
-from speckfish.runner import run_step
+from speckfish.runner import run_interactive, run_step
 
 FIX = Path(__file__).parent / "fixtures" / "consolidated_review_report.md"
 
@@ -130,3 +130,45 @@ def test_agent_prefix_avoids_windows_shims():
     assert pre[0].lower().endswith("node.exe") or pre[0].lower().endswith("node")
     assert pre[1].endswith(".js")
     assert ".cmd" not in pre[1]
+
+
+# ---------- interactive mode ----------
+def test_claude_interactive_argv_has_no_print_flag(tmp_path):
+    cfg = _cfg(tmp_path)
+    inv = ClaudeHarness(cfg).build_interactive("review", "/egm:egm-review doc.md", tmp_path,
+                                               tmp_path / "art", tmp_path / "egm")
+    assert inv.interactive is True
+    assert "-p" not in inv.argv                      # no print mode: the dialogue stays alive
+    assert "--json-schema" not in inv.argv
+    assert "--plugin-dir" in inv.argv
+    assert inv.argv[1].startswith("/egm:egm-review")
+
+
+def test_copilot_interactive_argv_has_no_prompt_flag(tmp_path):
+    cfg = _cfg(tmp_path)
+    inv = CopilotHarness(cfg).build_interactive("review", "EGM package root: /egm", tmp_path,
+                                                tmp_path / "art", tmp_path / "egm")
+    assert "-p" not in inv.argv
+    assert "--agent" in inv.argv and "egm:egm" in inv.argv
+    assert "--allow-all-tools" in inv.argv
+
+
+def test_interactive_review_prompt_asks_questions():
+    p = prompts.review_prompt("doc.md", Path("/tmp/art"), interactive=True)
+    assert "ask every open question" in p.lower()
+    assert "Step=" not in p                          # let EGM show its preset menu
+    assert "nobody can answer questions" not in p.lower()
+
+
+def test_headless_review_prompt_forbids_questions():
+    p = prompts.review_prompt("doc.md", Path("/tmp/art"))
+    assert "nobody can answer questions" in p.lower()
+    assert "Step=uninterrupted" in p
+
+
+def test_interactive_dry_run_shows_command(tmp_path):
+    cfg = _cfg(tmp_path)
+    res = run_interactive(cfg, ClaudeHarness(cfg), "review", "/egm:egm-review x.md", tmp_path,
+                          "run-int", tmp_path / "egm", dry_run=True)
+    assert res.interactive is True
+    assert "/egm:egm-review x.md" in res.log

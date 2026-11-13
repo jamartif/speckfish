@@ -8,6 +8,10 @@ from .config import norm
 NO_QUESTIONS = ("Headless run with no user: nobody can answer questions. "
                 "Do not ask for confirmation, assume reasonable defaults and finish the task.")
 
+INTERACTIVE = ("Interactive session with a human operator: ask every open question you have "
+               "(presets, scope, ambiguities) and wait for the answer before continuing. "
+               "The operator can answer in this terminal.")
+
 # --- criteria profile: removes format noise when reviewing Spec Kit artifacts ---
 PROFILES = {
     "speckit": (
@@ -36,16 +40,23 @@ def plan_prompt(stack: str) -> str:
 
 
 def review_prompt(target: str, artifact_dir: Path, profile: str = "speckit",
-                  stage: str = "uninterrupted") -> str:
-    parts = [
-        f"/egm:egm-review {norm(target)} Step={stage}.",
-        NO_QUESTIONS + " No extra Goldfish context (empty list).",
-        f"EGM artifact directory: {norm(artifact_dir)}",
-    ]
+                  stage: str = "uninterrupted", interactive: bool = False) -> str:
+    if interactive:
+        head = [
+            f"/egm:egm-review {norm(target)}",
+            INTERACTIVE + " Do not pass Step: let me choose the review mode in your menu.",
+            f"EGM artifact directory: {norm(artifact_dir)}",
+        ]
+    else:
+        head = [
+            f"/egm:egm-review {norm(target)} Step={stage}.",
+            NO_QUESTIONS + " No extra Goldfish context (empty list).",
+            f"EGM artifact directory: {norm(artifact_dir)}",
+        ]
     p = PROFILES.get(profile, "")
     if p:
-        parts.append(p)
-    return "\n\n".join(parts)
+        head.append(p)
+    return "\n\n".join(head)
 
 
 def drift_prompt(target: str, artifact_dir: Path) -> str:
@@ -59,19 +70,22 @@ def drift_prompt(target: str, artifact_dir: Path) -> str:
 # --- prompts for harnesses without slash commands (copilot/codex) ---
 
 def egm_prompt_for(harness: str, kind: str, target: str, artifact_dir: Path,
-                   egm_root: Path, profile: str = "speckit", stage: str = "uninterrupted") -> str:
+                   egm_root: Path, profile: str = "speckit", stage: str = "uninterrupted",
+                   interactive: bool = False) -> str:
     """Copilot/Codex do not resolve `/egm:...`: the prompt asks them to read the package SKILL.md."""
     docs = {"copilot": "docs/copilot.md", "codex": "docs/codex.md"}.get(harness, "docs/claude.md")
     skill = {"review": "egm-review", "drift": "egm-drift-report",
              "brainstorm": "egm-brainstorm", "draft": "egm-draft"}[kind]
+    doc = f"with Step={stage}." if (kind == "review" and not interactive) else "."
     head = [f"EGM package root: {norm(egm_root)}",
-            f"Read that package's {docs} and run {skill} on {norm(target)}."]
+            f"Read that package's {docs} and run {skill} on {norm(target)} {doc}"]
     if kind == "review":
-        head[1] = (f"Read that package's {docs} and run {skill} on {norm(target)} "
-                   f"with Step={stage}.")
-        head.append(NO_QUESTIONS + " No extra Goldfish context (empty list).")
+        if interactive:
+            head.append(INTERACTIVE + " Do not pass Step: let me choose the review mode in your menu.")
+        else:
+            head.append(NO_QUESTIONS + " No extra Goldfish context (empty list).")
     else:
-        head.append(NO_QUESTIONS)
+        head.append(INTERACTIVE if interactive else NO_QUESTIONS)
     head.append(f"EGM artifact directory: {norm(artifact_dir)}")
     p = PROFILES.get(profile, "")
     if p and kind == "review":

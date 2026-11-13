@@ -6,8 +6,54 @@
 from a terminal or from CI. One agent subprocess per step, per-run artifacts, a
 machine-readable verdict and exit codes you can automate against.
 
+![speckfish pipeline: init → specify → plan → goldfish review → drift](docs/flow.svg)
+
 ```
 speckfish pipeline "a task CLI in Python" --stack "stdlib only" --gate
+```
+
+## The flow at a glance
+
+```mermaid
+flowchart LR
+    A["speckfish init<br/><small>git init · specify init · clone EGM</small>"] --> B
+    B["speckfish specify<br/><small>/speckit-specify</small>"] --> C
+    C["speckfish plan<br/><small>/speckit-plan</small>"] --> D
+    D{"speckfish review<br/><small>5 goldfish subagents</small>"}
+    D -->|"no blockers"| E["speckfish drift<br/><small>egm-drift-report</small>"]
+    D -->|"blockers → exit 1"| F["fix the spec/plan<br/><small>or --interactive</small>"]
+    F --> D
+    E --> G["CI gate<br/><small>exit 0 / 1 / 2 / 3</small>"]
+
+    classDef step fill:#eff6ff,stroke:#1b6ef3,stroke-width:1.5px,color:#0f172a
+    classDef gate fill:#fffbeb,stroke:#d97706,stroke-width:1.5px,color:#0f172a
+    classDef out fill:#f0fdf4,stroke:#16a34a,stroke-width:1.5px,color:#0f172a
+    class A,B,C step
+    class D,F gate
+    class E,G out
+```
+
+Every step runs as its own subprocess, so the agent never drags context from the previous step:
+
+```mermaid
+sequenceDiagram
+    autonumber
+    participant CLI as speckfish
+    participant SK as Spec Kit skills
+    participant AG as agent CLI (claude / copilot / codex)
+    participant GF as EGM goldfish subagents
+    participant FS as .speckfish/runs/&lt;id&gt;/
+
+    CLI->>AG: subprocess #1 with /speckit-specify
+    AG->>SK: writes spec.md + checklists
+    AG-->>FS: logs/specify.log, result JSON
+    CLI->>AG: subprocess #2 with /speckit-plan
+    AG->>SK: writes plan.md, research.md, contracts/
+    CLI->>AG: subprocess #3 with /egm:egm-review
+    AG->>GF: spawn reviewer (clean context, read-only tools)
+    GF-->>AG: findings per stage
+    AG-->>FS: artifacts/review/*.md + verdict
+    CLI-->>CLI: parse verdict → blockers / majors / nits → exit code
 ```
 
 ## What it solves
@@ -72,6 +118,34 @@ speckfish runs && speckfish show
 
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
+
+### Headless vs interactive
+
+| Mode | Command | Behaviour |
+|---|---|---|
+| Headless (default) | `speckfish review` | One `-p` subprocess, no questions asked: the agent assumes defaults and the doubts show up later in the review report. Use it for CI and batch work. |
+| Interactive | `speckfish review --interactive` | Launches the agent in **your terminal** (no `-p`): EGM renders its preset menu, asks for goldfish context and for line ranges, and you answer. Doubts get resolved on the spot instead of becoming assumptions. |
+
+Both modes write the same artifacts to the same run directory; interactive runs are recorded with
+`"interactive": true` in `state.json`. Interactive mode has no timeout and takes over the terminal,
+so it is not meant for CI.
+
+```bash
+speckfish review --interactive                  # EGM asks, you decide
+speckfish review --interactive --profile none   # same, literal EGM standard
+```
+
+What a real interactive run looks like (Claude Code, `plan.md` of a 75-line feature):
+
+```
+$ speckfish review --interactive
+  Accessing workspace … Yes, I trust this folder
+  → "Do you want to add more goldfish context? answer 'no extra context'"      → no extra context
+  → menu: 1 interactive · 2 consolidated · 3 feature spec · 4 implementation · 5 type…
+  → "Which ranges for the review?" 1 Stages 5-8 · 2 Stages 5-9 · 3 manual
+  → Stage 5 written to artifacts/review/zoom_out_report.md
+  exit 0 · 147.4s · state.json: {"interactive": true, "reports": [...], "blockers": 0}
+```
 
 ### Exit codes
 

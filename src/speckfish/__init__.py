@@ -1,3 +1,2 @@
-"""speckfish: orquestador headless Spec Kit + EGM."""
-__version__ = "0.1.0"
-__version__ = "0.1.0"
+"""speckfish: headless orchestrator for Spec Kit + EGM."""
+__version__ = "0.1.1"

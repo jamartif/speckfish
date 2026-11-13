@@ -9,7 +9,7 @@ from pathlib import Path
 from . import prompts
 from .config import Config, find_git, norm, run_cmd, which
 from .harnesses import Harness, get_harness
-from .runner import StepResult, run_step, run_dir_for, new_run_id
+from .runner import StepResult, run_interactive, run_step, run_dir_for, new_run_id
 
 
 # ---------------- infrastructura ----------------
@@ -193,7 +193,8 @@ def resolve_target(cfg: Config, target: str | None, default_file: str = "plan.md
 def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
               harness: Harness | None = None, profile: str | None = None,
               stage: str = "uninterrupted", stream: bool = True,
-              dry_run: bool = False, default_file: str = "plan.md") -> StepResult:
+              dry_run: bool = False, default_file: str = "plan.md",
+              interactive: bool = False) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     doc = resolve_target(cfg, target, default_file)
@@ -202,10 +203,15 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
     if h.name == "claude":
         if not egm:
             raise SystemExit("EGM not found: run `speckfish init` or set egm_root in .speckfish/config.json")
-        prompt = prompts.review_prompt(doc, artifact, profile or cfg.profile, stage)
+        prompt = prompts.review_prompt(doc, artifact, profile or cfg.profile, stage,
+                                       interactive=interactive)
     else:
         prompt = prompts.egm_prompt_for(h.name, "review", str(doc), artifact,
-                                        egm or cfg.root, profile or cfg.profile, stage)
+                                        egm or cfg.root, profile or cfg.profile, stage,
+                                        interactive=interactive)
+    if interactive:
+        # the agent takes over this terminal: it asks, the operator answers
+        return run_interactive(cfg, h, "review", prompt, cfg.root, rid, egm, dry_run=dry_run)
     return run_step(cfg, h, "review", prompt, cfg.root, rid, egm,
                     schema=prompts.SCHEMAS["review"], stream=stream, dry_run=dry_run)
 

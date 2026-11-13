@@ -1,0 +1,109 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="620" viewBox="0 0 1160 620" role="img" aria-labelledby="t d">
+  <title id="t">speckfish pipeline</title>
+  <desc id="d">Spec Kit generates the spec and the plan, EGM reviews them with clean-context subagents and reports drift. Each step is one agent subprocess; every run keeps its own logs, artifacts and state.</desc>
+
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <style>
+      .t  { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .m  { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+      .h1 { font-size: 26px; font-weight: 700; fill: #0f172a; }
+      .h2 { font-size: 13px; font-weight: 600; fill: #475569; letter-spacing: .09em; }
+      .lbl{ font-size: 14px; font-weight: 600; fill: #0f172a; }
+      .sm { font-size: 12px; fill: #475569; }
+      .xs { font-size: 11px; fill: #64748b; }
+      .box      { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
+      .box-blue { fill: #eff6ff; stroke: #1b6ef3; stroke-width: 1.5; }
+      .box-green{ fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.5; }
+      .box-amber{ fill: #fffbeb; stroke: #d97706; stroke-width: 1.5; }
+      .chip     { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1; }
+      .edge     { stroke: #94a3b8; stroke-width: 1.6; fill: none; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1160" height="620" fill="#ffffff"/>
+  <rect x="0.75" y="0.75" width="1158.5" height="618.5" fill="none" stroke="#e2e8f0" rx="18"/>
+
+  <text class="t h1" x="40" y="56">🐟 speckfish — specify → plan → goldfish review</text>
+  <text class="t sm" x="40" y="80">Headless Spec Kit + Elephant-Goldfish Model over agent CLIs. One agent subprocess per step, artifacts per run.</text>
+
+  <!-- lane labels -->
+  <text class="t h2" x="40" y="126">PIPELINE</text>
+
+  <!-- nodes -->
+  <!-- init -->
+  <rect class="box" x="40" y="140" width="188" height="86" rx="12"/>
+  <text class="t lbl" x="58" y="168">speckfish init</text>
+  <text class="m sm" x="58" y="190">git init</text>
+  <text class="m sm" x="58" y="208">specify init</text>
+  <text class="m xs" x="58" y="222">clone EGM → vendor/</text>
+
+  <!-- specify -->
+  <rect class="box-blue" x="268" y="140" width="188" height="86" rx="12"/>
+  <text class="t lbl" x="286" y="168">speckfish specify</text>
+  <text class="m sm" x="286" y="190">/speckit-specify</text>
+  <text class="m xs" x="286" y="210">→ specs/NNN-*/spec.md</text>
+  <text class="m xs" x="286" y="224">checklists/requirements.md</text>
+
+  <!-- plan -->
+  <rect class="box-blue" x="496" y="140" width="188" height="86" rx="12"/>
+  <text class="t lbl" x="514" y="168">speckfish plan</text>
+  <text class="m sm" x="514" y="190">/speckit-plan</text>
+  <text class="m xs" x="514" y="210">→ plan.md + research.md</text>
+  <text class="m xs" x="514" y="224">contracts/ · data-model.md</text>
+
+  <!-- review -->
+  <rect class="box-amber" x="724" y="128" width="240" height="110" rx="12"/>
+  <text class="t lbl" x="742" y="156">speckfish review</text>
+  <text class="m sm" x="742" y="178">/egm:egm-review</text>
+  <text class="m xs" x="742" y="198">5 subagents, clean context</text>
+  <text class="m xs" x="742" y="212">zoom-out · comprehension · critic</text>
+  <text class="m xs" x="742" y="226">→ verdict: blockers/majors/nits</text>
+
+  <!-- drift -->
+  <rect class="box-green" x="984" y="128" width="136" height="110" rx="12"/>
+  <text class="t lbl" x="1000" y="156">speckfish drift</text>
+  <text class="m sm" x="1000" y="178">egm-drift-report</text>
+  <text class="m xs" x="1000" y="198">design vs code</text>
+  <text class="m xs" x="1000" y="216">→ DRIFT_REPORT.md</text>
+
+  <!-- edges -->
+  <path class="edge" d="M228 183 H262" marker-end="url(#arw)"/>
+  <path class="edge" d="M456 183 H490" marker-end="url(#arw)"/>
+  <path class="edge" d="M684 183 H718" marker-end="url(#arw)"/>
+  <path class="edge" d="M964 183 H978" marker-end="url(#arw)"/>
+
+  <!-- exit codes -->
+  <text class="t h2" x="40" y="286">EXIT CODES</text>
+  <rect class="chip" x="40" y="298" width="120" height="34" rx="8"/>
+  <text class="m sm" x="54" y="320">0  ok</text>
+  <rect class="chip" x="172" y="298" width="164" height="34" rx="8"/>
+  <text class="m sm" x="186" y="320">1  blockers</text>
+  <rect class="chip" x="348" y="298" width="190" height="34" rx="8"/>
+  <text class="m sm" x="362" y="320">2  execution error</text>
+  <rect class="chip" x="550" y="298" width="184" height="34" rx="8"/>
+  <text class="m sm" x="564" y="320">3  environment</text>
+  <text class="t xs" x="748" y="320">→ fits CI gates:  speckfish review --gate</text>
+
+  <!-- harness layer -->
+  <text class="t h2" x="40" y="382">HARNESS ADAPTERS — one subprocess per step</text>
+  <rect class="box" x="40" y="396" width="1080" height="76" rx="12"/>
+  <rect class="chip" x="60" y="414" width="180" height="40" rx="9"/>
+  <text class="m sm" x="74" y="439">claude -p  ✓ verified</text>
+  <rect class="chip" x="252" y="414" width="188" height="40" rx="9"/>
+  <text class="m sm" x="266" y="439">copilot -p  ✓ verified</text>
+  <rect class="chip" x="452" y="414" width="176" height="40" rx="9"/>
+  <text class="m sm" x="466" y="439">codex exec  ⚠ untested</text>
+  <text class="t xs" x="648" y="432">each step:  --plugin-dir vendor/egm  ·  budget / credits cap  ·  wall-clock timeout</text>
+  <text class="t xs" x="648" y="452">no chained context: every step must write its own artifact</text>
+
+  <!-- artifacts -->
+  <text class="t h2" x="40" y="512">RUN ARTIFACTS</text>
+  <rect class="box" x="40" y="526" width="1080" height="66" rx="12"/>
+  <text class="m sm" x="60" y="552">.speckfish/runs/&lt;run-id&gt;/</text>
+  <text class="m xs" x="60" y="574">logs/&lt;step&gt;.log   ·   artifacts/&lt;step&gt;/*.md (EGM writes here)   ·   state.json   ·   &lt;step&gt;.result.json</text>
+  <text class="t xs" x="700" y="552">verdict as JSON:  verdict · meets_standard · blockers[] · majors · nits · subagents</text>
+  <text class="t xs" x="700" y="574">artifacts never collide: EGM report names are fixed, run dirs are not</text>
+</svg>
