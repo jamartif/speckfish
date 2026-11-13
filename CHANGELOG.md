@@ -3,6 +3,13 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.13
+
+- Editor commands use the short `spfish-` prefix by default (`/spfish-review`) so they no longer blur
+  into Spec Kit's own `/speckit-*` commands in the slash menu; change it with `--prefix`.
+- `speckfish init` now generates the VS Code tasks and the agent slash commands by default
+  (`--no-editors` to skip).
+
 ## 0.1.12
 
 - Fix: `config`, `runs`, `show` and `--version` no longer fail when no agent CLI is installed (the

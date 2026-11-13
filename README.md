@@ -239,18 +239,26 @@ Relative paths resolve against `--root`; a missing file fails loudly instead of 
 `speckfish editors` writes the entry points each tool documents, so the same steps are one
 slash command or one task away:
 
+`speckfish init` generates them **by default** (all four targets); use `--no-editors` to skip it, or
+regenerate later:
+
 ```bash
 speckfish editors                     # vscode + copilot + claude + codex
 speckfish editors --targets claude    # only what you use
-speckfish init --editors              # do it together with the project setup
+speckfish editors --prefix sf         # shorter slash commands: /sf-review
+speckfish init --no-editors           # project setup without editor files
 ```
 
 | Target | Files | How you invoke it |
 |---|---|---|
-| `vscode` | `.vscode/tasks.json` | Command Palette → **Run Task** → *Speckfish: review* (works with any agent, no extension needed) |
-| `copilot` | `.github/prompts/speckfish-*.prompt.md` | Copilot Chat: `/speckfish-review`, `/speckfish-specify`, `/speckfish-plan`, `/speckfish-drift`, `/speckfish-doctor` |
-| `claude` | `.claude/commands/speckfish-*.md` | Claude Code: `/speckfish-review` (custom slash commands, merged into skills) |
-| `codex` | `$CODEX_HOME/prompts/speckfish-*.md` (default `~/.codex/prompts`) | Codex CLI/IDE: `/prompts:speckfish-review` |
+| `vscode` | `.vscode/tasks.json` | Command Palette → **Run Task** → *spfish: review* (works with any agent, no extension needed) |
+| `copilot` | `.github/prompts/spfish-*.prompt.md` | Copilot Chat: `/spfish-review`, `/spfish-specify`, `/spfish-plan`, `/spfish-drift`, `/spfish-doctor` |
+| `claude` | `.claude/commands/spfish-*.md` | Claude Code: `/spfish-review` (custom slash commands, merged into skills) |
+| `codex` | `$CODEX_HOME/prompts/spfish-*.md` (default `~/.codex/prompts`) | Codex CLI/IDE: `/prompts:spfish-review` |
+
+The prefix is short on purpose: Spec Kit installs its own `/speckit-*` commands, and a long
+`/speckfish-*` prefix made both families show up together when you typed `/speck`. Change it with
+`--prefix` (e.g. `speckfish editors --prefix sf`).
 
 Every generated file runs the real CLI in the integrated terminal and then tells the agent to read
 `.speckfish/runs/<id>/state.json` and the Markdown reports, so the chat answer contains the verdict

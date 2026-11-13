@@ -336,7 +336,7 @@ def test_tasks_json_structure():
     assert data["version"] == "2.0.0"
     assert len(data["tasks"]) == len(STEPS)
     labels = [t["label"] for t in data["tasks"]]
-    assert "Speckfish: review" in labels and "Speckfish: review (interactive)" in labels
+    assert "spfish: review" in labels and "spfish: review-interactive" in labels
     assert {i["id"] for i in data["inputs"]} >= {"idea", "stack", "principles"}
     for t in data["tasks"]:
         assert t["command"] == "python -m speckfish"
@@ -347,7 +347,7 @@ def test_copilot_prompt_frontmatter():
     from speckfish.editors import copilot_prompt, STEPS
     txt = copilot_prompt("review", STEPS["review"], "speckfish")
     assert txt.startswith("---\n")
-    assert "name: 'speckfish-review'" in txt
+    assert "name: 'spfish-review'" in txt          # short prefix, does not blur into /speckit-*
     assert "agent: 'agent'" in txt
     assert "speckfish review" in txt
 
@@ -368,9 +368,9 @@ def test_generate_writes_every_target(tmp_path):
     out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish",
                    str(codex_home), force=True)
     assert (tmp_path / ".vscode" / "tasks.json").exists()
-    assert (tmp_path / ".github" / "prompts" / "speckfish-review.prompt.md").exists()
-    assert (tmp_path / ".claude" / "commands" / "speckfish-review.md").exists()
-    assert (codex_home / "prompts" / "speckfish-review.md").exists()
+    assert (tmp_path / ".github" / "prompts" / "spfish-review.prompt.md").exists()
+    assert (tmp_path / ".claude" / "commands" / "spfish-review.md").exists()
+    assert (codex_home / "prompts" / "spfish-review.md").exists()
     from speckfish.editors import STEPS as EDITOR_STEPS
     assert len(out["written"]) == 1 + 3 * len(EDITOR_STEPS)
     assert out["command"] == "speckfish"
@@ -380,6 +380,18 @@ def test_generate_writes_every_target(tmp_path):
     out2 = generate(cfg, ["vscode"], "speckfish", None, force=False)
     assert out2["written"] == [] and out2["skipped"]
     assert (tmp_path / ".vscode" / "tasks.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_custom_prefix_renames_every_command(tmp_path):
+    from speckfish.editors import generate, tasks_json
+    cfg = Config(root=tmp_path)
+    out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish", None,
+                   force=True, prefix="xyz")
+    assert out["prefix"] == "xyz"
+    assert (tmp_path / ".github" / "prompts" / "xyz-review.prompt.md").exists()
+    assert (tmp_path / ".claude" / "commands" / "xyz-drift.md").exists()
+    assert not list((tmp_path / ".claude" / "commands").glob("spfish-*"))
+    assert tasks_json("speckfish", prefix="xyz")["tasks"][0]["label"].startswith("xyz: ")
 
 
 def test_generate_subset_of_targets(tmp_path):

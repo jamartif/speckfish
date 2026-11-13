@@ -123,7 +123,8 @@ def harness_for_integration(cfg: Config, integration: str) -> Harness:
 
 
 def do_init(cfg: Config, integration: str | None, force_git: bool = True,
-            skip_egm: bool = False, editors: bool = False) -> dict:
+            skip_egm: bool = False, editors: bool = True,
+            editor_prefix: str = "spfish") -> dict:
     root = cfg.root
     out: dict = {"root": norm(root), "actions": []}
     if not (root / ".git").exists() and force_git:
@@ -152,7 +153,7 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
     out["harness"] = integrations[0] if integrations else None
     if editors:
         from .editors import generate
-        out["editors"] = generate(cfg)
+        out["editors"] = generate(cfg, prefix=editor_prefix)
     out["config"] = norm(cfg.save())
     out["note"] = ("Spec Kit keeps only the last integration in .specify/integration.json; "
                    "the skills of the others stay on disk. Re-run `speckfish init` to repair.")

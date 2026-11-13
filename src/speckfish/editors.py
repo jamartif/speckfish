@@ -8,6 +8,8 @@ Per tool, using the formats its documentation defines:
 - Codex CLI / IDE    -> $CODEX_HOME/prompts/*.md    (slash commands as /prompts:<name>, user-global)
 
 Everything is generated from the same per-step definitions, so commands stay in sync with the CLI.
+The slash commands use a short prefix (`spfish-`) by default: Spec Kit installs its own
+`speckit-*` commands and `/speck...` would list both families together in the editor menu.
 """
 from __future__ import annotations
 
@@ -17,6 +19,8 @@ import shutil
 from pathlib import Path
 
 from .config import Config, norm, run_cmd
+
+DEFAULT_PREFIX = "spfish"
 
 STEPS = {
     "specify": {
@@ -132,12 +136,12 @@ def detect_command(cfg: Config) -> str:
 
 # ---------------- VS Code tasks ----------------
 
-def tasks_json(cmd: str) -> dict:
+def tasks_json(cmd: str, prefix: str = DEFAULT_PREFIX) -> dict:
     tasks = []
     for key, spec in STEPS.items():
         argv = spec["args"]
         task = {
-            "label": spec["title"],
+            "label": f"{prefix}: {key}",
             "detail": spec["desc"],
             "type": "shell",
             "command": cmd,
@@ -156,7 +160,7 @@ def tasks_json(cmd: str) -> dict:
 # ---------------- GitHub Copilot prompt files ----------------
 
 COPILOT_TMPL = """---
-name: 'speckfish-{key}'
+name: '{prefix}-{key}'
 description: '{desc}'
 agent: 'agent'
 argument-hint: '{hint}'
@@ -179,11 +183,12 @@ Run the repository's planning pipeline for {ph_arg}.
 """
 
 
-def copilot_prompt(key: str, spec: dict, cmd: str) -> str:
+def copilot_prompt(key: str, spec: dict, cmd: str, prefix: str = DEFAULT_PREFIX) -> str:
     cli = " ".join(spec["args"])
     argpart = " ${input:args}" if spec["hint"] else ""
     return COPILOT_TMPL.format(key=key, desc=spec["desc"], hint=spec["hint"] or "",
-                               ph_arg=spec["args"][0], cmd=cmd, cli=cli, argpart=argpart)
+                               ph_arg=spec["args"][0], cmd=cmd, cli=cli, argpart=argpart,
+                               prefix=prefix)
 
 
 # ---------------- Claude Code slash commands ----------------
@@ -234,7 +239,8 @@ def codex_prompt(key: str, spec: dict, cmd: str) -> str:
 # ---------------- generator ----------------
 
 def generate(cfg: Config, targets: list[str] | None = None, cmd: str | None = None,
-             codex_home: str | None = None, force: bool = True) -> dict:
+             codex_home: str | None = None, force: bool = True,
+             prefix: str = DEFAULT_PREFIX) -> dict:
     """Write the editor entry points. Returns what was written (and what was left alone)."""
     root = cfg.root
     cmd = cmd or detect_command(cfg)
@@ -256,20 +262,20 @@ def generate(cfg: Config, targets: list[str] | None = None, cmd: str | None = No
 
     if "copilot" in wanted:
         for key, spec in STEPS.items():
-            put(root / ".github" / "prompts" / f"speckfish-{key}.prompt.md",
-                copilot_prompt(key, spec, cmd))
+            put(root / ".github" / "prompts" / f"{prefix}-{key}.prompt.md",
+                copilot_prompt(key, spec, cmd, prefix))
 
     if "claude" in wanted:
         for key, spec in STEPS.items():
-            put(root / ".claude" / "commands" / f"speckfish-{key}.md",
+            put(root / ".claude" / "commands" / f"{prefix}-{key}.md",
                 claude_command(key, spec, cmd))
 
     if "codex" in wanted:
         home = Path(codex_home or os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
         for key, spec in STEPS.items():
-            put(home / "prompts" / f"speckfish-{key}.md", codex_prompt(key, spec, cmd))
+            put(home / "prompts" / f"{prefix}-{key}.md", codex_prompt(key, spec, cmd))
 
-    return {"root": norm(root), "command": cmd, "written": written, "skipped": skipped,
-            "steps": list(STEPS), "codex_dir": norm(Path(codex_home or os.environ.get("CODEX_HOME")
+    return {"root": norm(root), "command": cmd, "prefix": prefix,
+            "written": written, "skipped": skipped, "steps": list(STEPS), "codex_dir": norm(Path(codex_home or os.environ.get("CODEX_HOME")
                                                          or (Path.home() / ".codex")) / "prompts")
             if "codex" in wanted else None}
