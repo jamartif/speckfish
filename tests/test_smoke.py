@@ -1,15 +1,14 @@
 """Smoke tests: no network, no agent CLI is executed."""
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import pytest
 
 from speckfish import prompts
-from speckfish.cli import build_parser, normalize_argv, exit_for
-from speckfish.config import Config, parse_consolidated, find_report
-from speckfish.harnesses import ClaudeHarness, CopilotHarness, CodexHarness
+from speckfish.cli import build_parser, exit_for, normalize_argv
+from speckfish.config import Config, find_report, parse_consolidated
+from speckfish.harnesses import ClaudeHarness, CodexHarness, CopilotHarness
 from speckfish.runner import run_interactive, run_step
 
 FIX = Path(__file__).parent / "fixtures" / "consolidated_review_report.md"
@@ -202,7 +201,7 @@ def test_parse_specify_version_extracts_numbers():
 def test_banner_free_tail_drops_ascii_art():
     from speckfish.steps import banner_free_tail
     lines = banner_free_tail(BANNER, keep=2)
-    assert all("█" not in l and "╗" not in l for l in lines)
+    assert all("█" not in line and "╗" not in line for line in lines)
     assert lines[-1].startswith("Platform") or "3.12.0" in lines[-1]
 
 
@@ -331,7 +330,7 @@ def test_pipeline_gate_skips_drift_when_stopped(tmp_path, monkeypatch):
 
 # ---------- editor entry points ----------
 def test_tasks_json_structure():
-    from speckfish.editors import tasks_json, STEPS
+    from speckfish.editors import STEPS, tasks_json
     data = tasks_json("python -m speckfish")
     assert data["version"] == "2.0.0"
     assert len(data["tasks"]) == len(STEPS)
@@ -344,7 +343,7 @@ def test_tasks_json_structure():
 
 
 def test_copilot_prompt_frontmatter():
-    from speckfish.editors import copilot_prompt, STEPS
+    from speckfish.editors import STEPS, copilot_prompt
     txt = copilot_prompt("review", STEPS["review"], "speckfish")
     assert txt.startswith("---\n")
     assert "name: 'spfish-review'" in txt          # short prefix, does not blur into /speckit-*
@@ -353,7 +352,7 @@ def test_copilot_prompt_frontmatter():
 
 
 def test_claude_command_only_takes_arguments_when_useful():
-    from speckfish.editors import claude_command, STEPS
+    from speckfish.editors import STEPS, claude_command
     with_args = claude_command("review", STEPS["review"], "speckfish")
     no_args = claude_command("doctor", STEPS["doctor"], "speckfish")
     assert "$ARGUMENTS" in with_args
@@ -465,7 +464,7 @@ def test_read_input_leaves_normal_text_alone():
 
 
 def test_read_input_references_big_files(tmp_path):
-    from speckfish.prompts import read_input, INLINE_LIMIT
+    from speckfish.prompts import INLINE_LIMIT, read_input
     f = tmp_path / "grande.md"
     f.write_text("x" * (INLINE_LIMIT + 100), encoding="utf-8")
     text, src = read_input("@grande.md", tmp_path)

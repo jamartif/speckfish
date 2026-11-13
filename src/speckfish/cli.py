@@ -6,11 +6,11 @@ import json
 import sys
 from pathlib import Path
 
+from . import __version__
 from . import steps as S
 from .config import Config, norm
 from .harnesses import get_harness
 from .prompts import SKILL_SPECS
-from . import __version__
 
 EXIT_OK, EXIT_BLOCKERS, EXIT_ERROR, EXIT_ENV = 0, 1, 2, 3
 
@@ -73,7 +73,9 @@ def doctor_summary(info: dict) -> str:
                      ".speckfish/config.json)")
 
     p = info.get("project") or {}
-    yn = lambda v: "yes" if v else "no"
+    def yn(value) -> str:
+        return "yes" if value else "no"
+
     lines.append(f"project: git={yn(p.get('has_git'))} specify={yn(p.get('has_specify'))} "
                  f"agent-skills={yn(p.get('has_claude_skills'))}")
     if p.get("feature"):

@@ -146,7 +146,7 @@ def tasks_json(cmd: str, prefix: str = DEFAULT_PREFIX) -> dict:
             "detail": spec["desc"],
             "type": "shell",
             "command": cmd,
-            "args": argv + (["${input:%s}" % spec["input"]["id"]] if spec.get("input") else []),
+            "args": argv + ([f"${{input:{spec['input']['id']}}}"] if spec.get("input") else []),
             "problemMatcher": [],
             "presentation": {"reveal": "always", "panel": "dedicated", "clear": True},
         }

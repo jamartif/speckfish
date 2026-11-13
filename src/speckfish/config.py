@@ -6,8 +6,7 @@ import os
 import re
 import shutil
 import subprocess
-import sys
-from dataclasses import dataclass, field, asdict
+from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
 STATE_DIR = ".speckfish"
@@ -50,7 +49,7 @@ class Config:
         return root / STATE_DIR / "config.json"
 
     @classmethod
-    def load(cls, root: Path) -> "Config":
+    def load(cls, root: Path) -> Config:
         root = Path(root).resolve()
         p = cls.path(root)
         cfg = cls(root=root)

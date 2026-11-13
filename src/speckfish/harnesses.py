@@ -8,6 +8,7 @@ Cada adaptador sabe:
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import shutil
 from dataclasses import dataclass
@@ -117,10 +118,8 @@ class ClaudeHarness(Harness):
 
     def parse_output(self, stdout, stderr, exit_code):
         data = {}
-        try:
+        with contextlib.suppress(Exception):
             data = json.loads(stdout[stdout.find("{"):stdout.rfind("}") + 1])
-        except Exception:
-            pass
         res = {
             "structured": data.get("structured_output"),
             "cost_usd": data.get("total_cost_usd"),
@@ -213,9 +212,7 @@ class CopilotHarness(Harness):
                 by_msg[mid] = [data["content"]]
             elif t == "subagent.started":
                 subagents += 1
-            elif t == "model.call_final_result" and isinstance(data.get("model"), str):
-                models[data["model"]] = models.get(data["model"], 0) + 1
-            elif t == "session.model_change" and isinstance(data.get("model"), str):
+            elif t == "model.call_final_result" and isinstance(data.get("model"), str) or t == "session.model_change" and isinstance(data.get("model"), str):
                 models[data["model"]] = models.get(data["model"], 0) + 1
             elif t == "session.usage_checkpoint":
                 nano = data.get("totalNanoAiu")
