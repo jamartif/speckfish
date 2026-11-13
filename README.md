@@ -1,137 +1,157 @@
 # speckfish 🐟
 
-**Orquestador headless de [Spec Kit](https://github.com/github/spec-kit) + [Elephant-Goldfish Model (EGM)](https://github.com/google/elephant-goldfish-model) sobre CLIs de agente.**
+**Headless orchestrator for [Spec Kit](https://github.com/github/spec-kit) + [Elephant-Goldfish Model (EGM)](https://github.com/google/elephant-goldfish-model) over agent CLIs.**
 
-`speckfish` convierte el flujo "especifica → planifica → revisa con Goldfish" en comandos
-ejecutables desde terminal y desde CI. Un subproceso del agente por paso, artefactos por
-ejecución, veredicto machine-readable y códigos de salida para automatizar.
+`speckfish` turns the "specify → plan → review with Goldfish" loop into commands you can run
+from a terminal or from CI. One agent subprocess per step, per-run artifacts, a
+machine-readable verdict and exit codes you can automate against.
 
 ```
-speckfish pipeline "CLI de tareas en Python" --stack "solo stdlib" --gate
+speckfish pipeline "a task CLI in Python" --stack "stdlib only" --gate
 ```
 
-## Qué resuelve
+## What it solves
 
-- **Spec Kit** genera `spec.md` y `plan.md`, pero nadie los revisa con criterio crítico.
-- **EGM** revisa con subagentes "goldfish" de contexto limpio, pero su flujo es interactivo.
-- `speckfish` los une y ejecuta en modo no interactivo, guardando todo lo que el agente produce.
+- **Spec Kit** produces `spec.md` and `plan.md`, but nobody reviews them with a critical eye.
+- **EGM** reviews with clean-context "goldfish" subagents, but its flow is interactive.
+- `speckfish` joins both and runs them non-interactively, keeping every artifact the agent writes.
 
-## Estado (verificado con ejecuciones reales)
+## Status (verified with real runs)
 
-| Harness | Estado | Evidencia |
+| Harness | Status | Evidence |
 |---|---|---|
-| **Claude Code** | ✅ Verificado end-to-end | `specify` → `plan` → `egm-review` (7 subagentes vía `Agent`) → `egm-drift-report`; veredicto con `--json-schema`; ~$0.85-1.04 por review |
-| **GitHub Copilot CLI** | ✅ Verificado end-to-end | review completa: **10 subagentes**, 0 blockers con perfil `speckit`, 8 majors; 4.9 AI credits y ~7 min (413 s); drift en 0.63 créditos / 64 s |
-| **Codex CLI** | ⚠️ Adaptador sin verificar | `codex exec`; requiere instalación y login. Revisa `docs/codex.md` de EGM |
+| **Claude Code** | ✅ Verified end-to-end | `specify` → `plan` → `egm-review` (7 subagents via `Agent`) → `egm-drift-report`; verdict through `--json-schema`; ~$0.85-1.04 per review |
+| **GitHub Copilot CLI** | ✅ Verified end-to-end | full review: **10 subagents**, 0 blockers with the `speckit` profile, 8 majors; 4.9 AI credits, wall clock ~6m55s; drift in 0.63 credits / 64 s |
+| **Codex CLI** | ⚠️ Unverified adapter | `codex exec`; needs install and login. See EGM `docs/codex.md` |
 
-`speckfish` cuenta los subagentes lanzados en cada ejecución (Claude: `subagent_stats.spawned`;
-Copilot: eventos `subagent.started`) y lo guarda en el resultado del paso: sirve como prueba de
-que la revisión fue un Goldfish review real y no una revisión en el mismo contexto.
+`speckfish` counts the subagents launched by each run (Claude: `subagent_stats.spawned`;
+Copilot: `subagent.started` events) and stores it in the step result. That is the evidence that
+a review was a real Goldfish review and not a same-context review.
 
-EGM avisa de que su adaptador de Copilot es **experimental** (aislamiento de revisores no
-verificado por Google). `speckfish` no arregla eso: lo documenta.
+EGM documents its Copilot adapter as **experimental** (reviewer isolation unverified by Google).
+`speckfish` does not fix that: it records it.
 
-## Instalación
+## Install
 
 ```bash
-# con uv (recomendado)
+# with uv (recommended)
 uv tool install git+https://github.com/jamartif/speckfish
 
-# o desde el clon
+# or from a clone
 git clone https://github.com/jamartif/speckfish && cd speckfish
 uv venv && uv pip install -e .
 ```
 
-Requisitos: Python ≥ 3.10. Y el CLI del agente que vayas a usar:
+Prebuilt wheels and sdists are attached to every release:
+see <https://github.com/jamartif/speckfish/releases>.
 
-| Harness | Instalación | Login |
+Requirements: Python ≥ 3.10, plus the agent CLI you intend to use:
+
+| Harness | Install | Login |
 |---|---|---|
-| Claude Code | `npm i -g @anthropic-ai/claude-code` | `claude` (una vez) |
+| Claude Code | `npm i -g @anthropic-ai/claude-code` | `claude` (once) |
 | Copilot CLI | `npm i -g @github/copilot` | `copilot login` |
 | Codex CLI | `npm i -g @openai/codex` | `codex login` |
 
-Spec Kit se descubre solo: usa el binario `specify` si funciona y, si está bloqueado por
-políticas de Windows, cae a `uv tool run --from specify-cli specify`.
+Spec Kit is discovered automatically: the `specify` binary is used when it works and, if it is
+blocked by Windows policies, `speckfish` falls back to `uv tool run --from specify-cli specify`.
 
-## Uso
+## Usage
 
 ```bash
-speckfish doctor                    # entorno, harness, specify y EGM
-speckfish init                      # git init + specify init + clona EGM en vendor/egm
-speckfish specify "una CLI de tareas en JSON"
-speckfish plan "Python 3.12, solo stdlib"
-speckfish review                    # revisa plan.md de la última feature
-speckfish review --profile none     # revisión literal contra el estándar de EGM
-speckfish drift                     # drift entre spec y código
+speckfish doctor                    # environment, harness, specify and EGM
+speckfish init                      # git init + specify init + clone EGM into vendor/egm
+speckfish specify "a JSON task CLI"
+speckfish plan "Python 3.12, stdlib only"
+speckfish review                    # reviews plan.md of the latest feature
+speckfish review --profile none     # literal review against the EGM standard
+speckfish drift                     # drift between spec and code
 speckfish pipeline "idea" --stack "..." --gate --with-drift
 speckfish runs && speckfish show
 ```
 
-Flags globales (antes o después del subcomando): `--root`, `--harness claude|copilot|codex`,
+Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
-### Códigos de salida
+### Exit codes
 
-| Código | Significado |
+| Code | Meaning |
 |---|---|
-| `0` | paso correcto / revisión sin blockers |
-| `1` | revisión con blockers |
-| `2` | error de ejecución (timeout, presupuesto, informe ausente) |
-| `3` | entorno incompleto (`doctor` falla) |
+| `0` | step succeeded / review without blockers |
+| `1` | review with blockers |
+| `2` | execution error (timeout, budget, missing report) |
+| `3` | incomplete environment (`doctor` fails) |
 
-## Cómo funciona
+## How it works
 
-1. **Un subproceso por paso.** `claude -p ...`, `copilot -p ...` o `codex exec ...`. Nunca se
-   encadenan pasos dentro del mismo contexto: cada uno tiene que escribir su artefacto.
-2. **Artefactos aislados por ejecución.** Todo va a `.speckfish/runs/<run-id>/`:
-   `logs/<paso>.log`, `artifacts/<paso>/` (aquí escribe EGM sus informes, vía
-   `EGM artifact directory:`), `state.json` y `<paso>.result.json`.
-   Esto evita que EGM sobrescriba sus informes con nombres fijos.
-3. **Perfil `speckit`.** Sin él, EGM juzga un `plan.md` contra su estándar de feature spec y
-   marca como Blocker cosas que son plantilla de Spec Kit (falta *Alternatives Considered*,
-   *Risks & Mitigations*…). El perfil los declara fuera de alcance y redirige la crítica a
-   coherencia, mecanismos y riesgos técnicos. Medido: **2 Blockers → 0**, mismo coste.
-4. **Veredicto estructurado.** Con Claude se usa `--json-schema` (`structured_output`:
-   `verdict`, `blockers[]`, `majors`, `nits`, `reports[]`). Con Copilot/Codex se parsea el
-   informe consolidado en Markdown (tablas o viñetas).
-5. **Límites de coste por paso.** `--max-budget-usd` (Claude) y `--max-ai-credits` (Copilot).
-   Timeout de reloj propio con kill del árbol de procesos: ningún CLI acepta `--timeout`
-   ni `--max-turns`, y `--print` puede quedarse colgado.
-6. **EGM no se instala globalmente.** Se pasa `--plugin-dir` apuntando a `vendor/egm`, así que
-   no se tocan los settings del usuario y la versión queda fijada en tu repo.
+1. **One subprocess per step.** `claude -p ...`, `copilot -p ...` or `codex exec ...`. Steps are
+   never chained inside the same context: each one has to write its own artifact.
+2. **Artifacts isolated per run.** Everything lands in `.speckfish/runs/<run-id>/`:
+   `logs/<step>.log`, `artifacts/<step>/` (this is where EGM writes its reports, through
+   `EGM artifact directory:`), `state.json` and `<step>.result.json`.
+   That stops EGM from overwriting its fixed-name reports.
+3. **`speckit` profile.** Without it, EGM judges a `plan.md` against its feature-spec standard and
+   flags template-only sections as Blockers (missing *Alternatives Considered*, *Risks &
+   Mitigations*…). The profile declares those out of scope and redirects the critique to
+   consistency, mechanisms and technical risk. Measured: **2 Blockers → 0**, same cost.
+4. **Structured verdict.** Claude gets `--json-schema` (`structured_output`: `verdict`,
+   `blockers[]`, `majors`, `nits`, `reports[]`). For Copilot/Codex the consolidated Markdown
+   report is parsed (tables or bullets, English or Spanish).
+5. **Per-step cost limits.** `--max-budget-usd` (Claude) and `--max-ai-credits` (Copilot).
+   Wall-clock timeout with process-tree kill: no agent CLI accepts `--timeout` or `--max-turns`,
+   and `--print` can hang forever.
+6. **EGM is never installed globally.** `--plugin-dir` points at `vendor/egm`, so user settings are
+   untouched and the version is pinned in your repo.
 
-## Coste observado (documento de ~75 líneas)
+## Observed cost (~75-line document)
 
-| Paso | Claude Code | Copilot CLI |
+| Step | Claude Code | Copilot CLI |
 |---|---|---|
 | specify | ~$0.26 / 49 s | — |
 | plan | ~$0.21 / 46 s | — |
-| review (perfil speckit) | ~$1.0 / 4-5 min | 4.9 AI credits / ~7 min (10 subagentes) |
+| review (`speckit` profile) | ~$1.0 / 4-5 min | 4.9 AI credits / ~7 min (10 subagents) |
 | drift | ~$0.25 / 35 s | 0.63 AI credits / 64 s |
 
-Cifras de `total_cost_usd` / AI credits reportados por cada CLI; con suscripción no se
-facturan igual. Mide siempre con `speckfish show`.
+Figures come from each CLI's `total_cost_usd` / AI credits report; subscriptions are not billed the
+same way. Always measure with `speckfish show`.
 
-## Limitaciones conocidas
+## Known limitations
 
-- El `structured_output` es un **contrato blando**: si el modelo no lo respeta, se cae al
-  parseo del Markdown.
-- El informe de EGM es Markdown de formato libre: los recuentos son heurísticos.
-- EGM puede saltarse la secuencialidad que promete `Step=uninterrupted` (hemos visto lanzar
-  la etapa 6 en paralelo con la 5): guarda los informes y no te fíes de un único veredicto.
-- `egm-brainstorm` / `egm-draft` corren, pero son conversacionales: sin humano producen
-  hipótesis sin validar. Úsalos como generador de borradores.
-- Modo `pipeline` encadena; `--gate` para y no continúa si hay blockers.
+- `structured_output` is a **soft contract**: when the model ignores it, parsing falls back to the
+  Markdown report.
+- EGM reports are free-form Markdown, so blocker/major/nit counts are heuristic.
+- EGM can break the sequencing it promises with `Step=uninterrupted` (we have seen stage 6 launched
+  in parallel with stage 5): keep the reports and never trust a single verdict blindly.
+- `egm-brainstorm` / `egm-draft` run headless, but they are conversational by design: without a
+  human they produce unvalidated hypotheses. Use them as draft generators.
+- `pipeline` chains steps; `--gate` stops on the first failure or blocker.
 
-## Tests
+## Development
 
 ```bash
-uv pip install pytest && python -m pytest -q
+uv venv && uv pip install -e . pytest
+python -m pytest -q
 ```
 
-Sin red y sin invocar CLIs de agente (solo `--dry-run`).
+No network and no agent CLI is invoked (only `--dry-run`). CI runs the suite on Ubuntu, macOS and
+Windows for Python 3.10/3.12.
 
-## Licencia
+### Releasing
 
-MIT. Spec Kit es de GitHub y EGM de Google (Apache-2.0); este orquestador no los modifica,
-solo los invoca.
+Push a tag and the release workflow builds the artifacts and attaches them to a GitHub release:
+
+```bash
+git tag v0.1.0 && git push origin v0.1.0
+```
+
+Each release ships the wheel and the source distribution, so a pinned version can be installed
+without cloning:
+
+```bash
+uv tool install https://github.com/jamartif/speckfish/releases/download/v0.1.0/speckfish-0.1.0-py3-none-any.whl
+```
+
+## License
+
+MIT. Spec Kit is GitHub's, EGM is Google's (Apache-2.0); this orchestrator does not modify them,
+it only invokes them.

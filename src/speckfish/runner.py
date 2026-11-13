@@ -1,4 +1,4 @@
-"""Ejecución de un paso: subproceso, timeout con kill del árbol, log y estado."""
+"""Step execution: subprocess, timeout with process-tree kill, logging and state."""
 from __future__ import annotations
 
 import json
@@ -67,10 +67,10 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
             run_dir: Path, timeout: int, stream: bool = True) -> tuple[int, str, str, float, bool]:
-    """Lanza el subproceso, guarda log y respeta el timeout matando el árbol.
+    """Launch the subprocess, write the log and honour the timeout by killing the tree.
 
-    La lectura de stdout se hace en un hilo para que el timeout no dependa de que
-    el hijo imprima algo (readline bloqueante no respeta deadlines).
+    stdout is read on a thread so the timeout does not depend on the child
+    printing anything (a blocking readline ignores deadlines).
     """
     import threading
 
@@ -151,11 +151,11 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.premium_requests = parsed.get("premium_requests")
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
-        res.error = f"timeout tras {timeout}s"
+        res.error = f"timeout after {timeout}s"
         res.ok = False
     elif code != 0:
         res.error = f"exit {code}: {(err or out)[-500:]}"
-    # --- post-proceso específico por paso ---
+    # --- per-step post-processing ---
     if step == "review":
         from .config import parse_consolidated, find_report
         report = find_report(artifact_dir, "consolidated_review_report.md")
@@ -174,7 +174,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
             res.nits = parsed_report.get("nits", 0)
             res.meets_standard = parsed_report.get("meets_standard")
         if not res.reports:
-            res.error = res.error or "no se generaron informes en el directorio de artefactos"
+            res.error = res.error or "no reports were written to the artifact directory"
             res.ok = False
     elif step == "drift":
         from .config import find_report
@@ -184,9 +184,9 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
             report = cands[0] if cands else None
         res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
         if not res.reports:
-            res.error = res.error or "no se generó informe de drift"
+            res.error = res.error or "no drift report was written"
             res.ok = False
-    # --- estado ---
+    # --- state ---
     state_path = run_dir / "state.json"
     state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
     state.setdefault("run_id", run_id)

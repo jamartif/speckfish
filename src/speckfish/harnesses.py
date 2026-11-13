@@ -1,10 +1,10 @@
-"""Adaptadores de harness: claude, copilot, codex.
+"""Harness adapters: claude, copilot, codex.
 
 Cada adaptador sabe:
-  - construir la línea de comandos headless,
-  - declarar si soporta esquema de salida estructurada,
-  - cómo se llama la integración de Spec Kit,
-  - qué caducidad/limitaciones tiene.
+  - build the headless command line,
+  - declare whether it supports a structured output schema,
+  - report the Spec Kit integration name,
+  - state its limitations.
 """
 from __future__ import annotations
 
@@ -50,16 +50,16 @@ class Harness:
         return info
 
     def spec_kit_integration(self) -> tuple[str, list[str]]:
-        """(integración, opciones extra para `specify init`)."""
+        """(Spec Kit integration name, extra `specify init` options)."""
         raise NotImplementedError
 
-    # ---- ejecución de un paso ----
+    # ---- step execution ----
     def build(self, kind: str, prompt: str, cwd: Path, artifact_dir: Path,
               egm_root: Path | None, budget: float | None,
               timeout: int, schema: dict | None) -> StepInvocation:
         raise NotImplementedError
 
-    # ---- parseo de la salida ----
+    # ---- output parsing ----
     def parse_output(self, stdout: str, stderr: str, exit_code: int) -> dict:
         return {"raw_tail": (stdout or stderr or "")[-1500:]}
 
@@ -124,9 +124,9 @@ class CopilotHarness(Harness):
     supports_schema = False
     supports_budget = True
     verified = True
-    notes = ("Verificado en Windows: -p headless, --plugin-dir registra el plugin egm, "
-             "--output-format json (JSONL), --max-ai-credits. Sin --json-schema: el veredicto "
-             "se parsea del informe Markdown.")
+    notes = ("Verified on Windows: -p headless, --plugin-dir registers the egm plugin, "
+             "--output-format json (JSONL), --max-ai-credits. No --json-schema: the verdict "
+             "is parsed from the Markdown report.")
 
     def binary(self):
         return shutil.which("copilot")
@@ -145,14 +145,14 @@ class CopilotHarness(Harness):
                      "--agent", "egm:egm"]
         credits = self.cfg.budgets.get("copilot", {}).get(kind)
         if credits:
-            # Copilot CLI rechaza menos de 30 créditos
+            # the Copilot CLI rejects anything below 30 credits
             argv += ["--max-ai-credits", str(max(30, int(credits)))]
         if self.cfg.model:
             argv += ["--model", self.cfg.model]
         return StepInvocation(argv=argv, schema_supported=False)
 
     def parse_output(self, stdout, stderr, exit_code):
-        """JSONL de Copilot: deltas de mensaje, créditos y subagentes."""
+        """Copilot JSONL: message deltas, credits and subagents."""
         by_msg: dict[str, list[str]] = {}
         order: list[str] = []
         credits = None
@@ -216,8 +216,8 @@ class CodexHarness(Harness):
     supports_schema = False
     supports_budget = False
     verified = False
-    notes = ("Adaptador no verificado: codex CLI no está instalado en la máquina de pruebas. "
-             "Usa `codex exec` + skills del plugin; revisa docs/codex.md de EGM.")
+    notes = ("Unverified adapter: codex CLI was not installed on the test machine. "
+             "Uses `codex exec` plus the plugin skills; see EGM docs/codex.md.")
 
     def binary(self):
         return shutil.which("codex")
@@ -242,7 +242,7 @@ REGISTRY = {"claude": ClaudeHarness, "copilot": CopilotHarness, "codex": CodexHa
 
 
 def detect_order() -> list[str]:
-    """Orden de preferencia cuando harness=auto: instalado y verificado primero."""
+    """Preference order when harness=auto: installed and verified first."""
     order = []
     if shutil.which("claude"):
         order.append("claude")
@@ -257,11 +257,11 @@ def get_harness(cfg: Config, name: str | None = None) -> Harness:
     want = name or cfg.harness or "auto"
     if want != "auto":
         if want not in REGISTRY:
-            raise SystemExit(f"harness desconocido: {want} (usa claude|copilot|codex)")
+            raise SystemExit(f"unknown harness: {want} (use claude|copilot|codex)")
         h = REGISTRY[want](cfg)
         if not h.binary():
-            raise SystemExit(f"harness '{want}' no está instalado (binario no encontrado en PATH)")
+            raise SystemExit(f"harness '{want}' is not installed (binary not found on PATH)")
         return h
     for cand in detect_order():
         return REGISTRY[cand](cfg)
-    raise SystemExit("no hay ningún CLI de agente instalado (claude, copilot o codex)")
+    raise SystemExit("no agent CLI is installed (claude, copilot or codex)")

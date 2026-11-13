@@ -1,25 +1,25 @@
-"""Plantillas de prompt, perfiles de criterios y esquemas de salida estructurada."""
+"""Prompt templates, review criteria profiles and structured output schemas."""
 from __future__ import annotations
 
 from pathlib import Path
 
 from .config import norm
 
-NO_QUESTIONS = ("Ejecución headless sin usuario: nadie puede responder preguntas. "
-                "No pidas confirmación, asume valores razonables y termina la tarea.")
+NO_QUESTIONS = ("Headless run with no user: nobody can answer questions. "
+                "Do not ask for confirmation, assume reasonable defaults and finish the task.")
 
-# --- perfil de criterios: evita el ruido de formato al revisar artefactos de Spec Kit ---
+# --- criteria profile: removes format noise when reviewing Spec Kit artifacts ---
 PROFILES = {
     "speckit": (
-        "CRITERIOS DE REVISIÓN ESPECÍFICOS PARA SPEC KIT (aplícalos sobre el estándar): "
-        "este documento es un artefacto de GitHub Spec Kit, no un feature spec aislado. "
-        "No marques como Blocker ni Major la ausencia de: 'Alternatives Considered', "
+        "REVIEW CRITERIA SPECIFIC TO SPEC KIT (apply on top of the standard): "
+        "this document is a GitHub Spec Kit artifact, not a standalone feature spec. "
+        "Do not report as Blocker or Major the absence of: 'Alternatives Considered', "
         "'Risks & Mitigations', 'Problem Statement', 'Goals & Non-Goals', 'Success Criteria'. "
-        "Esas secciones viven en spec.md o not en el documento revisado, y su ausencia aquí es "
-        "correcta por diseño de la plantilla. En lugar de eso evalúa: coherencia con spec.md, "
-        "decisiones técnicas justificadas, mecanismos explicados (atomicidad, configuración, "
-        "códigos de salida, errores), estrategia de pruebas y riesgos técnicos concretos del "
-        "diseño elegido."
+        "Those sections live in spec.md or are out of scope for the reviewed document, so their "
+        "absence here is correct by template design. Instead evaluate: consistency with spec.md, "
+        "justified technical decisions, explained mechanisms (atomicity, configuration, "
+        "exit codes, errors), test strategy and concrete technical risks of the chosen design."
+        ""
     ),
     "none": "",
 }
@@ -31,7 +31,7 @@ def specify_prompt(idea: str) -> str:
 
 def plan_prompt(stack: str) -> str:
     stack = (stack or "").strip()
-    extra = f"Stack y restricciones: {stack}\n\n" if stack else ""
+    extra = f"Stack and constraints: {stack}\n\n" if stack else ""
     return f"/speckit-plan {stack}\n\n{extra}{NO_QUESTIONS}"
 
 
@@ -39,7 +39,7 @@ def review_prompt(target: str, artifact_dir: Path, profile: str = "speckit",
                   stage: str = "uninterrupted") -> str:
     parts = [
         f"/egm:egm-review {norm(target)} Step={stage}.",
-        NO_QUESTIONS + " No hay contexto Goldfish adicional (lista vacía).",
+        NO_QUESTIONS + " No extra Goldfish context (empty list).",
         f"EGM artifact directory: {norm(artifact_dir)}",
     ]
     p = PROFILES.get(profile, "")
@@ -56,11 +56,11 @@ def drift_prompt(target: str, artifact_dir: Path) -> str:
     ])
 
 
-# --- prompts para harness sin slash-commands (copilot/codex) ---
+# --- prompts for harnesses without slash commands (copilot/codex) ---
 
 def egm_prompt_for(harness: str, kind: str, target: str, artifact_dir: Path,
                    egm_root: Path, profile: str = "speckit", stage: str = "uninterrupted") -> str:
-    """Copilot/Codex no resuelven `/egm:...`: se pide leer el SKILL.md del paquete."""
+    """Copilot/Codex do not resolve `/egm:...`: the prompt asks them to read the package SKILL.md."""
     docs = {"copilot": "docs/copilot.md", "codex": "docs/codex.md"}.get(harness, "docs/claude.md")
     skill = {"review": "egm-review", "drift": "egm-drift-report",
              "brainstorm": "egm-brainstorm", "draft": "egm-draft"}[kind]
@@ -69,7 +69,7 @@ def egm_prompt_for(harness: str, kind: str, target: str, artifact_dir: Path,
     if kind == "review":
         head[1] = (f"Read that package's {docs} and run {skill} on {norm(target)} "
                    f"with Step={stage}.")
-        head.append(NO_QUESTIONS + " No hay contexto Goldfish adicional (lista vacía).")
+        head.append(NO_QUESTIONS + " No extra Goldfish context (empty list).")
     else:
         head.append(NO_QUESTIONS)
     head.append(f"EGM artifact directory: {norm(artifact_dir)}")
@@ -79,7 +79,7 @@ def egm_prompt_for(harness: str, kind: str, target: str, artifact_dir: Path,
     return "\n\n".join(head)
 
 
-# --- esquemas de salida estructurada (claude --json-schema) ---
+# --- structured output schemas (claude --json-schema) ---
 
 REVIEW_SCHEMA = {
     "type": "object",

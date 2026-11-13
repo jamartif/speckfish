@@ -1,4 +1,4 @@
-"""Config global del proyecto + helpers de rutas."""
+"""Project config and path helpers."""
 from __future__ import annotations
 
 import json
@@ -14,10 +14,10 @@ STATE_DIR = ".speckfish"
 
 DEFAULTS = {
     "harness": "auto",            # auto | claude | copilot | codex
-    "egm_root": "",               # ruta al checkout de EGM (si vacia se autodetecta)
+    "egm_root": "",               # path to the EGM checkout (auto-detected when empty)
     "specify": "auto",            # auto | uv | binary
-    "model": "",                  # se pasa al harness si se define
-    "profile": "speckit",         # perfil de criterios de review
+    "model": "",                  # forwarded to the harness when set
+    "profile": "speckit",         # review criteria profile
     "timeouts": {"init": 300, "specify": 600, "plan": 600, "review": 1200, "drift": 600},
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
                 "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
@@ -29,7 +29,7 @@ def is_windows() -> bool:
 
 
 def norm(p: str | Path) -> str:
-    """Ruta absoluta con '/' (seguro para prompts y JSON)."""
+    """Absolute path with "/" (safe inside prompts and JSON)."""
     return str(Path(p).expanduser().resolve()).replace("\\", "/")
 
 
@@ -44,7 +44,7 @@ class Config:
     timeouts: dict = field(default_factory=lambda: dict(DEFAULTS["timeouts"]))
     budgets: dict = field(default_factory=lambda: json.loads(json.dumps(DEFAULTS["budgets"])))
 
-    # ---------- persistencia ----------
+    # ---------- persistence ----------
     @staticmethod
     def path(root: Path) -> Path:
         return root / STATE_DIR / "config.json"
@@ -80,7 +80,7 @@ class Config:
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         return p
 
-    # ---------- rutas de trabajo ----------
+    # ---------- working paths ----------
     @property
     def state_dir(self) -> Path:
         return self.root / STATE_DIR
@@ -90,7 +90,7 @@ class Config:
         return self.state_dir / "runs"
 
     def egm_path(self) -> Path | None:
-        """Localiza el checkout de EGM (para --plugin-dir)."""
+        """Locate the EGM checkout (used for --plugin-dir)."""
         candidates = []
         if self.egm_root:
             candidates.append(Path(self.egm_root))
@@ -105,14 +105,14 @@ class Config:
         return None
 
 
-# ---------- utilidades de proceso ----------
+# ---------- process helpers ----------
 
 def which(cmd: str) -> str | None:
     return shutil.which(cmd)
 
 
 def node_entry(name: str) -> str | None:
-    """Encuentra el .js real de un CLI npm (evita shims .cmd de Windows)."""
+    """Find the real .js entry of an npm CLI (skips Windows .cmd shims)."""
     exe = shutil.which(name)
     if not exe:
         return None
@@ -129,11 +129,11 @@ def node_entry(name: str) -> str | None:
 
 
 def agent_prefix(name: str) -> list[str]:
-    """Prefijo argv para lanzar un CLI de agente sin depender de cmd.exe.
+    """argv prefix to launch an agent CLI without going through cmd.exe.
 
-    En Windows `shutil.which("copilot")` devuelve un shim sin extensión que
-    CreateProcess rechaza (WinError 193) y `cmd /c` rompería el quoting del
-    prompt. Lanzamos `node <entry>.js` cuando es un paquete npm.
+    On Windows `shutil.which("copilot")` returns an extension-less shim that
+    CreateProcess rejects (WinError 193), and `cmd /c` would break prompt
+    quoting. We launch `node <entry>.js` when it is an npm package.
     """
     exe = shutil.which(name)
     if not exe:
@@ -153,8 +153,8 @@ _GIT: list[str] = []
 
 
 def find_git() -> str:
-    """Localiza un git ejecutable. En Windows el `git` del PATH puede estar
-    bloqueado por App Control (WinError 5), así que se validan candidatos."""
+    """Locate an executable git. On Windows the `git` on PATH can be blocked by
+    App Control (WinError 5), so candidate paths are validated."""
     global _GIT
     if _GIT:
         return _GIT[0]
@@ -174,12 +174,12 @@ def find_git() -> str:
         if code == 0 and "git version" in out.lower():
             _GIT = [c]
             return c
-    raise SystemExit("no encuentro un `git` ejecutable (revisa el bloqueo de App Control)")
+    raise SystemExit("cannot find an executable `git` (check App Control restrictions)")
 
 
 def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None,
             env: dict | None = None) -> tuple[int, str, str]:
-    """Ejecuta un comando y devuelve (código, stdout, stderr)."""
+    """Run a command and return (exit code, stdout, stderr)."""
     full_env = dict(os.environ)
     if env:
         full_env.update(env)
@@ -189,11 +189,11 @@ def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None
                            timeout=timeout, env=full_env)
         return p.returncode, p.stdout or "", p.stderr or ""
     except FileNotFoundError as e:
-        return 127, "", f"no encontrado: {e}"
+        return 127, "", f"not found: {e}"
     except PermissionError as e:
-        return 126, "", f"permiso denegado (¿App Control?): {e}"
+        return 126, "", f"permission denied (App Control?): {e}"
     except subprocess.TimeoutExpired:
-        return 124, "", f"timeout tras {timeout}s"
+        return 124, "", f"timeout after {timeout}s"
 
 
 def read_version(cmd: str) -> str:
@@ -202,7 +202,7 @@ def read_version(cmd: str) -> str:
     return txt[0] if txt else f"exit={code}"
 
 
-# ---------- parseo de informes EGM ----------
+# ---------- EGM report parsing ----------
 
 SEV_BLOCK = re.compile(r"^#+\s*.*(blocker|bloqueante)", re.I)
 SEV_MAJOR = re.compile(r"^#+\s*.*(major|mayor)", re.I)
@@ -213,7 +213,7 @@ TABLE_SEP = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
 
 
 def _row_text(line: str) -> str | None:
-    """Devuelve el texto de una fila de tabla EGM (columna de acción) o de una viñeta."""
+    """Return the action text of an EGM table row or of a bullet line."""
     m = BULLET.match(line)
     if m:
         return m.group(1).strip()
@@ -225,7 +225,7 @@ def _row_text(line: str) -> str | None:
         cells = [c for c in cells if c and not set(c) <= set("-: ")]
         if not cells:
             return None
-        # primera celda suele ser el id (A1); la acción es la siguiente con texto largo
+        # the first cell is usually the id (A1); the action is the next long cell
         for c in cells:
             if len(c) > 3:
                 return c
@@ -234,7 +234,7 @@ def _row_text(line: str) -> str | None:
 
 
 def parse_consolidated(report: Path) -> dict:
-    """Extrae veredicto y recuentos del informe consolidado de EGM (formato libre: viñetas o tablas)."""
+    """Extract verdict and counts from the EGM consolidated report (free form: bullets or tables)."""
     out = {"meets_standard": None, "blockers": [], "majors": 0, "nits": 0, "verdict": ""}
     if not report or not report.exists():
         return out
@@ -260,7 +260,7 @@ def parse_consolidated(report: Path) -> dict:
         is_table = bool(TABLE_ROW.match(line))
         if is_table and not in_table:
             in_table = True
-            continue  # cabecera de la tabla
+            continue  # table header
         row = _row_text(line)
         if not row:
             if line.strip() == "" and in_table:
@@ -278,9 +278,11 @@ def parse_consolidated(report: Path) -> dict:
             out["verdict"] = line.strip("# *:")[:400]
             break
     blob = text[:4000].lower()
-    if "no cumple" in blob or "no se cumple" in blob or out["blockers"]:
+    NEGATIVE = ("no cumple", "no se cumple", "does not meet", "doesn't meet",
+                "not meet the standard", "fails the standard", "non-compliant")
+    if any(t in blob for t in NEGATIVE) or out["blockers"]:
         out["meets_standard"] = False
-    elif "cumple" in blob:
+    elif "cumple" in blob or "meets the standard" in blob or "compliant" in blob:
         out["meets_standard"] = True
     return out
 

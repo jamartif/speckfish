@@ -1,4 +1,4 @@
-"""Tests de humo: sin red, sin invocar CLIs de agente."""
+"""Smoke tests: no network, no agent CLI is executed."""
 from __future__ import annotations
 
 import json
@@ -16,13 +16,13 @@ FIX = Path(__file__).parent / "fixtures" / "consolidated_review_report.md"
 
 
 # ---------- CLI ----------
-def test_normalize_mueve_flags_globales_al_frente():
+def test_normalize_moves_global_flags_to_the_front():
     assert normalize_argv(["review", "--root", "../demo", "--json"]) == \
         ["--root", "../demo", "--json", "review"]
     assert normalize_argv(["--root", "x", "doctor"]) == ["--root", "x", "doctor"]
 
 
-def test_root_aceptado_antes_y_despues_del_subcomando():
+def test_root_accepted_before_and_after_the_subcommand():
     for argv in (["--root", "../demo", "review"], ["review", "--root", "../demo"]):
         args = build_parser().parse_args(normalize_argv(argv))
         assert args.root == "../demo"
@@ -32,34 +32,34 @@ def test_root_aceptado_antes_y_despues_del_subcomando():
 def test_exit_codes():
     assert exit_for({"ok": True, "step": "plan"}) == 0
     assert exit_for({"ok": True, "step": "review", "blockers": ["x"]}) == 1
-    assert exit_for({"ok": True, "step": "review", "meets_standard": False}) == 0  # sin blockers
+    assert exit_for({"ok": True, "step": "review", "meets_standard": False}) == 0  # no blockers
     assert exit_for({"ok": False, "step": "review"}) == 2
 
 
 # ---------- prompts ----------
-def test_review_prompt_incluye_stage_perfil_y_artifact():
+def test_review_prompt_includes_stage_profile_and_artifact():
     p = prompts.review_prompt("specs/001-x/plan.md", Path("C:/tmp/run/artifacts/review"),
                               profile="speckit")
     assert "Step=uninterrupted" in p
     assert "EGM artifact directory:" in p
-    assert "Alternatives Considered" in p  # el perfil evita el ruido de formato
-    assert "no hagas" in p.lower() or "no pidas" in p.lower()
+    assert "Alternatives Considered" in p  # the profile removes the Spec Kit format noise
+    assert "do not ask" in p.lower()
 
 
-def test_review_prompt_perfil_none_no_incluye_criterios():
+def test_review_prompt_profile_none_has_no_criteria():
     p = prompts.review_prompt("doc.md", Path("/tmp"), profile="none")
-    assert "CRITERIOS DE REVISIÓN" not in p
+    assert "REVIEW CRITERIA" not in p
 
 
-def test_prompt_copilot_no_usa_slash_command():
+def test_copilot_prompt_does_not_use_slash_command():
     p = prompts.egm_prompt_for("copilot", "review", "specs/x/plan.md",
                                Path("/tmp/art"), Path("/egm"))
     assert "/egm:egm-review" not in p
     assert "EGM package root:" in p and "docs/copilot.md" in p
 
 
-# ---------- parsing de informes ----------
-def test_parse_consolidado_real():
+# ---------- report parsing ----------
+def test_parse_real_consolidated_report():
     out = parse_consolidated(FIX)
     assert out["meets_standard"] is False
     assert len(out["blockers"]) == 2
@@ -68,7 +68,7 @@ def test_parse_consolidado_real():
     assert out["nits"] >= 3
 
 
-def test_find_report_por_patron(tmp_path):
+def test_find_report_by_pattern(tmp_path):
     (tmp_path / "consolidated_review_report.md").write_text("# x", encoding="utf-8")
     assert find_report(tmp_path).name == "consolidated_review_report.md"
     assert find_report(tmp_path, "*DRIFT_REPORT.md") is None
@@ -88,9 +88,9 @@ def test_claude_argv(tmp_path):
                   budget=None, timeout=60, schema=prompts.REVIEW_SCHEMA)
     a = inv.argv
     assert "-p" in a and "--json-schema" in a and "--plugin-dir" in a
-    assert "--max-budget-usd" in a          # presupuesto por paso
+    assert "--max-budget-usd" in a          # per-step budget
     assert "acceptEdits" in a
-    assert "Agent" in a                      # sin Agent no hay subagentes Goldfish
+    assert "Agent" in a                      # without Agent there are no Goldfish subagents
 
 
 def test_copilot_argv(tmp_path):
@@ -111,7 +111,7 @@ def test_codex_argv(tmp_path):
     assert inv.argv[1] == "exec"
 
 
-def test_dry_run_no_ejecuta(tmp_path):
+def test_dry_run_does_not_execute(tmp_path):
     cfg = _cfg(tmp_path)
     res = run_step(cfg, ClaudeHarness(cfg), "review", "prompt", tmp_path, "run1",
                    tmp_path / "egm", dry_run=True)
@@ -120,13 +120,13 @@ def test_dry_run_no_ejecuta(tmp_path):
     assert (tmp_path / ".speckfish" / "runs" / "run1" / "artifacts" / "review").is_dir()
 
 
-def test_agent_prefix_no_usa_shims_de_windows():
+def test_agent_prefix_avoids_windows_shims():
     from speckfish.config import agent_prefix, is_windows
     if not is_windows():
-        pytest.skip("solo Windows")
+        pytest.skip("Windows only")
     pre = agent_prefix("copilot")
     if not pre:
-        pytest.skip("copilot no instalado")
+        pytest.skip("copilot not installed")
     assert pre[0].lower().endswith("node.exe") or pre[0].lower().endswith("node")
     assert pre[1].endswith(".js")
     assert ".cmd" not in pre[1]

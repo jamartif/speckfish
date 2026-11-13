@@ -1,4 +1,4 @@
-"""Entry point: `speckfish <comando>`."""
+"""Entry point: `speckfish <command>`."""
 from __future__ import annotations
 
 import argparse
@@ -21,22 +21,22 @@ def emit(obj, as_json: bool, human: str | None = None) -> None:
 
 
 def summarize(res: dict) -> str:
-    lines = [f"run: {res.get('run_id', '-')}  paso: {res.get('step')}  ok: {res.get('ok')}"
+    lines = [f"run: {res.get('run_id', '-')}  step: {res.get('step')}  ok: {res.get('ok')}"
              f"  exit: {res.get('exit_code')}  {res.get('duration_s')}s"
-             + (f"  coste: {res.get('cost')} {res.get('cost_unit')}" if res.get("cost") else "")]
+             + (f"  cost: {res.get('cost')} {res.get('cost_unit')}" if res.get("cost") else "")]
     if res.get("meets_standard") is not None:
-        lines.append(f"cumple estándar: {res['meets_standard']}  "
+        lines.append(f"meets standard: {res['meets_standard']}  "
                      f"blockers: {len(res.get('blockers') or [])}  majors: {res.get('majors')}  "
                      f"nits: {res.get('nits')}")
     for b in (res.get("blockers") or [])[:8]:
         lines.append(f"  🔴 {b}")
     if res.get("reports"):
-        lines.append("informes:")
+        lines.append("reports:")
         lines += [f"  - {r}" for r in res["reports"]]
     if res.get("error"):
         lines.append(f"ERROR: {res['error']}")
     if res.get("artifact_dir"):
-        lines.append(f"artefactos: {res['artifact_dir']}")
+        lines.append(f"artifacts: {res['artifact_dir']}")
     if res.get("log"):
         lines.append(f"log: {res['log']}")
     return "\n".join(lines)
@@ -45,7 +45,7 @@ def summarize(res: dict) -> str:
 def exit_for(res: dict) -> int:
     if not res.get("ok"):
         return EXIT_ERROR
-    # exit 1 solo con blockers: "no cumple el estándar" sin blockers se lee del JSON
+    # exit 1 only with blockers: "does not meet the standard" is read from the JSON
     if res.get("step") in ("review", "drift") and res.get("blockers"):
         return EXIT_BLOCKERS
     return EXIT_OK
@@ -56,7 +56,7 @@ GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run"}
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
-    """Permite los flags globales antes o después del subcomando (argparse solo los admite antes)."""
+    """Allow global flags before or after the subcommand (argparse only accepts them before)."""
     head: list[str] = []
     rest: list[str] = []
     i = 0
@@ -85,51 +85,51 @@ def normalize_argv(argv: list[str]) -> list[str]:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--root", default=".", help="raíz del proyecto (default: cwd)")
+    common.add_argument("--root", default=".", help="project root (default: cwd)")
     common.add_argument("--harness", default=None, help="claude | copilot | codex (default: auto)")
-    common.add_argument("--json", action="store_true", help="salida JSON por stdout")
+    common.add_argument("--json", action="store_true", help="JSON output on stdout")
     common.add_argument("--stream", action="store_true", default=True,
-                        help="reenviar la salida del agente a stderr (default)")
-    common.add_argument("--quiet", action="store_true", help="no reenviar la salida del agente")
-    common.add_argument("--dry-run", action="store_true", help="imprime el comando sin ejecutarlo")
+                        help="forward agent output to stderr (default)")
+    common.add_argument("--quiet", action="store_true", help="do not forward agent output")
+    common.add_argument("--dry-run", action="store_true", help="print the command without running it")
     p = argparse.ArgumentParser(prog="speckfish", parents=[common],
-                                description="Orquestador headless de Spec Kit + EGM sobre CLIs de agente.")
+                                description="Headless orchestrator for Spec Kit + EGM over agent CLIs.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sp = sub.add_parser("init", help="prepara el proyecto: git + specify init + EGM")
+    sp = sub.add_parser("init", help="prepare the project: git + specify init + EGM")
     sp.add_argument("--integration", default=None, help="claude | copilot | codex (default: auto)")
-    sp.add_argument("--no-egm", action="store_true", help="no clonar/instalar EGM")
+    sp.add_argument("--no-egm", action="store_true", help="do not clone/install EGM")
 
-    sub.add_parser("doctor", help="comprueba entorno, harness, specify y EGM")
+    sub.add_parser("doctor", help="check environment, harness, specify and EGM")
 
-    sp = sub.add_parser("specify", help="crea/actualiza spec.md")
-    sp.add_argument("description", help="descripción de la feature")
+    sp = sub.add_parser("specify", help="create/update spec.md")
+    sp.add_argument("description", help="feature description")
     sp.add_argument("--run-id", default=None)
 
-    sp = sub.add_parser("plan", help="genera plan.md y artefactos de diseño")
-    sp.add_argument("stack", nargs="?", default="", help="stack y restricciones")
+    sp = sub.add_parser("plan", help="generate plan.md and design artifacts")
+    sp.add_argument("stack", nargs="?", default="", help="stack and constraints")
     sp.add_argument("--run-id", default=None)
 
-    sp = sub.add_parser("review", help="revisión Goldfish de un documento")
-    sp.add_argument("target", nargs="?", default=None, help="documento (default: plan.md de la última feature)")
+    sp = sub.add_parser("review", help="Goldfish review of a document")
+    sp.add_argument("target", nargs="?", default=None, help="document (default: plan.md of the latest feature)")
     sp.add_argument("--profile", default=None, help="speckit | none (default: speckit)")
     sp.add_argument("--stage", default="uninterrupted", help="uninterrupted | feature_spec | implementation | 5..9")
-    sp.add_argument("--target-file", default="plan.md", help="documento por defecto")
+    sp.add_argument("--target-file", default="plan.md", help="default document")
     sp.add_argument("--run-id", default=None)
 
-    sp = sub.add_parser("drift", help="drift entre diseños y código")
-    sp.add_argument("target", nargs="?", default=None, help="directorio de specs (default: última feature)")
+    sp = sub.add_parser("drift", help="drift between designs and code")
+    sp.add_argument("target", nargs="?", default=None, help="specs directory (default: latest feature)")
     sp.add_argument("--run-id", default=None)
 
     sp = sub.add_parser("pipeline", help="specify → plan → review (→ drift)")
-    sp.add_argument("description", help="descripción de la feature")
+    sp.add_argument("description", help="feature description")
     sp.add_argument("--stack", default="")
     sp.add_argument("--target", default=None)
-    sp.add_argument("--gate", action="store_true", help="parar si un paso falla o hay blockers")
+    sp.add_argument("--gate", action="store_true", help="stop when a step fails or there are blockers")
     sp.add_argument("--with-drift", action="store_true")
 
-    sub.add_parser("runs", help="lista ejecuciones")
-    sp = sub.add_parser("show", help="detalle de una ejecución")
+    sub.add_parser("runs", help="list runs")
+    sp = sub.add_parser("show", help="details of a run")
     sp.add_argument("run_id", nargs="?", default=None)
     return p
 
@@ -153,7 +153,7 @@ def main(argv: list[str] | None = None) -> int:
                      f"harness: {json.dumps(info.get('harness'), ensure_ascii=False)}",
                      f"specify: {json.dumps(info.get('specify'), ensure_ascii=False)}",
                      f"egm: {json.dumps(info.get('egm'), ensure_ascii=False)}",
-                     f"proyecto: {json.dumps(info.get('project'), ensure_ascii=False)}"]
+                     f"project: {json.dumps(info.get('project'), ensure_ascii=False)}"]
             emit(info, as_json, "\n".join(human))
             ok = (info.get("harness") or {}).get("installed") and \
                  (info.get("specify") or {}).get("ok") and (info.get("egm") or {}).get("present")
@@ -180,7 +180,7 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "runs":
             base = cfg.runs_dir
             runs = sorted([p.name for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
-            emit({"runs": runs}, as_json, "\n".join(runs) or "(sin ejecuciones)")
+            emit({"runs": runs}, as_json, "\n".join(runs) or "(no runs)")
             return EXIT_OK
         elif args.cmd == "show":
             base = cfg.runs_dir
@@ -189,7 +189,7 @@ def main(argv: list[str] | None = None) -> int:
                 cands = sorted([p for p in base.iterdir() if p.is_dir()]) if base.exists() else []
                 rid = cands[-1].name if cands else None
             if not rid or not (base / rid).exists():
-                emit({"error": "run no encontrado"}, as_json, "run no encontrado")
+                emit({"error": "run not found"}, as_json, "run not found")
                 return EXIT_ERROR
             state = base / rid / "state.json"
             data = json.loads(state.read_text(encoding="utf-8")) if state.exists() else {}
@@ -200,7 +200,7 @@ def main(argv: list[str] | None = None) -> int:
         emit(res.to_dict(), as_json, summarize(res.to_dict()))
         return exit_for(res.to_dict())
     except SystemExit as e:
-        msg = str(e) or "error de entorno"
+        msg = str(e) or "environment error"
         emit({"error": msg}, as_json, f"ERROR: {msg}")
         return EXIT_ENV
 

@@ -1,4 +1,4 @@
-"""Pasos del pipeline: init, specify, plan, review, drift, doctor."""
+"""Pipeline steps: init, specify, plan, review, drift, doctor."""
 from __future__ import annotations
 
 import json
@@ -18,7 +18,7 @@ SPECIFY_VIA_UV = ["uv", "tool", "run", "--from", "specify-cli", "specify"]
 
 
 def specify_argv(cfg: Config) -> list[str]:
-    """Devuelve la forma de invocar `specify` que funcione en esta máquina."""
+    """Return the `specify` invocation that works on this machine."""
     if cfg.specify == "uv":
         return list(SPECIFY_VIA_UV)
     if cfg.specify == "binary":
@@ -30,7 +30,7 @@ def specify_argv(cfg: Config) -> list[str]:
             return [exe]
     if which("uv"):
         return list(SPECIFY_VIA_UV)
-    raise SystemExit("no encuentro `specify` ni `uv` para ejecutar Spec Kit")
+    raise SystemExit("cannot find `specify` or `uv` to run Spec Kit")
 
 
 def run_specify(cfg: Config, args: list[str], cwd: Path, timeout: int = 600) -> tuple[int, str, str]:
@@ -85,7 +85,7 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
 
 
 def install_egm(cfg: Config, repo: str = "google/elephant-goldfish-model") -> dict:
-    """Clona EGM en vendor/egm (no toca la config global del usuario)."""
+    """Clone EGM into vendor/egm (leaves the user global config untouched)."""
     dest = cfg.root / "vendor" / "egm"
     if (dest / "plugin.json").exists():
         return {"egm": "already_present", "path": norm(dest)}
@@ -140,7 +140,7 @@ def do_doctor(cfg: Config) -> dict:
     return info
 
 
-# ---------------- pasos del agente ----------------
+# ---------------- agent steps ----------------
 
 def do_specify(cfg: Config, idea: str, run_id: str | None = None,
                harness: Harness | None = None, stream: bool = True,
@@ -152,8 +152,8 @@ def do_specify(cfg: Config, idea: str, run_id: str | None = None,
     else:
         prompt = (f"/speckit-specify {idea}\n\n{prompts.NO_QUESTIONS}"
                   if h.name == "claude" else
-                  f"{idea}\n\n{prompts.NO_QUESTIONS}\n\nEjecuta el flujo de especificación de "
-                  f"Spec Kit (skill speckit-specify) tal como está definido en el proyecto.")
+                  f"{idea}\n\n{prompts.NO_QUESTIONS}\n\nRun the Spec Kit specification flow "
+                  f"(speckit-specify skill) as defined in this project.")
     return run_step(cfg, h, "specify", prompt, cfg.root, rid, cfg.egm_path(),
                     schema=prompts.SCHEMAS["specify"], stream=stream, dry_run=dry_run)
 
@@ -164,8 +164,8 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     prompt = (prompts.plan_prompt(stack) if h.name == "claude"
-              else f"Stack y restricciones: {stack}\n\n{prompts.NO_QUESTIONS}\n\n"
-                   f"Ejecuta el flujo de planificación de Spec Kit (skill speckit-plan).")
+              else f"Stack and constraints: {stack}\n\n{prompts.NO_QUESTIONS}\n\n"
+                   f"Run the Spec Kit planning flow (speckit-plan skill).")
     return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(),
                     schema=prompts.SCHEMAS["plan"], stream=stream, dry_run=dry_run)
 
@@ -176,17 +176,17 @@ def resolve_target(cfg: Config, target: str | None, default_file: str = "plan.md
         if not p.is_absolute():
             p = cfg.root / p
         if not p.exists():
-            raise SystemExit(f"no existe el documento a revisar: {p}")
+            raise SystemExit(f"target document does not exist: {p}")
         return p
     feat = latest_feature(cfg.root)
     if not feat:
-        raise SystemExit("no hay specs en el proyecto; ejecuta `speckfish specify` primero")
+        raise SystemExit("no specs in this project; run `speckfish specify` first")
     p = feat / default_file
     if not p.exists():
         alt = feat / "spec.md"
         if alt.exists():
             return alt
-        raise SystemExit(f"no encuentro {default_file} ni spec.md en {feat}")
+        raise SystemExit(f"cannot find {default_file} or spec.md in {feat}")
     return p
 
 
@@ -201,7 +201,7 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
     egm = cfg.egm_path()
     if h.name == "claude":
         if not egm:
-            raise SystemExit("EGM no encontrado: ejecuta `speckfish init` o define egm_root en .speckfish/config.json")
+            raise SystemExit("EGM not found: run `speckfish init` or set egm_root in .speckfish/config.json")
         prompt = prompts.review_prompt(doc, artifact, profile or cfg.profile, stage)
     else:
         prompt = prompts.egm_prompt_for(h.name, "review", str(doc), artifact,
@@ -223,12 +223,12 @@ def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
         feat = latest_feature(cfg.root)
         d = feat if feat else cfg.root / "specs"
     if not d.exists():
-        raise SystemExit(f"no existe el directorio a analizar: {d}")
+        raise SystemExit(f"target directory does not exist: {d}")
     artifact = cfg.runs_dir / rid / "artifacts" / "drift"
     egm = cfg.egm_path()
     if h.name == "claude":
         if not egm:
-            raise SystemExit("EGM no encontrado: ejecuta `speckfish init`")
+            raise SystemExit("EGM not found: run `speckfish init`")
         prompt = prompts.drift_prompt(str(d), artifact)
     else:
         prompt = prompts.egm_prompt_for(h.name, "drift", str(d), artifact, egm or cfg.root)
