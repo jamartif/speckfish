@@ -13,6 +13,7 @@ jobs:
         os: [ubuntu-latest, macos-latest, windows-latest]
         python: ["3.10", "3.12"]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 15   # a stuck macOS runner should not hold the workflow for hours
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
