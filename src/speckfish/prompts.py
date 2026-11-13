@@ -34,10 +34,20 @@ def specify_prompt(idea: str, cfg_root: Path | None = None) -> str:
     return f"/speckit-specify {body}\n\n{NO_QUESTIONS}"
 
 
-def plan_prompt(stack: str, cfg_root: Path | None = None) -> str:
+def feature_line(feature_dir) -> str:
+    """Explicit pointer so the agent cannot drift to the last-created feature."""
+    if not feature_dir:
+        return ""
+    return (f"Work only on the feature in {norm(feature_dir)} "
+            f"(its files are spec.md, plan.md, tasks.md in that folder).")
+
+
+def plan_prompt(stack: str, cfg_root: Path | None = None, feature_dir=None) -> str:
     stack, _src = expand_input((stack or "").strip(), cfg_root)
     extra = f"Stack and constraints: {stack}\n\n" if stack else ""
-    return f"/speckit-plan {stack}\n\n{extra}{NO_QUESTIONS}"
+    fline = feature_line(feature_dir)
+    body = (fline + "\n\n") if fline else ""
+    return f"/speckit-plan {stack}\n\n{extra}{body}{NO_QUESTIONS}"
 
 
 def review_prompt(target: str, artifact_dir: Path, profile: str = "speckit",
@@ -248,14 +258,15 @@ SKILL_SPECS = {
 
 
 def skill_prompt(skill: str, args: str, artifact_dir: Path,
-                 cfg_root: Path | None = None) -> str:
+                 cfg_root: Path | None = None, feature_dir=None) -> str:
     """Prompt for a Spec Kit skill that is not specify/plan."""
     spec = SKILL_SPECS[skill]
     given = (args or "").strip()
     body, source = expand_input(given, cfg_root)
     body = body or spec["default_args"]
     head = f"/{spec['skill']}" + (f" {body}" if body else "")
-    parts = [head, NO_QUESTIONS]
+    fline = feature_line(feature_dir)
+    parts = [head] + ([fline] if fline else []) + [NO_QUESTIONS]
     note = spec.get("headless_note")
     if note:
         parts.append(note.format(questions_file=norm(Path(artifact_dir) / "questions.md")))

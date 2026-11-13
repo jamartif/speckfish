@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "speckfish"
-version = "0.1.17"
+version = "0.1.18"
 description = "Headless orchestrator for Spec Kit + Elephant-Goldfish Model (EGM) over agent CLIs"
 requires-python = ">=3.10"
 dependencies = []

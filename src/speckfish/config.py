@@ -32,6 +32,18 @@ def norm(p: str | Path) -> str:
     return str(Path(p).expanduser().resolve()).replace("\\", "/")
 
 
+def _native(path: str | Path) -> Path:
+    """Accept MSYS-style paths (/c/Users/x) on Windows, where Python cannot resolve them."""
+    text = str(path)
+    if is_windows():
+        # Path("/c/x") already normalised the separators to backslashes
+        probe = text.replace("\\", "/")
+        m = re.match(r"^/([a-zA-Z])(/.*)?$", probe)
+        if m:
+            text = f"{m.group(1).upper()}:{m.group(2) or '/'}"
+    return Path(text).expanduser()
+
+
 @dataclass
 class Config:
     root: Path
@@ -50,7 +62,7 @@ class Config:
 
     @classmethod
     def load(cls, root: Path) -> Config:
-        root = Path(root).resolve()
+        root = _native(root).resolve()   # `--root ~/repo` and `/c/repo` both work
         p = cls.path(root)
         cfg = cls(root=root)
         if p.exists():

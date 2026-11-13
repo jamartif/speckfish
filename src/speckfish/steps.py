@@ -217,6 +217,77 @@ def do_doctor(cfg: Config) -> dict:
     return info
 
 
+
+# ---------------- feature selection ----------------
+
+def list_features(cfg: Config) -> list[dict]:
+    """Every feature directory under specs/, with the artifacts it already has."""
+    specs_dir = cfg.root / "specs"
+    active = active_feature(cfg)
+    rows = []
+    if not specs_dir.is_dir():
+        return rows
+    for d in sorted(p for p in specs_dir.iterdir() if p.is_dir()):
+        rows.append({
+            "name": d.name,
+            "path": norm(d),
+            "spec": (d / "spec.md").exists(),
+            "plan": (d / "plan.md").exists(),
+            "tasks": (d / "tasks.md").exists(),
+            "active": bool(active and active.name == d.name),
+        })
+    return rows
+
+
+def active_feature(cfg: Config) -> Path | None:
+    """The feature Spec Kit considers current (`.specify/feature.json`)."""
+    f = cfg.root / ".specify" / "feature.json"
+    if not f.exists():
+        return None
+    try:
+        rel = json.loads(f.read_text(encoding="utf-8")).get("feature_directory")
+    except Exception:
+        return None
+    if not rel:
+        return None
+    p = Path(rel)
+    if not p.is_absolute():
+        p = cfg.root / p
+    return p if p.is_dir() else None
+
+
+def set_active_feature(cfg: Config, feature: Path) -> Path:
+    """Point Spec Kit at this feature (writes `.specify/feature.json`)."""
+    feature = feature.resolve()
+    fdir = cfg.root / ".specify"
+    fdir.mkdir(parents=True, exist_ok=True)
+    try:
+        rel = feature.relative_to(cfg.root.resolve()).as_posix()
+    except ValueError:
+        rel = str(feature)
+    (fdir / "feature.json").write_text(json.dumps({"feature_directory": rel}, indent=2),
+                                      encoding="utf-8")
+    return feature
+
+
+def find_feature(cfg: Config, wanted: str) -> Path:
+    """Resolve `--feature` by path, directory name, or number (002 / 002-open-remember-repos)."""
+    raw = (wanted or "").strip().strip('"').strip("'")
+    if not raw:
+        raise SystemExit("empty --feature value")
+    for cand in (Path(raw), cfg.root / raw):
+        if cand.is_dir():
+            return cand.resolve()
+    specs_dir = cfg.root / "specs"
+    if not specs_dir.is_dir():
+        raise SystemExit("no specs/ directory here: run `speckfish specify` first")
+    names = sorted(p.name for p in specs_dir.iterdir() if p.is_dir())
+    for name in names:
+        if name == raw or name.startswith(raw) or name.split("-")[0] == raw.zfill(3):
+            return (specs_dir / name).resolve()
+    raise SystemExit(f"feature not found: {raw}. Available: {', '.join(names) or 'none'}")
+
+
 # ---------------- agent steps ----------------
 
 def do_specify(cfg: Config, idea: str, run_id: str | None = None,
@@ -258,12 +329,14 @@ def spec_path_from(res: StepResult) -> str | None:
 
 def do_plan(cfg: Config, stack: str, run_id: str | None = None,
             harness: Harness | None = None, stream: bool = True,
-            dry_run: bool = False) -> StepResult:
+            dry_run: bool = False, feature: str | None = None) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
-    prompt = (prompts.plan_prompt(stack, cfg.root) if h.name == "claude"
+    fdir = set_active_feature(cfg, find_feature(cfg, feature)) if feature else active_feature(cfg)
+    prompt = (prompts.plan_prompt(stack, cfg.root, fdir) if h.name == "claude"
               else f"Stack and constraints: {stack}\n\n{prompts.NO_QUESTIONS}\n\n"
-                   f"Run the Spec Kit planning flow (speckit-plan skill).")
+                   f"Work on the feature in {norm(fdir) if fdir else 'the current feature'}."
+                   f"\n\nRun the Spec Kit planning flow (speckit-plan skill).")
     return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(),
                     schema=prompts.SCHEMAS["plan"], stream=stream, dry_run=dry_run)
 
@@ -316,14 +389,19 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
 
 def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
              harness: Harness | None = None, stream: bool = True,
-             dry_run: bool = False) -> StepResult:
+             dry_run: bool = False, feature: str | None = None) -> StepResult:
     """Run any of the remaining Spec Kit skills (constitution, tasks, analyze, ...)."""
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     artifact = cfg.runs_dir / rid / "artifacts" / skill
     spec = prompts.SKILL_SPECS[skill]
+    fdir = None
+    if feature:
+        fdir = set_active_feature(cfg, find_feature(cfg, feature))
+    elif skill in ("tasks", "analyze", "checklist", "clarify", "converge", "implement"):
+        fdir = active_feature(cfg)
     if h.name == "claude":
-        prompt = prompts.skill_prompt(skill, args, artifact, cfg.root)
+        prompt = prompts.skill_prompt(skill, args, artifact, cfg.root, fdir)
     else:
         prompt = prompts.skill_prompt_for(h.name, skill, args, artifact,
                                           cfg.egm_path() or cfg.root, cfg.root)

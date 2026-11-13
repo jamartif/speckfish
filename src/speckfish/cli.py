@@ -173,6 +173,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("plan", help="generate plan.md and design artifacts")
     sp.add_argument("stack", nargs="?", default="", help="stack and constraints")
     sp.add_argument("--run-id", default=None)
+    sp.add_argument("--feature", default=None,
+                    help="feature to plan: number (002), directory name or path (default: the active one)")
 
     sp = sub.add_parser("review", help="Goldfish review of a document")
     sp.add_argument("target", nargs="?", default=None, help="document (default: plan.md of the latest feature)")
@@ -214,6 +216,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp = sub.add_parser(skill, help=f"{spec['skill']} → writes {spec['writes']}")
         sp.add_argument("args", nargs="?", default="", help=spec["hint"] or "no arguments")
         sp.add_argument("--run-id", default=None)
+        sp.add_argument("--feature", default=None,
+                        help="feature to work on: number (002), name or path (default: the active one)")
         if spec.get("dangerous"):
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
@@ -221,6 +225,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
                     help="KEY=VALUE to store (harness, model, profile, egm_root, specify)")
+
+    sub.add_parser("features", help="list features under specs/ and which one is active")
 
     sp = sub.add_parser("runs", help="list runs")
     sp.add_argument("--clean", action="store_true", help="delete old runs, keeping --keep newest")
@@ -303,7 +309,8 @@ def main(argv: list[str] | None = None) -> int:
             res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
                                args.dry_run, review=getattr(args, "review", False))
         elif args.cmd == "plan":
-            res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run)
+            res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
+                            feature=args.feature)
         elif args.cmd == "review":
             res = S.do_review(cfg, args.target, args.run_id, need_harness(), args.profile,
                               args.stage, stream, args.dry_run, args.target_file,
@@ -317,7 +324,8 @@ def main(argv: list[str] | None = None) -> int:
                        f"Re-run with --yes to confirm, or --dry-run to see the command first.")
                 emit({"error": msg, "writes": spec["writes"]}, as_json, f"refusing: {msg}")
                 return EXIT_ENV
-            res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream, args.dry_run)
+            res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream,
+                             args.dry_run, feature=getattr(args, "feature", None))
         elif args.cmd == "pipeline":
             out = S.do_pipeline(cfg, args.description, args.stack, args.target,
                                 args.gate, args.with_drift, args.with_tasks, args.with_analyze,
@@ -327,6 +335,18 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_ERROR
             if any((s.get("blockers") or []) for s in out["steps"].values()):
                 return EXIT_BLOCKERS
+            return EXIT_OK
+        elif args.cmd == "features":
+            rows = S.list_features(cfg)
+            human = []
+            for r in rows:
+                mark = "*" if r["active"] else " "
+                arts = "".join("+" if r[k] else "-" for k in ("spec", "plan", "tasks"))
+                human.append(f"{mark} {r['name']:<34} [{arts}]")
+            if rows:
+                human.append("")
+                human.append("* active (Spec Kit will work on it)   [+spec +plan +tasks]")
+            emit({"features": rows}, as_json, "\n".join(human) or "(no features: run `speckfish specify`)")
             return EXIT_OK
         elif args.cmd == "config":
             from dataclasses import asdict
