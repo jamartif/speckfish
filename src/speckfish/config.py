@@ -1,0 +1,230 @@
+"""Config global del proyecto + helpers de rutas."""
+from __future__ import annotations
+
+import json
+import os
+import re
+import shutil
+import subprocess
+import sys
+from dataclasses import dataclass, field, asdict
+from pathlib import Path
+
+STATE_DIR = ".speckfish"
+
+DEFAULTS = {
+    "harness": "auto",            # auto | claude | copilot | codex
+    "egm_root": "",               # ruta al checkout de EGM (si vacia se autodetecta)
+    "specify": "auto",            # auto | uv | binary
+    "model": "",                  # se pasa al harness si se define
+    "profile": "speckit",         # perfil de criterios de review
+    "timeouts": {"init": 300, "specify": 600, "plan": 600, "review": 1200, "drift": 600},
+    "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
+                "copilot": {"specify": 10, "plan": 10, "review": 30, "drift": 10}},
+}
+
+
+def is_windows() -> bool:
+    return os.name == "nt"
+
+
+def norm(p: str | Path) -> str:
+    """Ruta absoluta con '/' (seguro para prompts y JSON)."""
+    return str(Path(p).expanduser().resolve()).replace("\\", "/")
+
+
+@dataclass
+class Config:
+    root: Path
+    harness: str = "auto"
+    egm_root: str = ""
+    specify: str = "auto"
+    model: str = ""
+    profile: str = "speckit"
+    timeouts: dict = field(default_factory=lambda: dict(DEFAULTS["timeouts"]))
+    budgets: dict = field(default_factory=lambda: json.loads(json.dumps(DEFAULTS["budgets"])))
+
+    # ---------- persistencia ----------
+    @staticmethod
+    def path(root: Path) -> Path:
+        return root / STATE_DIR / "config.json"
+
+    @classmethod
+    def load(cls, root: Path) -> "Config":
+        root = Path(root).resolve()
+        p = cls.path(root)
+        cfg = cls(root=root)
+        if p.exists():
+            data = json.loads(p.read_text(encoding="utf-8"))
+            for k in ("harness", "egm_root", "specify", "model", "profile"):
+                if k in data:
+                    setattr(cfg, k, data[k])
+            for k in ("timeouts", "budgets"):
+                if k in data:
+                    merged = dict(getattr(cfg, k))
+                    merged.update(data[k] or {})
+                    setattr(cfg, k, merged)
+        env_h = os.environ.get("SPECKFISH_HARNESS")
+        if env_h:
+            cfg.harness = env_h
+        env_e = os.environ.get("SPECKFISH_EGM_ROOT")
+        if env_e:
+            cfg.egm_root = env_e
+        return cfg
+
+    def save(self) -> Path:
+        p = self.path(self.root)
+        p.parent.mkdir(parents=True, exist_ok=True)
+        data = asdict(self)
+        data.pop("root", None)
+        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        return p
+
+    # ---------- rutas de trabajo ----------
+    @property
+    def state_dir(self) -> Path:
+        return self.root / STATE_DIR
+
+    @property
+    def runs_dir(self) -> Path:
+        return self.state_dir / "runs"
+
+    def egm_path(self) -> Path | None:
+        """Localiza el checkout de EGM (para --plugin-dir)."""
+        candidates = []
+        if self.egm_root:
+            candidates.append(Path(self.egm_root))
+        candidates += [
+            self.root / "vendor" / "egm",
+            self.root / "vendor" / "elephant-goldfish-model",
+            Path.home() / ".speckfish" / "egm",
+        ]
+        for c in candidates:
+            if (c / "plugin.json").exists() and (c / "skills").is_dir():
+                return c.resolve()
+        return None
+
+
+# ---------- utilidades de proceso ----------
+
+def which(cmd: str) -> str | None:
+    return shutil.which(cmd)
+
+
+def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None,
+            env: dict | None = None) -> tuple[int, str, str]:
+    """Ejecuta un comando y devuelve (código, stdout, stderr)."""
+    full_env = dict(os.environ)
+    if env:
+        full_env.update(env)
+    try:
+        p = subprocess.run(args, cwd=str(cwd) if cwd else None, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace",
+                           timeout=timeout, env=full_env)
+        return p.returncode, p.stdout or "", p.stderr or ""
+    except FileNotFoundError as e:
+        return 127, "", f"no encontrado: {e}"
+    except subprocess.TimeoutExpired:
+        return 124, "", f"timeout tras {timeout}s"
+
+
+def read_version(cmd: str) -> str:
+    code, out, err = run_cmd([cmd, "--version"], timeout=60)
+    txt = (out or err).strip().splitlines()
+    return txt[0] if txt else f"exit={code}"
+
+
+# ---------- parseo de informes EGM ----------
+
+SEV_BLOCK = re.compile(r"^#+\s*.*(blocker|bloqueante)", re.I)
+SEV_MAJOR = re.compile(r"^#+\s*.*(major|mayor)", re.I)
+SEV_NIT = re.compile(r"^#+\s*.*(nit|menor)", re.I)
+BULLET = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.*\S)")
+TABLE_ROW = re.compile(r"^\s*\|(.+)\|\s*$")
+TABLE_SEP = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
+
+
+def _row_text(line: str) -> str | None:
+    """Devuelve el texto de una fila de tabla EGM (columna de acción) o de una viñeta."""
+    m = BULLET.match(line)
+    if m:
+        return m.group(1).strip()
+    if TABLE_SEP.match(line):
+        return None
+    m = TABLE_ROW.match(line)
+    if m:
+        cells = [c.strip() for c in m.group(1).split("|")]
+        cells = [c for c in cells if c and not set(c) <= set("-: ")]
+        if not cells:
+            return None
+        # primera celda suele ser el id (A1); la acción es la siguiente con texto largo
+        for c in cells:
+            if len(c) > 3:
+                return c
+        return cells[0]
+    return None
+
+
+def parse_consolidated(report: Path) -> dict:
+    """Extrae veredicto y recuentos del informe consolidado de EGM (formato libre: viñetas o tablas)."""
+    out = {"meets_standard": None, "blockers": [], "majors": 0, "nits": 0, "verdict": ""}
+    if not report or not report.exists():
+        return out
+    text = report.read_text(encoding="utf-8", errors="replace")
+    lines = text.splitlines()
+    section = None
+    in_table = False
+    for line in lines:
+        if SEV_BLOCK.match(line):
+            section, in_table = "blockers", False
+            continue
+        if SEV_MAJOR.match(line):
+            section, in_table = "majors", False
+            continue
+        if SEV_NIT.match(line):
+            section, in_table = "nits", False
+            continue
+        if line.startswith("#"):
+            section, in_table = None, False
+            continue
+        if not section:
+            continue
+        is_table = bool(TABLE_ROW.match(line))
+        if is_table and not in_table:
+            in_table = True
+            continue  # cabecera de la tabla
+        row = _row_text(line)
+        if not row:
+            if line.strip() == "" and in_table:
+                in_table = False
+            continue
+        if section == "blockers":
+            out["blockers"].append(row[:300])
+        elif section == "majors":
+            out["majors"] += 1
+        else:
+            out["nits"] += 1
+    for line in lines[:40]:
+        low = line.lower()
+        if "veredicto" in low or "verdict" in low:
+            out["verdict"] = line.strip("# *:")[:400]
+            break
+    blob = text[:4000].lower()
+    if "no cumple" in blob or "no se cumple" in blob or out["blockers"]:
+        out["meets_standard"] = False
+    elif "cumple" in blob:
+        out["meets_standard"] = True
+    return out
+
+
+def find_report(artifact_dir: Path, pattern: str = "consolidated_review_report.md") -> Path | None:
+    if not artifact_dir.exists():
+        return None
+    if any(ch in pattern for ch in "*?["):
+        hits = sorted(artifact_dir.glob(pattern), key=lambda p: p.stat().st_mtime, reverse=True)
+        return hits[0] if hits else None
+    exact = artifact_dir / pattern
+    if exact.exists():
+        return exact
+    cands = sorted(artifact_dir.glob("*report*.md"), key=lambda p: p.stat().st_mtime, reverse=True)
+    return cands[0] if cands else None
