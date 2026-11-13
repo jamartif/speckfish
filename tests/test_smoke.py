@@ -172,3 +172,10 @@ def test_interactive_dry_run_shows_command(tmp_path):
                           "run-int", tmp_path / "egm", dry_run=True)
     assert res.interactive is True
     assert "/egm:egm-review x.md" in res.log
+
+
+def test_module_entrypoint_is_importable():
+    """`python -m speckfish` is the fallback when the console-script .exe is blocked."""
+    import importlib
+    m = importlib.import_module("speckfish.__main__")
+    assert hasattr(m, "main")

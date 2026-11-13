@@ -102,6 +102,26 @@ Requirements: Python ≥ 3.10, plus the agent CLI you intend to use:
 Spec Kit is discovered automatically: the `specify` binary is used when it works and, if it is
 blocked by Windows policies, `speckfish` falls back to `uv tool run --from specify-cli specify`.
 
+### If the `speckfish.exe` launcher is blocked (Windows Device Guard / App Control)
+
+Some managed Windows machines block the unsigned console-script `.exe` that pip/uv generates
+(`'speckfish.exe' has been blocked by your organization's Device Guard policy`), while `python.exe`
+runs fine. Every command is reachable through the module entry point:
+
+```powershell
+# one-off, no installation
+uv tool run --from git+https://github.com/jamartif/speckfish python -m speckfish doctor
+
+# with the tool installed: use its interpreter
+& "$env:APPDATA\uv\tools\speckfish\Scripts\python.exe" -m speckfish doctor
+
+# or drop docs/speckfish.bat somewhere on your PATH and just run:
+speckfish doctor
+```
+
+`docs/speckfish.bat` is a three-line launcher that calls `python -m speckfish`, so the blocked
+stub is never executed. On macOS/Linux the normal `speckfish` command works.
+
 ## Usage
 
 ```bash
