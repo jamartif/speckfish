@@ -75,7 +75,7 @@ Flags globales (antes o después del subcomando): `--root`, `--harness claude|co
 | Código | Significado |
 |---|---|
 | `0` | paso correcto / revisión sin blockers |
-| `1` | revisión con blockers (o drift con `--gate`) |
+| `1` | revisión con blockers |
 | `2` | error de ejecución (timeout, presupuesto, informe ausente) |
 | `3` | entorno incompleto (`doctor` falla) |
 

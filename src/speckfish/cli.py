@@ -45,11 +45,9 @@ def summarize(res: dict) -> str:
 def exit_for(res: dict) -> int:
     if not res.get("ok"):
         return EXIT_ERROR
-    if res.get("step") in ("review", "drift"):
-        if res.get("blockers"):
-            return EXIT_BLOCKERS
-        if res.get("meets_standard") is False and res.get("step") == "review":
-            return EXIT_BLOCKERS
+    # exit 1 solo con blockers: "no cumple el estándar" sin blockers se lee del JSON
+    if res.get("step") in ("review", "drift") and res.get("blockers"):
+        return EXIT_BLOCKERS
     return EXIT_OK
 
 
@@ -140,6 +138,8 @@ def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(normalize_argv(raw))
     cfg = Config.load(Path(args.root))
+    if args.harness:
+        cfg.harness = args.harness
     as_json = args.json
     stream = not args.quiet
     try:

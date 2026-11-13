@@ -7,7 +7,7 @@ import subprocess
 from pathlib import Path
 
 from . import prompts
-from .config import Config, norm, run_cmd, which
+from .config import Config, find_git, norm, run_cmd, which
 from .harnesses import Harness, get_harness
 from .runner import StepResult, run_step, run_dir_for, new_run_id
 
@@ -59,7 +59,7 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
     root = cfg.root
     out: dict = {"root": norm(root), "actions": []}
     if not (root / ".git").exists() and force_git:
-        code, o, e = run_cmd(["git", "init"], cwd=root, timeout=120)
+        code, o, e = run_cmd([find_git(), "init"], cwd=root, timeout=120)
         out["actions"].append({"git_init": code == 0, "detail": (o or e)[-300:]})
     harness_name = integration or "auto"
     if harness_name == "auto":
@@ -90,7 +90,7 @@ def install_egm(cfg: Config, repo: str = "google/elephant-goldfish-model") -> di
     if (dest / "plugin.json").exists():
         return {"egm": "already_present", "path": norm(dest)}
     dest.parent.mkdir(parents=True, exist_ok=True)
-    code, o, e = run_cmd(["git", "clone", "--depth", "1",
+    code, o, e = run_cmd([find_git(), "clone", "--depth", "1",
                           f"https://github.com/{repo}", str(dest)], timeout=300)
     ok = code == 0 and (dest / "plugin.json").exists()
     return {"egm": "cloned" if ok else "failed", "path": norm(dest),

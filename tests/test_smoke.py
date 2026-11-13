@@ -32,7 +32,7 @@ def test_root_aceptado_antes_y_despues_del_subcomando():
 def test_exit_codes():
     assert exit_for({"ok": True, "step": "plan"}) == 0
     assert exit_for({"ok": True, "step": "review", "blockers": ["x"]}) == 1
-    assert exit_for({"ok": True, "step": "review", "meets_standard": False}) == 1
+    assert exit_for({"ok": True, "step": "review", "meets_standard": False}) == 0  # sin blockers
     assert exit_for({"ok": False, "step": "review"}) == 2
 
 

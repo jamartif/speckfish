@@ -149,6 +149,34 @@ def agent_prefix(name: str) -> list[str]:
     return [exe]
 
 
+_GIT: list[str] = []
+
+
+def find_git() -> str:
+    """Localiza un git ejecutable. En Windows el `git` del PATH puede estar
+    bloqueado por App Control (WinError 5), así que se validan candidatos."""
+    global _GIT
+    if _GIT:
+        return _GIT[0]
+    cands: list[str] = []
+    w = shutil.which("git")
+    if w:
+        cands.append(w)
+    if is_windows():
+        cands += [r"C:\Program Files\Git\cmd\git.exe", r"C:\Program Files\Gitin\git.exe",
+                  r"C:\Program Files (x86)\Git\cmd\git.exe"]
+    else:
+        cands += ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]
+    for c in cands:
+        if not Path(c).exists():
+            continue
+        code, out, _ = run_cmd([c, "--version"], timeout=30)
+        if code == 0 and "git version" in out.lower():
+            _GIT = [c]
+            return c
+    raise SystemExit("no encuentro un `git` ejecutable (revisa el bloqueo de App Control)")
+
+
 def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None,
             env: dict | None = None) -> tuple[int, str, str]:
     """Ejecuta un comando y devuelve (código, stdout, stderr)."""
@@ -162,6 +190,8 @@ def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None
         return p.returncode, p.stdout or "", p.stderr or ""
     except FileNotFoundError as e:
         return 127, "", f"no encontrado: {e}"
+    except PermissionError as e:
+        return 126, "", f"permiso denegado (¿App Control?): {e}"
     except subprocess.TimeoutExpired:
         return 124, "", f"timeout tras {timeout}s"
 
