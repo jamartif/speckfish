@@ -295,6 +295,24 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
                     schema=prompts.SCHEMAS["review"], stream=stream, dry_run=dry_run)
 
 
+def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
+             harness: Harness | None = None, stream: bool = True,
+             dry_run: bool = False) -> StepResult:
+    """Run any of the remaining Spec Kit skills (constitution, tasks, analyze, ...)."""
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    artifact = cfg.runs_dir / rid / "artifacts" / skill
+    spec = prompts.SKILL_SPECS[skill]
+    if h.name == "claude":
+        prompt = prompts.skill_prompt(skill, args, artifact)
+    else:
+        prompt = prompts.skill_prompt_for(h.name, skill, args, artifact, cfg.egm_path() or cfg.root)
+    res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(),
+                   stream=stream, dry_run=dry_run)
+    res.writes = spec.get("writes", "")  # type: ignore[attr-defined]
+    return res
+
+
 def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
              harness: Harness | None = None, stream: bool = True,
              dry_run: bool = False) -> StepResult:

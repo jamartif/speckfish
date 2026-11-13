@@ -141,3 +141,92 @@ PLAN_SCHEMA = {
 
 SCHEMAS = {"review": REVIEW_SCHEMA, "drift": DRIFT_SCHEMA,
            "specify": SPECIFY_SCHEMA, "plan": PLAN_SCHEMA}
+
+
+# --- the rest of the Spec Kit skills (constitution, tasks, analyze, checklist, clarify, ...) ---
+
+SKILL_SPECS = {
+    "constitution": {
+        "skill": "speckit-constitution",
+        "hint": "principles or values for the project",
+        "args_required": False,
+        "default_args": ("no principles were given: propose a short, concrete constitution that fits "
+                         "this project (quality gates, testing, review, docs) and mark every invented "
+                         "rule as a proposal for the team to ratify"),
+        "writes": ".specify/memory/constitution.md",
+    },
+    "tasks": {
+        "skill": "speckit-tasks",
+        "hint": "optional task generation constraints",
+        "args_required": False,
+        "default_args": "",
+        "writes": "specs/<feature>/tasks.md",
+    },
+    "analyze": {
+        "skill": "speckit-analyze",
+        "hint": "optional focus areas",
+        "args_required": False,
+        "default_args": "",
+        "writes": "analysis report (non-destructive)",
+    },
+    "checklist": {
+        "skill": "speckit-checklist",
+        "hint": "domain or focus area for the checklist",
+        "args_required": False,
+        "default_args": "requirements quality",
+        "writes": "specs/<feature>/checklists/",
+    },
+    "clarify": {
+        "skill": "speckit-clarify",
+        "hint": "optional areas to clarify",
+        "args_required": False,
+        "default_args": "",
+        "writes": "specs/<feature>/spec.md (answers encoded)",
+        "headless_note": ("Nobody can answer in this run, so do NOT ask questions in the chat. "
+                          "Write every clarification question you would ask to {questions_file}, "
+                          "one per line, each with why it matters and the default you assumed. "
+                          "Then stop."),
+    },
+    "implement": {
+        "skill": "speckit-implement",
+        "hint": "optional implementation guidance or task filter",
+        "args_required": False,
+        "default_args": "",
+        "writes": "source code and tests (destructive: it writes files)",
+        "dangerous": True,
+    },
+    "converge": {
+        "skill": "speckit-converge",
+        "hint": "optional focus",
+        "args_required": False,
+        "default_args": "",
+        "writes": "specs/<feature>/tasks.md (appends remaining work)",
+    },
+}
+
+
+def skill_prompt(skill: str, args: str, artifact_dir: Path) -> str:
+    """Prompt for a Spec Kit skill that is not specify/plan."""
+    spec = SKILL_SPECS[skill]
+    given = (args or "").strip()
+    body = given or spec["default_args"]
+    head = f"/{spec['skill']}" + (f" {body}" if body else "")
+    parts = [head, NO_QUESTIONS]
+    note = spec.get("headless_note")
+    if note:
+        parts.append(note.format(questions_file=norm(Path(artifact_dir) / "questions.md")))
+    return "\n\n".join(parts)
+
+
+def skill_prompt_for(harness: str, skill: str, args: str, artifact_dir: Path,
+                     egm_root: Path) -> str:
+    """Same, for harnesses without slash commands: point at the installed skill file."""
+    spec = SKILL_SPECS[skill]
+    given = (args or "").strip() or spec["default_args"]
+    docs = {"copilot": "docs/copilot.md", "codex": "docs/codex.md"}.get(harness, "docs/claude.md")
+    parts = [f"Read {docs} of the Spec Kit project and run the `{spec['skill']}` skill"
+             f"{' with: ' + given if given else ''}.", NO_QUESTIONS]
+    note = spec.get("headless_note")
+    if note:
+        parts.append(note.format(questions_file=norm(Path(artifact_dir) / "questions.md")))
+    return "\n\n".join(parts)

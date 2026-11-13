@@ -172,14 +172,30 @@ review works with any of the three agents regardless of which Spec Kit integrati
 speckfish doctor                    # environment, harness, specify and EGM
 speckfish init                      # git init + specify init + clone EGM into vendor/egm
 speckfish init --integration all    # install Spec Kit skills for claude, copilot and codex
+
+# Spec Kit, step by step
+speckfish constitution "tests first, no hidden state"   # project principles
 speckfish specify "a JSON task CLI"
 speckfish plan "Python 3.12, stdlib only"
+speckfish tasks                     # tasks.md from the design
+speckfish analyze                   # spec vs plan vs tasks consistency
+speckfish checklist "error handling"
+speckfish clarify                   # open questions (writes questions.md when headless)
+speckfish implement --yes           # DESTRUCTIVE: writes code and tests
+speckfish converge                  # append whatever the code still misses to tasks.md
+
+# EGM review
 speckfish review                    # reviews plan.md of the latest feature
 speckfish review --profile none     # literal review against the EGM standard
-speckfish drift                     # drift between spec and code
+speckfish review --interactive      # EGM asks, you answer
+speckfish drift                     # drift between spec/code
+
 speckfish pipeline "idea" --stack "..." --gate --with-drift
 speckfish runs && speckfish show
 ```
+
+Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integration installs).
+`implement` is the only destructive one: it refuses to run without `--yes`.
 
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.

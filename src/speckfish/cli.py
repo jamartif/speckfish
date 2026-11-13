@@ -9,6 +9,7 @@ from pathlib import Path
 from . import steps as S
 from .config import Config, norm
 from .harnesses import get_harness
+from .prompts import SKILL_SPECS
 
 EXIT_OK, EXIT_BLOCKERS, EXIT_ERROR, EXIT_ENV = 0, 1, 2, 3
 
@@ -186,6 +187,15 @@ def build_parser() -> argparse.ArgumentParser:
                     help="Codex home directory for its prompts (default: $CODEX_HOME or ~/.codex)")
     sp.add_argument("--no-force", action="store_true", help="do not overwrite existing files")
 
+    # one subcommand per remaining Spec Kit skill (constitution, tasks, analyze, checklist, ...)
+    for skill, spec in SKILL_SPECS.items():
+        sp = sub.add_parser(skill, help=f"{spec['skill']} → writes {spec['writes']}")
+        sp.add_argument("args", nargs="?", default="", help=spec["hint"] or "no arguments")
+        sp.add_argument("--run-id", default=None)
+        if spec.get("dangerous"):
+            sp.add_argument("--yes", action="store_true",
+                            help="required: this step writes source code")
+
     sub.add_parser("runs", help="list runs")
     sp = sub.add_parser("show", help="details of a run")
     sp.add_argument("run_id", nargs="?", default=None)
@@ -246,6 +256,14 @@ def main(argv: list[str] | None = None) -> int:
                               interactive=getattr(args, "interactive", False))
         elif args.cmd == "drift":
             res = S.do_drift(cfg, args.target, args.run_id, h, stream, args.dry_run)
+        elif args.cmd in SKILL_SPECS:
+            spec = SKILL_SPECS[args.cmd]
+            if spec.get("dangerous") and not getattr(args, "yes", False) and not args.dry_run:
+                msg = (f"`{args.cmd}` is destructive: {spec['writes']}. "
+                       f"Re-run with --yes to confirm, or --dry-run to see the command first.")
+                emit({"error": msg, "writes": spec["writes"]}, as_json, f"refusing: {msg}")
+                return EXIT_ENV
+            res = S.do_skill(cfg, args.cmd, args.args, args.run_id, h, stream, args.dry_run)
         elif args.cmd == "pipeline":
             out = S.do_pipeline(cfg, args.description, args.stack, args.target,
                                 args.gate, args.with_drift, stream, args.dry_run)

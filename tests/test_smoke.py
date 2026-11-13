@@ -337,7 +337,7 @@ def test_tasks_json_structure():
     assert len(data["tasks"]) == len(STEPS)
     labels = [t["label"] for t in data["tasks"]]
     assert "Speckfish: review" in labels and "Speckfish: review (interactive)" in labels
-    assert {i["id"] for i in data["inputs"]} == {"idea", "stack"}
+    assert {i["id"] for i in data["inputs"]} >= {"idea", "stack", "principles"}
     for t in data["tasks"]:
         assert t["command"] == "python -m speckfish"
         assert t["type"] == "shell" and t["problemMatcher"] == []
@@ -371,7 +371,8 @@ def test_generate_writes_every_target(tmp_path):
     assert (tmp_path / ".github" / "prompts" / "speckfish-review.prompt.md").exists()
     assert (tmp_path / ".claude" / "commands" / "speckfish-review.md").exists()
     assert (codex_home / "prompts" / "speckfish-review.md").exists()
-    assert len(out["written"]) == 1 + 3 * 6
+    from speckfish.editors import STEPS as EDITOR_STEPS
+    assert len(out["written"]) == 1 + 3 * len(EDITOR_STEPS)
     assert out["command"] == "speckfish"
 
     # --no-force keeps user edits
@@ -387,3 +388,39 @@ def test_generate_subset_of_targets(tmp_path):
     out = generate(cfg, ["claude"], "speckfish", None, force=True)
     assert all(".claude/commands" in p.replace("\\", "/") for p in out["written"])
     assert not (tmp_path / ".vscode").exists()
+
+
+# ---------- remaining Spec Kit skills ----------
+def test_every_speckit_skill_has_a_command():
+    from speckfish.prompts import SKILL_SPECS
+    assert set(SKILL_SPECS) == {"constitution", "tasks", "analyze", "checklist",
+                                "clarify", "implement", "converge"}
+    parser = build_parser()
+    for skill in SKILL_SPECS:
+        ns = parser.parse_args([skill])
+        assert ns.cmd == skill
+
+
+def test_skill_prompt_shapes():
+    from speckfish import prompts as P
+    con = P.skill_prompt("constitution", "calidad primero", Path("/tmp/a"))
+    assert con.startswith("/speckit-constitution calidad primero")
+    assert "nobody can answer questions" in con.lower()
+
+    auto = P.skill_prompt("constitution", "", Path("/tmp/a"))
+    assert "propose a short, concrete constitution" in auto   # no principles given
+
+    cl = P.skill_prompt("clarify", "", Path("/tmp/a"))
+    assert "questions.md" in cl and "do NOT ask questions" in cl
+
+    cop = P.skill_prompt_for("copilot", "tasks", "", Path("/tmp/a"), Path("/egm"))
+    assert "speckit-tasks" in cop and "/speckit-tasks" not in cop
+
+
+def test_implement_requires_confirmation(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir()
+    (tmp_path / ".speckfish" / "config.json").write_text("{}", encoding="utf-8")
+    code = C.main(["--root", str(tmp_path), "--json", "implement"])
+    assert code == 3                                   # refused, nothing written
+    assert not (tmp_path / ".speckfish" / "runs").exists()

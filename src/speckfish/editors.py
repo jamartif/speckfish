@@ -63,6 +63,56 @@ STEPS = {
         "hint": "",
         "ph_arg": "no arguments",
     },
+    "constitution": {
+        "title": "Speckfish: constitution",
+        "desc": "Create or update the project constitution (Spec Kit).",
+        "args": ["constitution"],
+        "input": {"id": "principles", "prompt": "Principles for the project constitution"},
+        "hint": "<principles>",
+        "ph_arg": "constitution",
+    },
+    "tasks": {
+        "title": "Speckfish: tasks",
+        "desc": "Generate tasks.md from the design artifacts (Spec Kit).",
+        "args": ["tasks"],
+        "hint": "[constraints]",
+        "ph_arg": "tasks",
+    },
+    "analyze": {
+        "title": "Speckfish: analyze",
+        "desc": "Cross-artifact consistency analysis: spec vs plan vs tasks (Spec Kit).",
+        "args": ["analyze"],
+        "hint": "[focus areas]",
+        "ph_arg": "analyze",
+    },
+    "checklist": {
+        "title": "Speckfish: checklist",
+        "desc": "Generate a quality checklist for the feature (Spec Kit).",
+        "args": ["checklist"],
+        "hint": "[domain]",
+        "ph_arg": "checklist",
+    },
+    "clarify": {
+        "title": "Speckfish: clarify",
+        "desc": "List the open questions in the spec (writes questions.md in headless runs).",
+        "args": ["clarify"],
+        "hint": "[areas]",
+        "ph_arg": "clarify",
+    },
+    "converge": {
+        "title": "Speckfish: converge",
+        "desc": "Compare code against spec/plan/tasks and append the missing work as tasks.",
+        "args": ["converge"],
+        "hint": "[focus]",
+        "ph_arg": "converge",
+    },
+    "implement": {
+        "title": "Speckfish: implement",
+        "desc": "Execute tasks.md and write code (DESTRUCTIVE: passes --yes).",
+        "args": ["implement", "--yes"],
+        "hint": "[guidance]",
+        "ph_arg": "implement",
+    },
 }
 
 

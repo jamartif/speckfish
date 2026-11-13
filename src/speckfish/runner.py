@@ -35,6 +35,7 @@ class StepResult:
     subagents: int = 0
     premium_requests: int | None = None
     model: str | None = None
+    writes: str = ""
     interactive: bool = False
     raw_tail: str = ""
 
