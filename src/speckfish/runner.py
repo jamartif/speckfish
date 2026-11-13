@@ -32,6 +32,8 @@ class StepResult:
     error: str = ""
     log: str = ""
     artifact_dir: str = ""
+    subagents: int = 0
+    premium_requests: int | None = None
     raw_tail: str = ""
 
     def to_dict(self) -> dict:
@@ -145,6 +147,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.cost = parsed.get("cost_usd") or parsed.get("credits")
     res.cost_unit = "credits" if parsed.get("credits") is not None else "usd"
     res.structured = parsed.get("structured")
+    res.subagents = int(parsed.get("subagents") or 0)
+    res.premium_requests = parsed.get("premium_requests")
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
         res.error = f"timeout tras {timeout}s"

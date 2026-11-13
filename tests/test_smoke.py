@@ -118,3 +118,15 @@ def test_dry_run_no_ejecuta(tmp_path):
     assert res.ok and res.error == "dry-run"
     assert "-p" in res.log
     assert (tmp_path / ".speckfish" / "runs" / "run1" / "artifacts" / "review").is_dir()
+
+
+def test_agent_prefix_no_usa_shims_de_windows():
+    from speckfish.config import agent_prefix, is_windows
+    if not is_windows():
+        pytest.skip("solo Windows")
+    pre = agent_prefix("copilot")
+    if not pre:
+        pytest.skip("copilot no instalado")
+    assert pre[0].lower().endswith("node.exe") or pre[0].lower().endswith("node")
+    assert pre[1].endswith(".js")
+    assert ".cmd" not in pre[1]

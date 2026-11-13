@@ -13,7 +13,7 @@ import shutil
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import Config, norm, run_cmd
+from .config import Config, agent_prefix, norm, run_cmd
 
 
 @dataclass
@@ -74,12 +74,14 @@ class ClaudeHarness(Harness):
     def binary(self):
         return shutil.which("claude")
 
+    def prefix(self):
+        return agent_prefix("claude")
+
     def spec_kit_integration(self):
         return "claude", []
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
-        b = self.binary() or "claude"
-        argv = [b, "-p", prompt,
+        argv = (self.prefix() or ["claude"]) + ["-p", prompt,
                 "--permission-mode", "acceptEdits",
                 "--allowedTools", "Bash", "Write", "Edit", "Read", "Glob", "Grep", "Agent",
                 "--output-format", "json"]
@@ -109,6 +111,8 @@ class ClaudeHarness(Harness):
             "is_error": data.get("is_error"),
             "subtype": data.get("subtype"),
             "result_text": (data.get("result") or "")[:3000],
+            "subagents": int((data.get("subagent_stats") or {}).get("spawned") or 0),
+            "premium_requests": None,
         }
         if not res["cost_usd"]:
             res["raw_tail"] = (stdout or stderr)[-1500:]
@@ -127,25 +131,34 @@ class CopilotHarness(Harness):
     def binary(self):
         return shutil.which("copilot")
 
+    def prefix(self):
+        return agent_prefix("copilot")
+
     def spec_kit_integration(self):
         return "copilot", []
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
-        b = self.binary() or "copilot"
-        argv = [b, "-p", prompt, "--output-format", "json",
+        argv = (self.prefix() or ["copilot"]) + ["-p", prompt, "--output-format", "json",
                 "--allow-all-tools", "--allow-all-paths"]
         if egm_root:
             argv += ["--plugin-dir", norm(egm_root), "--add-dir", norm(egm_root),
                      "--agent", "egm:egm"]
         credits = self.cfg.budgets.get("copilot", {}).get(kind)
         if credits:
-            argv += ["--max-ai-credits", str(int(credits))]
+            # Copilot CLI rechaza menos de 30 créditos
+            argv += ["--max-ai-credits", str(max(30, int(credits)))]
         if self.cfg.model:
             argv += ["--model", self.cfg.model]
         return StepInvocation(argv=argv, schema_supported=False)
 
     def parse_output(self, stdout, stderr, exit_code):
-        text_parts, credits, cost = [], None, None
+        """JSONL de Copilot: deltas de mensaje, créditos y subagentes."""
+        by_msg: dict[str, list[str]] = {}
+        order: list[str] = []
+        credits = None
+        premium = None
+        subagents = 0
+        session_ms = None
         for line in (stdout or "").splitlines():
             line = line.strip()
             if not line.startswith("{"):
@@ -154,18 +167,46 @@ class CopilotHarness(Harness):
                 ev = json.loads(line)
             except Exception:
                 continue
-            for key in ("message", "text", "content", "output_text", "delta"):
-                v = ev.get(key) if isinstance(ev, dict) else None
-                if isinstance(v, str):
-                    text_parts.append(v)
-            data = ev.get("data") if isinstance(ev, dict) else None
-            if isinstance(data, dict):
-                for key in ("ai_credits", "credits", "total_ai_credits", "cost"):
-                    if key in data:
-                        credits = data[key]
+            t = ev.get("type")
+            data = ev.get("data") or {}
+            if t == "assistant.message_delta":
+                mid = data.get("messageId") or "_"
+                if mid not in by_msg:
+                    by_msg[mid] = []
+                    order.append(mid)
+                by_msg[mid].append(data.get("deltaContent") or "")
+            elif t == "assistant.message" and isinstance(data.get("content"), str):
+                mid = data.get("messageId") or "_"
+                by_msg.setdefault(mid, [])
+                if mid not in order:
+                    order.append(mid)
+                by_msg[mid] = [data["content"]]
+            elif t == "subagent.started":
+                subagents += 1
+            elif t == "session.usage_checkpoint":
+                nano = data.get("totalNanoAiu")
+                if isinstance(nano, (int, float)):
+                    credits = round(nano / 1e9, 3)
+                if isinstance(data.get("totalPremiumRequests"), int):
+                    premium = data["totalPremiumRequests"]
+            elif t == "result":
+                usage = ev.get("usage") or {}
+                if isinstance(usage.get("premiumRequests"), int):
+                    premium = usage["premiumRequests"]
+                if isinstance(usage.get("sessionDurationMs"), int):
+                    session_ms = usage["sessionDurationMs"]
+        text = ""
+        for mid in reversed(order):
+            tail = "".join(by_msg.get(mid) or [])
+            if tail.strip():
+                text = tail
+                break
         return {
             "credits": credits,
-            "text_tail": ("\n".join(text_parts))[-3000:] or (stderr or "")[-1500:],
+            "premium_requests": premium,
+            "subagents": subagents,
+            "session_ms": session_ms,
+            "text_tail": text[-3000:] or (stderr or "")[-1500:],
             "exit_code": exit_code,
         }
 
@@ -181,12 +222,14 @@ class CodexHarness(Harness):
     def binary(self):
         return shutil.which("codex")
 
+    def prefix(self):
+        return agent_prefix("codex")
+
     def spec_kit_integration(self):
         return "codex", ["--integration-options=--skills"]
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
-        b = self.binary() or "codex"
-        argv = [b, "exec", "--skip-git-repo-check", prompt]
+        argv = (self.prefix() or ["codex"]) + ["exec", "--skip-git-repo-check", prompt]
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
         return StepInvocation(argv=argv, schema_supported=False)

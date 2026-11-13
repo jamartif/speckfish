@@ -20,7 +20,7 @@ DEFAULTS = {
     "profile": "speckit",         # perfil de criterios de review
     "timeouts": {"init": 300, "specify": 600, "plan": 600, "review": 1200, "drift": 600},
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
-                "copilot": {"specify": 10, "plan": 10, "review": 30, "drift": 10}},
+                "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
 }
 
 
@@ -109,6 +109,44 @@ class Config:
 
 def which(cmd: str) -> str | None:
     return shutil.which(cmd)
+
+
+def node_entry(name: str) -> str | None:
+    """Encuentra el .js real de un CLI npm (evita shims .cmd de Windows)."""
+    exe = shutil.which(name)
+    if not exe:
+        return None
+    npm_root = Path(exe).parent / "node_modules"
+    if not npm_root.is_dir():
+        return None
+    cands = []
+    for pat in ("*/npm-loader.js", "*/index.js", "*/*/npm-loader.js", "*/*/index.js"):
+        cands += list(npm_root.glob(pat))
+    for c in cands:
+        if f"/{name}/" in c.as_posix():
+            return str(c)
+    return None
+
+
+def agent_prefix(name: str) -> list[str]:
+    """Prefijo argv para lanzar un CLI de agente sin depender de cmd.exe.
+
+    En Windows `shutil.which("copilot")` devuelve un shim sin extensión que
+    CreateProcess rechaza (WinError 193) y `cmd /c` rompería el quoting del
+    prompt. Lanzamos `node <entry>.js` cuando es un paquete npm.
+    """
+    exe = shutil.which(name)
+    if not exe:
+        return []
+    if is_windows():
+        p = Path(exe)
+        if p.suffix.lower() in ("", ".cmd", ".bat"):
+            js = node_entry(name)
+            node = shutil.which("node") or "node"
+            if js:
+                return [node, js]
+            return ["cmd.exe", "/c", str(p)]
+    return [exe]
 
 
 def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None,

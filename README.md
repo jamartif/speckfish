@@ -20,9 +20,13 @@ speckfish pipeline "CLI de tareas en Python" --stack "solo stdlib" --gate
 
 | Harness | Estado | Evidencia |
 |---|---|---|
-| **Claude Code** | ✅ Verificado end-to-end | `specify` → `plan` → `egm-review` (7 subagentes) → `egm-drift-report`; veredicto con `--json-schema` |
-| **GitHub Copilot CLI** | ✅ Verificado end-to-end | `-p` headless + `--plugin-dir` (registra `egm`) + `--output-format json` + `--max-ai-credits` |
+| **Claude Code** | ✅ Verificado end-to-end | `specify` → `plan` → `egm-review` (7 subagentes vía `Agent`) → `egm-drift-report`; veredicto con `--json-schema`; ~$0.85-1.04 por review |
+| **GitHub Copilot CLI** | ✅ Verificado end-to-end | review completa: **10 subagentes**, 0 blockers con perfil `speckit`, 8 majors; 4.9 AI credits y ~7 min (413 s); drift en 0.63 créditos / 64 s |
 | **Codex CLI** | ⚠️ Adaptador sin verificar | `codex exec`; requiere instalación y login. Revisa `docs/codex.md` de EGM |
+
+`speckfish` cuenta los subagentes lanzados en cada ejecución (Claude: `subagent_stats.spawned`;
+Copilot: eventos `subagent.started`) y lo guarda en el resultado del paso: sirve como prueba de
+que la revisión fue un Goldfish review real y no una revisión en el mismo contexto.
 
 EGM avisa de que su adaptador de Copilot es **experimental** (aislamiento de revisores no
 verificado por Google). `speckfish` no arregla eso: lo documenta.
@@ -102,8 +106,8 @@ Flags globales (antes o después del subcomando): `--root`, `--harness claude|co
 |---|---|---|
 | specify | ~$0.26 / 49 s | — |
 | plan | ~$0.21 / 46 s | — |
-| review (perfil speckit) | ~$1.0 / 4-5 min | ~2-3 créditos / 4-5 min |
-| drift | ~$0.25 / 35 s | ~0.6 créditos / 1 min |
+| review (perfil speckit) | ~$1.0 / 4-5 min | 4.9 AI credits / ~7 min (10 subagentes) |
+| drift | ~$0.25 / 35 s | 0.63 AI credits / 64 s |
 
 Cifras de `total_cost_usd` / AI credits reportados por cada CLI; con suscripción no se
 facturan igual. Mide siempre con `speckfish show`.
