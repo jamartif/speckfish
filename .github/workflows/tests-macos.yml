@@ -1,0 +1,30 @@
+name: tests (macOS)
+
+# macOS runners are scarce on shared quotas: they queue for many minutes or get cancelled on arrival,
+# which is why this matrix does not run on every push. It runs weekly, on demand, and on tags so a
+# release still gets macOS coverage before publishing.
+on:
+  schedule:
+    - cron: "0 6 * * 1"      # Mondays 06:00 UTC
+  workflow_dispatch:
+  push:
+    tags:
+      - "v*.*.*"
+
+jobs:
+  pytest-macos:
+    strategy:
+      fail-fast: false
+      matrix:
+        python: ["3.10", "3.12"]
+    runs-on: macos-14
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Install
+        run: pip install -e . pytest
+      - name: Run tests
+        run: python -m pytest -q

@@ -10,8 +10,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macos-14 instead of macos-latest: the "latest" label queues far longer on shared runners
-        os: [ubuntu-latest, macos-14, windows-latest]
+        # macOS lives in its own workflow (tests-macos.yml): its runners queue for a long time or get
+        # cancelled outright on shared/limited quotas, which would turn every push red for reasons
+        # unrelated to the code.
+        os: [ubuntu-latest, windows-latest]
         python: ["3.10", "3.12"]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 15   # a stuck macOS runner should not hold the workflow for hours
