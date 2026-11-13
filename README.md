@@ -3,7 +3,6 @@
 **Headless orchestrator for [Spec Kit](https://github.com/github/spec-kit) + [Elephant-Goldfish Model (EGM)](https://github.com/google/elephant-goldfish-model) over agent CLIs.**
 
 [![tests](https://github.com/jamartif/speckfish/actions/workflows/tests.yml/badge.svg)](https://github.com/jamartif/speckfish/actions/workflows/tests.yml)
-[![tests macOS](https://github.com/jamartif/speckfish/actions/workflows/tests-macos.yml/badge.svg)](https://github.com/jamartif/speckfish/actions/workflows/tests-macos.yml)
 [![release](https://github.com/jamartif/speckfish/actions/workflows/release.yml/badge.svg)](https://github.com/jamartif/speckfish/releases)
 [![python](https://img.shields.io/badge/python-3.10%2B-blue)](pyproject.toml)
 [![license](https://img.shields.io/badge/license-MIT-green)](LICENSE)
@@ -385,10 +384,11 @@ python -m pytest -q
 
 No network and no agent CLI is invoked (only `--dry-run`).
 
-CI runs on Ubuntu and Windows for Python 3.10/3.12 on every push. macOS runs in its own workflow
-(`tests-macos.yml`) weekly, on tags and on demand: shared macOS runners queue for a long time or get
-cancelled on arrival, and that is not a signal about the code. The suite itself is platform-neutral
-(`pathlib` everywhere, no shell assumptions).
+CI runs on Ubuntu and Windows (Python 3.10/3.12) on every push — that is the badge above. macOS lives
+in its own workflow (`tests-macos.yml`, weekly + tags + manual) because this account's macOS runners
+currently queue for many minutes and then get cancelled without running a single step; that says
+nothing about the code. The suite is platform-neutral (`pathlib`, no shell assumptions) and passes on
+Windows and Linux; run `python -m pytest -q` locally on a Mac to check it there.
 
 ### Releasing
 
