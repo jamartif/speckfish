@@ -1,6 +1,7 @@
 """Step execution: subprocess, timeout with process-tree kill, logging and state."""
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import signal
@@ -62,10 +63,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
         else:
             os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
     except Exception:
-        try:
+        with contextlib.suppress(Exception):
             proc.kill()
-        except Exception:
-            pass
 
 
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
@@ -106,23 +105,20 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
 
     t_out = threading.Thread(target=pump, args=(proc.stdout, out_chunks, True), daemon=True)
     t_err = threading.Thread(target=pump, args=(proc.stderr, err_chunks, False), daemon=True)
-    t_out.start(); t_err.start()
+    t_out.start()
+    t_err.start()
     timed_out = False
     try:
         proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
         _kill_tree(proc)
-        try:
+        with contextlib.suppress(subprocess.TimeoutExpired):
             proc.wait(timeout=30)
-        except subprocess.TimeoutExpired:
-            pass
     t_out.join(timeout=15)
     t_err.join(timeout=5)
-    try:
+    with contextlib.suppress(Exception):
         log.close()
-    except Exception:
-        pass
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
     return code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out
 

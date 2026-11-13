@@ -3,15 +3,12 @@ from __future__ import annotations
 
 import json
 import re
-import shutil
-import subprocess
 from pathlib import Path
 
 from . import prompts
 from .config import Config, find_git, norm, run_cmd, which
 from .harnesses import Harness, get_harness
-from .runner import StepResult, run_interactive, run_step, run_dir_for, new_run_id
-
+from .runner import StepResult, new_run_id, run_dir_for, run_interactive, run_step
 
 # ---------------- infrastructura ----------------
 

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "speckfish"
-version = "0.1.14"
+version = "0.1.15"
 description = "Headless orchestrator for Spec Kit + Elephant-Goldfish Model (EGM) over agent CLIs"
 requires-python = ">=3.10"
 dependencies = []
@@ -14,3 +14,16 @@ speckfish = "speckfish.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+extend-exclude = ["build", "dist"]
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "SIM"]
+# E501: long lines are fine in prompt templates; S/SIM114 noise in small CLI branches
+ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["speckfish"]
