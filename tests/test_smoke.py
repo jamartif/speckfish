@@ -1,6 +1,7 @@
 """Smoke tests: no network, no agent CLI is executed."""
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -663,3 +664,60 @@ def test_permission_denials_are_reported_in_the_summary():
     out = summarize({"step": "specify", "ok": True, "exit_code": 0, "duration_s": 1.0,
                      "denials": [{"tool_name": "PowerShell"}]})
     assert "permission denial" in out and "PowerShell" in out
+
+
+# ---------- feature selection ----------
+def _project(tmp_path, names=("002-open-remember-repos", "003-safe-staging-commit")):
+    specs = tmp_path / "specs"
+    for n in names:
+        d = specs / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    return tmp_path
+
+
+def test_list_and_active_feature(tmp_path):
+    from speckfish.steps import active_feature, list_features, set_active_feature
+    _project(tmp_path)
+    cfg = Config(root=tmp_path)
+    assert active_feature(cfg) is None
+    rows = list_features(cfg)
+    assert [r["name"] for r in rows] == ["002-open-remember-repos", "003-safe-staging-commit"]
+    assert rows[0]["spec"] and not rows[0]["plan"]
+
+    set_active_feature(cfg, tmp_path / "specs" / "003-safe-staging-commit")
+    assert active_feature(cfg).name == "003-safe-staging-commit"
+    assert json.loads((tmp_path / ".specify" / "feature.json").read_text(encoding="utf-8"))[
+        "feature_directory"] == "specs/003-safe-staging-commit"
+    assert [r["name"] for r in list_features(cfg) if r["active"]] == ["003-safe-staging-commit"]
+
+
+def test_find_feature_by_number_name_and_path(tmp_path):
+    from speckfish.steps import find_feature
+    _project(tmp_path)
+    cfg = Config(root=tmp_path)
+    assert find_feature(cfg, "002").name == "002-open-remember-repos"
+    assert find_feature(cfg, "002-open").name == "002-open-remember-repos"
+    assert find_feature(cfg, "specs/003-safe-staging-commit").name == "003-safe-staging-commit"
+    with pytest.raises(SystemExit):
+        find_feature(cfg, "099")
+
+
+def test_plan_feature_flag_sets_active_and_names_it_in_the_prompt(tmp_path):
+    from speckfish import steps as S
+    _project(tmp_path)
+    (tmp_path / "vendor").mkdir()
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    res = S.do_plan(cfg, "Swift 6", None, harness=ClaudeHarness(cfg), dry_run=True,
+                    feature="002")
+    assert "002-open-remember-repos" in res.log
+    assert json.loads((tmp_path / ".specify" / "feature.json").read_text(encoding="utf-8"))[
+        "feature_directory"] == "specs/002-open-remember-repos"
+
+
+def test_msys_style_root_is_understood_on_windows():
+    from speckfish.config import _native, is_windows
+    if not is_windows():
+        pytest.skip("Windows only")
+    assert _native("/c/Users/x/repo") == Path("C:/Users/x/repo")

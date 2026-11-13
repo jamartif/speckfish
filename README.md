@@ -213,6 +213,44 @@ Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integ
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+### One feature at a time (or all of them)
+
+Spec Kit works on **one feature at a time**: the one in `.specify/feature.json`. That means
+`speckfish plan`, `tasks`, `analyze`, `checklist`, `converge` and `implement` all act on the *active*
+feature — by default the last one you specified, not on every spec in the repo.
+
+```bash
+speckfish features                       # what exists, what each one has, which one is active
+speckfish plan "Swift 6" --feature 002   # switch the active feature and plan that one
+speckfish tasks --feature 002            # same idea for any other step
+speckfish implement --yes --feature 002
+```
+
+```
+$ speckfish features
+  001-json-task-cli                  [++-]
+  002-open-remember-repos            [+--]
+  003-safe-staging-commit            [+--]
+* 009-settings-preferences           [+--]
+
+* active (Spec Kit will work on it)   [+spec +plan +tasks]
+```
+
+`--feature` accepts a number (`002`), a directory name (`002-open-remember-repos`) or a path, and it
+**writes `.specify/feature.json`** — the same file Spec Kit reads — plus tells the agent in the prompt
+which folder to work on. A missing feature fails with the list of what exists instead of guessing.
+
+`speckfish review` and `drift` already take an explicit document/directory, so they do not care which
+feature is active:
+
+```bash
+speckfish review specs/002-open-remember-repos/spec.md
+speckfish drift specs/003-safe-staging-commit
+```
+
+Looping over every feature is deliberately not automatic yet: planning eight features is eight paid
+agent runs. If you want a batch mode (`plan --all-features`), ask for it and it gets built.
+
 ### Big briefs: split before specifying
 
 Spec Kit allows **one feature per `/speckit-specify` invocation**, so a brief describing three ideas

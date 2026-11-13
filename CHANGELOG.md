@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.18
+
+- `speckfish features`: lists every feature under `specs/`, which artifacts each one has (spec/plan/
+  tasks) and which one is active.
+- `--feature <002|name|path>` on `plan` and on every skill step (`tasks`, `analyze`, `checklist`,
+  `clarify`, `converge`, `implement`): switches the active feature (writes `.specify/feature.json`)
+  and names it in the prompt, so `plan` no longer silently plans the last spec created.
+- `--root ~/repo` and `--root /c/repo` now resolve on Windows (MSYS-style paths).
+
 ## 0.1.17
 
 - `specify --review` (also with `--split`): runs the EGM goldfish review on each spec right after it
