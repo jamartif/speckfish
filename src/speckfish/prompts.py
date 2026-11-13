@@ -130,6 +130,46 @@ SPECIFY_SCHEMA = {
     },
 }
 
+SPLIT_SCHEMA = {
+    "type": "object",
+    "required": ["features"],
+    "properties": {
+        "features": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "required": ["title", "description"],
+                "properties": {
+                    "title": {"type": "string"},
+                    "description": {"type": "string"},
+                    "why": {"type": "string"},
+                },
+            },
+        },
+        "notes": {"type": "string"},
+    },
+}
+
+
+def split_prompt(material: str, max_features: int = 6, cfg_root=None) -> str:
+    """Ask the agent to cut a big brief into independent features (inventory only, no specs)."""
+    body, _src = expand_input((material or "").strip(), cfg_root)
+    return (
+        "Read the material below and decide whether it describes ONE feature or several "
+        "independent ones.\n\n"
+        "Rules:\n"
+        "- A feature is independent when it can be specified and shipped on its own.\n"
+        "- Do NOT invent features that are not in the material.\n"
+        "- If a request is explicitly discarded in the material, leave it out.\n"
+        "- Open questions inside a feature belong to that feature, they do not split it.\n"
+        f"- Return at most {max_features} features.\n\n"
+        "Answer ONLY with JSON of this shape, no prose and no code fences:\n"
+        '{"features": [{"title": "short name", "description": "self-contained description of the '
+        'feature for a spec, including its open questions", "why": "one line on why it is separate"}], '
+        '"notes": "anything you had to decide"}\n\n'
+        f"MATERIAL:\n\n{body}"
+    )
+
 PLAN_SCHEMA = {
     "type": "object",
     "required": ["summary"],

@@ -157,8 +157,12 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
 
     sp = sub.add_parser("specify", help="create/update spec.md")
-    sp.add_argument("description", help="feature description")
+    sp.add_argument("description", help="feature description, or @path/to/brief.md")
     sp.add_argument("--run-id", default=None)
+    sp.add_argument("--split", action="store_true",
+                    help="split a big brief into independent features and specify each one")
+    sp.add_argument("--max-features", type=int, default=6,
+                    help="how many features --split may produce at most (default: 6)")
 
     sp = sub.add_parser("plan", help="generate plan.md and design artifacts")
     sp.add_argument("stack", nargs="?", default="", help="stack and constraints")
@@ -276,6 +280,19 @@ def main(argv: list[str] | None = None) -> int:
             return _harness["h"]
 
         if args.cmd == "specify":
+            if args.split:
+                out = S.do_specify_split(cfg, args.description, args.run_id, need_harness(),
+                                         stream, args.dry_run, args.max_features)
+                human = [f"run {out['run_id']}: {len(out.get('features') or [])} feature(s)"]
+                human += [f"  - {f}" for f in (out.get("features") or [])]
+                if out.get("error"):
+                    human.append(f"ERROR: {out['error']}")
+                for step, info in out["steps"].items():
+                    mark = "ok" if info.get("ok") else "FAILED"
+                    human.append(f"  [{mark}] {step} {info.get('duration_s')}s"
+                                 f" cost={info.get('cost')} {info.get('cost_unit')}")
+                emit(out, as_json, "\n".join(human))
+                return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
             res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd == "plan":
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run)

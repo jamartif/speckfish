@@ -213,6 +213,34 @@ Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integ
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+### Big briefs: split before specifying
+
+Spec Kit allows **one feature per `/speckit-specify` invocation**, so a brief describing three ideas
+lands in a single mixed spec (measured: a 3-request brief produced one `spec.md` containing all of
+them). Use `--split` to cut it first:
+
+```bash
+speckfish specify @docs/brief.md --split                  # up to 6 features
+speckfish specify @docs/brief.md --split --max-features 4
+```
+
+It makes two kinds of call: an inventory that must answer with JSON (`{"features": [...]}`) and then
+one `/speckit-specify` per feature, each with a self-contained description. Everything lands in one
+run (`runs/<id>/split.json` + `specify-N.result.json`), and the console lists what it decided:
+
+```
+run 20261113-2043: 3 feature(s)
+  - exports CSV reports
+  - tags and filtering
+  - shared work file
+  [ok] split 41s cost=1.1 credits
+  [ok] specify-1 152s cost=2.2 credits
+```
+
+Cost is one extra model call for the inventory. If the inventory says it is a single feature, you get
+one spec — same as without `--split`. Always review the split list before planning: the split is a
+reading of your brief, not a requirement.
+
 ### Passing a Markdown file as input
 
 Any step that takes text accepts a file instead: prefix the argument with `@`, or pass a path that

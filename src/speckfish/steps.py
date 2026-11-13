@@ -312,6 +312,69 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
     return res
 
 
+def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
+                     harness: Harness | None = None, stream: bool = True,
+                     dry_run: bool = False, max_features: int = 6) -> dict:
+    """Split a big brief into independent features and specify each one.
+
+    Two calls to the agent: an inventory (JSON) and then one `/speckit-specify` per feature. Spec Kit
+    itself allows exactly one feature per invocation, so a brief with three ideas would otherwise land
+    in a single mixed spec.
+    """
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    out: dict = {"run_id": rid, "harness": h.name, "steps": {}, "features": []}
+
+    inventory = run_step(cfg, h, "specify-split", prompts.split_prompt(material, max_features, cfg.root),
+                         cfg.root, rid, cfg.egm_path(), schema=prompts.SPLIT_SCHEMA,
+                         stream=stream, dry_run=dry_run)
+    out["steps"]["split"] = inventory.to_dict()
+    if dry_run:
+        out["dry_run"] = True
+        return out
+
+    features = extract_features(inventory)
+    if not features:
+        out["error"] = "the agent did not return a usable feature list"
+        out["raw"] = (inventory.raw_tail or "")[:1500]
+        return out
+    out["features"] = [f["title"] for f in features]
+
+    for i, feat in enumerate(features, start=1):
+        idea = f"{feat['title']}. {feat['description']}".strip()
+        res = run_step(cfg, h, f"specify-{i}", prompts.specify_prompt(idea, cfg.root),
+                       cfg.root, rid, cfg.egm_path(), schema=prompts.SCHEMAS["specify"],
+                       stream=stream)
+        out["steps"][f"specify-{i}"] = res.to_dict()
+        if not res.ok:
+            out["stopped_at"] = f"specify-{i}"
+            break
+    out["ok"] = all(s.get("ok") for k, s in out["steps"].items() if k != "split") and bool(features)
+    (cfg.runs_dir / rid / "split.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
+                                                   encoding="utf-8")
+    return out
+
+
+def extract_features(res) -> list[dict]:
+    """Pull [{title, description}] out of a split step, whatever the harness returned."""
+    data = res.structured or {}
+    raw = res.raw_tail or ""
+    if not data and raw:
+        start, end = raw.find("{"), raw.rfind("}")
+        if start >= 0 and end > start:
+            try:
+                data = json.loads(raw[start:end + 1])
+            except Exception:
+                data = {}
+    feats = []
+    for item in (data.get("features") or []):
+        title = str(item.get("title") or "").strip()
+        desc = str(item.get("description") or "").strip()
+        if title or desc:
+            feats.append({"title": title or desc[:60], "description": desc or title})
+    return feats
+
+
 def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
              harness: Harness | None = None, stream: bool = True,
              dry_run: bool = False) -> StepResult:
