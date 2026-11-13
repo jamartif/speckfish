@@ -288,7 +288,31 @@ def test_summary_shows_model():
     from speckfish.cli import summarize
     out = summarize({"step": "review", "ok": True, "exit_code": 0, "duration_s": 1.0,
                      "model": "gpt-6-luna"})
-    assert "model: gpt-6-luna" in out
+    assert "gpt-6-luna" in out and "OK" in out
+
+
+def test_summary_is_readable(tmp_path):
+    """The console must show what was found, not a wall of paths."""
+    from speckfish.cli import summarize
+    from speckfish.config import norm
+    root = tmp_path
+    art = root / ".speckfish" / "runs" / "20260101-1" / "artifacts" / "review"
+    out = summarize({
+        "step": "review", "ok": True, "exit_code": 0, "duration_s": 202.0,
+        "cost": 1.2886208000000001, "cost_unit": "usd", "model": "claude-sonnet-5-5",
+        "verdict": "Apto con cambios. No hay Blockers. Hay 9 acciones Major consolidadas.",
+        "meets_standard": False, "blockers": [], "majors": 9, "nits": 7,
+        "reports": [art / "consolidated_review_report.md", art / "zoom_out_report.md"],
+        "artifact_dir": art, "log": root / ".speckfish" / "logs" / "review.log",
+    }, norm(root))
+
+    assert "$1.29" in out                      # rounded, not 1.2886208000000001
+    assert "3m22s" in out                      # 202 s in human form
+    assert "does NOT meet the standard" in out and "9 majors" in out
+    assert "Apto con cambios" in out           # the verdict is the headline
+    assert str(root) not in out                # paths are relative to the project
+    assert "consolidated_review_report.md   <- start here" in out
+    assert '"verdict"' not in out              # never a JSON blob
 
 
 # ---------- pipeline composition ----------
@@ -753,3 +777,35 @@ def test_language_is_a_config_key(tmp_path):
     assert C.main(["--root", str(tmp_path), "config", "language=es"]) == 0
     stored = (tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8")
     assert '"language": "es"' in stored
+
+
+# ---------- reading the report in the terminal ----------
+def _fake_review_run(tmp_path, body=None, run_id="20260101-120000"):
+    art = tmp_path / ".speckfish" / "runs" / run_id / "artifacts" / "review"
+    art.mkdir(parents=True)
+    (art / "consolidated_review_report.md").write_text(body or "# Report\n" + "line\n" * 60,
+                                                      encoding="utf-8")
+    return tmp_path
+
+
+def test_report_prints_the_consolidated_report(tmp_path, capsys):
+    from speckfish import cli as C
+    _fake_review_run(tmp_path)
+    assert C.main(["--root", str(tmp_path), "report", "--lines", "5"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("# Report")
+    assert "use `speckfish report --full`" in out        # tells you how to see the rest
+
+
+def test_report_full_prints_everything(tmp_path, capsys):
+    from speckfish import cli as C
+    _fake_review_run(tmp_path)
+    assert C.main(["--root", str(tmp_path), "report", "--full"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("line") == 60 and "more line(s)" not in out
+
+
+def test_report_without_runs_fails_clearly(tmp_path, capsys):
+    from speckfish import cli as C
+    assert C.main(["--root", str(tmp_path), "report"]) == 2
+    assert "no report found" in capsys.readouterr().err

@@ -37,6 +37,8 @@ class StepResult:
     premium_requests: int | None = None
     model: str | None = None
     denials: list = field(default_factory=list)
+    verdict: str = ""
+    run_id: str = ""
     writes: str = ""
     interactive: bool = False
     raw_tail: str = ""
@@ -78,6 +80,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     import threading
 
     log_path = run_dir / "logs" / f"{step}.log"
+    echo_lines = getattr(harness, "echo_stdout", False)
     started = time.time()
     popen_kwargs = dict(cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
@@ -104,7 +107,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         except Exception:
             pass
 
-    t_out = threading.Thread(target=pump, args=(proc.stdout, out_chunks, True), daemon=True)
+    t_out = threading.Thread(target=pump, args=(proc.stdout, out_chunks, echo_lines), daemon=True)
     t_err = threading.Thread(target=pump, args=(proc.stderr, err_chunks, False), daemon=True)
     t_out.start()
     t_err.start()
@@ -144,6 +147,7 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path) -> None:
             res.majors = parsed.get("majors", 0)
             res.nits = parsed.get("nits", 0)
             res.meets_standard = parsed.get("meets_standard")
+        res.verdict = ((res.structured or {}).get("verdict") or parsed.get("verdict") or "").strip()
         if not res.reports:
             res.error = res.error or "no reports were written to the artifact directory"
             res.ok = False
@@ -165,7 +169,11 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                   "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
                   "blockers": len(res.blockers), "reports": res.reports,
                   "exit_code": res.exit_code, "harness": harness.name,
-                  "model": res.model, "interactive": res.interactive})
+                  "model": res.model, "interactive": res.interactive,
+                  "majors": res.majors, "nits": res.nits,
+                  "meets_standard": res.meets_standard, "verdict": res.verdict,
+                  "denials": res.denials, "artifact_dir": res.artifact_dir,
+                  "log": res.log})
     state["steps"][step] = entry
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / f"{step}.result.json").write_text(
@@ -205,6 +213,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.ok = False
     elif code != 0:
         res.error = f"exit {code}: {(err or out)[-500:]}"
+    res.run_id = run_id
     postprocess(res, step, artifact_dir)
     record_state(cfg, run_dir, run_id, res, step, harness, started_at)
     return res
@@ -252,6 +261,7 @@ def run_interactive(cfg: Config, harness: Harness, step: str, prompt: str, cwd: 
                      artifact_dir=norm(artifact_dir), log=norm(log_path))
     if code != 0:
         res.error = f"exit {code}"
+    res.run_id = run_id
     postprocess(res, step, artifact_dir)
     record_state(cfg, run_dir, run_id, res, step, harness, started_at)
     return res

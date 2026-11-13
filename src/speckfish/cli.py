@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+import textwrap
 from pathlib import Path
 
 from . import __version__
@@ -22,30 +23,81 @@ def emit(obj, as_json: bool, human: str | None = None) -> None:
         print(human if human is not None else json.dumps(obj, indent=2, ensure_ascii=False))
 
 
-def summarize(res: dict) -> str:
-    lines = [f"run: {res.get('run_id', '-')}  step: {res.get('step')}  ok: {res.get('ok')}"
-             f"  exit: {res.get('exit_code')}  {res.get('duration_s')}s"
-             + (f"  cost: {res.get('cost')} {res.get('cost_unit')}" if res.get("cost") else "")
-             + (f"  model: {res.get('model')}" if res.get("model") else "")]
+def _rel(path: str, root: str | None) -> str:
+    """Short, readable path: relative to the project when possible."""
+    if not path:
+        return ""
+    try:
+        p = Path(path)
+        if root and p.is_absolute():
+            return str(p.relative_to(Path(root))).replace("\\", "/")
+    except (ValueError, OSError):
+        pass
+    return str(path).replace("\\", "/")
+
+
+def _dur(seconds) -> str:
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return "-"
+    return f"{int(s // 60)}m{int(s % 60):02d}s" if s >= 60 else f"{s:.0f}s"
+
+
+def summarize(res: dict, root: str | None = None) -> str:
+    """One screen of plain text: what ran, what it found, where the report is."""
+    ok = res.get("ok")
+    mark = "OK" if ok else "FAILED"
+    head = f"{mark}  {res.get('step')}  ·  {_dur(res.get('duration_s'))}"
+    if res.get("model"):
+        head += f"  ·  {res['model']}"
+    if res.get("cost"):
+        unit = res.get("cost_unit") or "usd"
+        value = f"${res['cost']:.2f}" if unit == "usd" else f"{float(res['cost']):.1f} {unit}"
+        head += f"  ·  {value}"
+    if not ok and res.get("exit_code"):
+        head += f"  ·  exit {res['exit_code']}"
+    lines = [head]
+
+    verdict = (res.get("verdict") or "").strip()
+    if verdict:
+        # the consolidated verdict is the one thing worth reading first
+        for chunk in textwrap.wrap(verdict, width=96)[:6]:
+            lines.append(f"  {chunk}")
+        lines.append("")
+
     if res.get("meets_standard") is not None:
-        lines.append(f"meets standard: {res['meets_standard']}  "
-                     f"blockers: {len(res.get('blockers') or [])}  majors: {res.get('majors')}  "
-                     f"nits: {res.get('nits')}")
+        std = "meets the standard" if res["meets_standard"] else "does NOT meet the standard"
+        counts = (f"{len(res.get('blockers') or [])} blockers · {res.get('majors', 0)} majors"
+                  f" · {res.get('nits', 0)} nits")
+        lines.append(f"  {std}  ·  {counts}")
+
     for b in (res.get("blockers") or [])[:8]:
-        lines.append(f"  🔴 {b}")
+        lines.append(f"  BLOCKER  {b}")
     if res.get("denials"):
         names = sorted({(d.get("tool_name") if isinstance(d, dict) else str(d)) for d in res["denials"]})
-        lines.append(f"⚠ {len(res['denials'])} permission denial(s): {', '.join(names)} "
-                     f"— the agent worked without them")
-    if res.get("reports"):
-        lines.append("reports:")
-        lines += [f"  - {r}" for r in res["reports"]]
+        lines.append(f"  WARNING  {len(res['denials'])} permission denial(s): {', '.join(names)}"
+                     f" — the agent worked without them")
+
+    reports = res.get("reports") or []
+    if reports:
+        rel = [_rel(r, root) for r in reports]
+        main = [r for r in rel if "consolidated" in r.lower()] or rel[:1]
+        lines.append("")
+        lines.append(f"  {len(rel)} report(s):")
+        for r in main:
+            lines.append(f"    {r}   <- start here")
+        for r in rel:
+            if r not in main:
+                lines.append(f"    {r}")
+
     if res.get("error"):
-        lines.append(f"ERROR: {res['error']}")
+        lines.append(f"  ERROR  {res['error']}")
     if res.get("artifact_dir"):
-        lines.append(f"artifacts: {res['artifact_dir']}")
+        lines.append("")
+        lines.append(f"  artifacts: {_rel(res['artifact_dir'], root)}")
     if res.get("log"):
-        lines.append(f"log: {res['log']}")
+        lines.append(f"  log:       {_rel(res['log'], root)}")
     return "\n".join(lines)
 
 
@@ -231,6 +283,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("runs", help="list runs")
     sp.add_argument("--clean", action="store_true", help="delete old runs, keeping --keep newest")
     sp.add_argument("--keep", type=int, default=10, help="how many runs to keep (default: 10)")
+    sp = sub.add_parser("report", help="print the review/drift report of a run in the terminal")
+    sp.add_argument("run_id", nargs="?", default=None,
+                    help="run id (default: the latest run that has a report)")
+    sp.add_argument("--full", action="store_true", help="print the whole report instead of the summary")
+    sp.add_argument("--lines", type=int, default=40, help="how many lines to print without --full")
+
     sp = sub.add_parser("show", help="details of a run")
     sp.add_argument("run_id", nargs="?", default=None)
     return p
@@ -393,6 +451,37 @@ def main(argv: list[str] | None = None) -> int:
                              f"{dur}  [{','.join(r['steps'])}]")
             emit({"runs": rows}, as_json, "\n".join(human) or "(no runs)")
             return EXIT_OK
+        elif args.cmd == "report":
+            base = cfg.runs_dir
+            runs = sorted([p for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
+            target = None
+            if args.run_id:
+                cand = base / args.run_id
+                target = cand if cand.is_dir() else None
+            else:
+                for d in runs:
+                    if list((d / "artifacts").glob("*/*.md")):
+                        target = d
+                        break
+            if target is None:
+                print(f"no report found in {_rel(norm(base), norm(cfg.root))}"
+                      + (f" for run {args.run_id}" if args.run_id else " — run a review first"),
+                      file=sys.stderr)
+                return EXIT_ERROR
+            mds = sorted((target / "artifacts").glob("*/*.md"))
+            main = [m for m in mds if "consolidated" in m.name.lower()]
+            chosen = (main or mds)[0]
+            text = chosen.read_text(encoding="utf-8", errors="replace")
+            if as_json:
+                emit({"run_id": target.name, "report": norm(chosen), "text": text}, True, "")
+                return EXIT_OK
+            body = text.splitlines()
+            shown = body if args.full else body[: args.lines]
+            print("\n".join(shown))
+            if not args.full and len(body) > len(shown):
+                print(f"\n… {len(body) - len(shown)} more line(s): {_rel(norm(chosen), norm(cfg.root))}")
+                print("  use `speckfish report --full` to print everything")
+            return EXIT_OK
         elif args.cmd == "show":
             base = cfg.runs_dir
             rid = args.run_id
@@ -416,7 +505,7 @@ def main(argv: list[str] | None = None) -> int:
             return EXIT_OK
         else:
             return EXIT_ERROR
-        emit(res.to_dict(), as_json, summarize(res.to_dict()))
+        emit(res.to_dict(), as_json, summarize(res.to_dict(), norm(cfg.root)))
         return exit_for(res.to_dict())
     except SystemExit as e:
         msg = str(e) or "environment error"

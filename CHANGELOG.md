@@ -3,6 +3,19 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.20
+
+- Console output is readable: the agent's raw JSON is no longer echoed at the user (it is still in
+  the log). JSON-output harnesses (`claude`, `copilot`) set `echo_stdout = False`; only prose output
+  (`codex`) is streamed.
+- New summary layout: verdict first, one line of counts, human durations (`3m22s`), a rounded cost
+  (`$1.29`), and report paths relative to the project with the consolidated one marked
+  `<- start here`.
+- New `speckfish report`: prints the consolidated review/drift report of a run in the terminal
+  (`--full` for everything).
+- `state.json` now keeps `majors`, `nits`, `meets_standard`, `verdict`, `denials`, `artifact_dir`
+  and `log`, so `speckfish show` / `runs` do not lose what the step found.
+
 ## 0.1.19
 
 - New `language` setting (default `en`): every prompt ends with *"Write every document, report and

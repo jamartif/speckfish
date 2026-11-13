@@ -213,6 +213,34 @@ Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integ
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+### Reading the outcome
+
+The console shows a summary, never the agent's raw JSON. For a review that is:
+
+```
+OK  review  ·  3m22s  ·  claude-sonnet-5-5  ·  $1.29
+  Apto con cambios. No hay Blockers. Hay 9 acciones Major consolidadas y varios Nits.
+
+  does NOT meet the standard  ·  0 blockers · 9 majors · 7 nits
+
+  5 report(s):
+    .speckfish/runs/20261113-211218/artifacts/review/consolidated_review_report.md   <- start here
+    .speckfish/runs/20261113-211218/artifacts/review/comprehension_report.md
+    ...
+
+  artifacts: .speckfish/runs/20261113-211218/artifacts/review
+  log:       .speckfish/runs/20261113-211218/logs/review.log
+```
+
+The verdict is the headline, the counts are one line, paths are relative to the project. To read the
+report without leaving the terminal:
+
+```bash
+speckfish report              # consolidated report of the latest run (first 40 lines)
+speckfish report --full       # the whole thing
+speckfish report 20261113-211218 --lines 100
+```
+
 ### One feature at a time (or all of them)
 
 Spec Kit works on **one feature at a time**: the one in `.specify/feature.json`. That means
