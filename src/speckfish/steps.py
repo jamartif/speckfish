@@ -221,7 +221,7 @@ def do_doctor(cfg: Config) -> dict:
 
 def do_specify(cfg: Config, idea: str, run_id: str | None = None,
                harness: Harness | None = None, stream: bool = True,
-               dry_run: bool = False) -> StepResult:
+               dry_run: bool = False, review: bool = False) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     if h.name == "claude":
@@ -231,8 +231,29 @@ def do_specify(cfg: Config, idea: str, run_id: str | None = None,
                   if h.name == "claude" else
                   f"{idea}\n\n{prompts.NO_QUESTIONS}\n\nRun the Spec Kit specification flow "
                   f"(speckit-specify skill) as defined in this project.")
-    return run_step(cfg, h, "specify", prompt, cfg.root, rid, cfg.egm_path(),
-                    schema=prompts.SCHEMAS["specify"], stream=stream, dry_run=dry_run)
+    res = run_step(cfg, h, "specify", prompt, cfg.root, rid, cfg.egm_path(),
+                   schema=prompts.SCHEMAS["specify"], stream=stream, dry_run=dry_run)
+    if review and not dry_run and res.ok:
+        spec = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
+        if Path(spec).exists():
+            do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md")
+    return res
+
+
+def spec_path_from(res: StepResult) -> str | None:
+    """The spec.md the agent says it wrote (from the structured result), if any."""
+    data = res.structured or {}
+    for key in ("spec_path", "feature_dir"):
+        value = data.get(key)
+        if not value:
+            continue
+        p = Path(value)
+        if p.suffix == ".md":
+            return str(p) if p.exists() else None
+        candidate = p / "spec.md"
+        if candidate.exists():
+            return str(candidate)
+    return None
 
 
 def do_plan(cfg: Config, stack: str, run_id: str | None = None,
@@ -314,7 +335,8 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
 
 def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
                      harness: Harness | None = None, stream: bool = True,
-                     dry_run: bool = False, max_features: int = 6) -> dict:
+                     dry_run: bool = False, max_features: int = 6,
+                     review: bool = False) -> dict:
     """Split a big brief into independent features and specify each one.
 
     Two calls to the agent: an inventory (JSON) and then one `/speckit-specify` per feature. Spec Kit
@@ -349,6 +371,11 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
         if not res.ok:
             out["stopped_at"] = f"specify-{i}"
             break
+        if review:
+            spec = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
+            if Path(spec).exists():
+                rev = do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md")
+                out["steps"][f"review-{i}"] = rev.to_dict()
     out["ok"] = all(s.get("ok") for k, s in out["steps"].items() if k != "split") and bool(features)
     (cfg.runs_dir / rid / "split.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
                                                    encoding="utf-8")

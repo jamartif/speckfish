@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.17
+
+- `specify --review` (also with `--split`): runs the EGM goldfish review on each spec right after it
+  is written. Without it, `specify` never calls EGM; `review` stays a separate step.
+- Windows fix: `PowerShell` is now an allowed tool for Claude. A real run had
+  `.specify/scripts/powershell/resolve-template.ps1` **denied**, so Spec Kit worked around its own
+  template resolution.
+- Permission denials are reported in the step summary instead of being silently dropped.
+
 ## 0.1.16
 
 - `speckfish specify --split [--max-features N]`: inventories a big brief as JSON and runs one

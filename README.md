@@ -241,6 +241,17 @@ Cost is one extra model call for the inventory. If the inventory says it is a si
 one spec — same as without `--split`. Always review the split list before planning: the split is a
 reading of your brief, not a requirement.
 
+Add `--review` and EGM reviews each spec as soon as it is written (one goldfish review per feature, so
+this multiplies the cost: budget it):
+
+```bash
+speckfish specify @docs/brief.md --split --review     # split, specify and goldfish-review each spec
+speckfish specify "one feature" --review              # same for a single spec
+```
+
+Without `--review`, specifying never calls EGM: `review` is its own step (`speckfish review`) and the
+usual place to run it is on the `plan.md`, once the technical decisions exist.
+
 ### Passing a Markdown file as input
 
 Any step that takes text accepts a file instead: prefix the argument with `@`, or pass a path that

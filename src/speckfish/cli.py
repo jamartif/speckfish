@@ -33,6 +33,10 @@ def summarize(res: dict) -> str:
                      f"nits: {res.get('nits')}")
     for b in (res.get("blockers") or [])[:8]:
         lines.append(f"  🔴 {b}")
+    if res.get("denials"):
+        names = sorted({(d.get("tool_name") if isinstance(d, dict) else str(d)) for d in res["denials"]})
+        lines.append(f"⚠ {len(res['denials'])} permission denial(s): {', '.join(names)} "
+                     f"— the agent worked without them")
     if res.get("reports"):
         lines.append("reports:")
         lines += [f"  - {r}" for r in res["reports"]]
@@ -163,6 +167,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="split a big brief into independent features and specify each one")
     sp.add_argument("--max-features", type=int, default=6,
                     help="how many features --split may produce at most (default: 6)")
+    sp.add_argument("--review", action="store_true",
+                    help="run the EGM goldfish review on the spec(s) right after creating them")
 
     sp = sub.add_parser("plan", help="generate plan.md and design artifacts")
     sp.add_argument("stack", nargs="?", default="", help="stack and constraints")
@@ -282,7 +288,8 @@ def main(argv: list[str] | None = None) -> int:
         if args.cmd == "specify":
             if args.split:
                 out = S.do_specify_split(cfg, args.description, args.run_id, need_harness(),
-                                         stream, args.dry_run, args.max_features)
+                                         stream, args.dry_run, args.max_features,
+                                         review=args.review)
                 human = [f"run {out['run_id']}: {len(out.get('features') or [])} feature(s)"]
                 human += [f"  - {f}" for f in (out.get("features") or [])]
                 if out.get("error"):
@@ -293,7 +300,8 @@ def main(argv: list[str] | None = None) -> int:
                                  f" cost={info.get('cost')} {info.get('cost_unit')}")
                 emit(out, as_json, "\n".join(human))
                 return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
-            res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream, args.dry_run)
+            res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
+                               args.dry_run, review=getattr(args, "review", False))
         elif args.cmd == "plan":
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd == "review":

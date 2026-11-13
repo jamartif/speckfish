@@ -624,3 +624,42 @@ def test_split_dry_run_calls_the_agent_once(tmp_path, monkeypatch):
     assert out["dry_run"] is True
     assert list(out["steps"]) == ["split"]
     assert out["steps"]["split"]["error"] == "dry-run"
+
+
+# ---------- EGM right after specifying ----------
+def test_split_review_runs_egm_per_spec(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    feat_dir = tmp_path / "specs" / "001-x"
+    feat_dir.mkdir(parents=True)
+    (feat_dir / "spec.md").write_text("# spec", encoding="utf-8")
+    reviewed = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        if step == "specify-split":
+            return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                              structured={"features": [{"title": "uno", "description": "d"}]})
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                          structured={"feature_dir": str(feat_dir)})
+
+    def fake_review(cfg_, target=None, run_id=None, harness=None, profile=None, stage=None,
+                    stream=True, dry_run=False, default_file="plan.md", interactive=False):
+        reviewed.append(target)
+        return StepResult(step="review", ok=True, exit_code=0, duration_s=1.0)
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    monkeypatch.setattr(S, "do_review", fake_review)
+
+    out = S.do_specify_split(cfg, "brief", None, harness=ClaudeHarness(cfg), review=True)
+    assert reviewed == [str(feat_dir / "spec.md")]      # EGM reviewed the spec it just wrote
+    assert "review-1" in out["steps"]
+
+
+def test_permission_denials_are_reported_in_the_summary():
+    from speckfish.cli import summarize
+    out = summarize({"step": "specify", "ok": True, "exit_code": 0, "duration_s": 1.0,
+                     "denials": [{"tool_name": "PowerShell"}]})
+    assert "permission denial" in out and "PowerShell" in out

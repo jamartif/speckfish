@@ -90,7 +90,8 @@ class ClaudeHarness(Harness):
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
         argv = (self.prefix() or ["claude"]) + ["-p", prompt,
                 "--permission-mode", "acceptEdits",
-                "--allowedTools", "Bash", "Write", "Edit", "Read", "Glob", "Grep", "Agent",
+                "--allowedTools", "Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep",
+                "Agent",
                 "--output-format", "json"]
         if egm_root:
             argv += ["--plugin-dir", norm(egm_root)]
@@ -108,7 +109,8 @@ class ClaudeHarness(Harness):
         argv = (self.prefix() or ["claude"]) + [
             prompt,
             "--permission-mode", "acceptEdits",
-            "--allowedTools", "Bash", "Write", "Edit", "Read", "Glob", "Grep", "Agent",
+            "--allowedTools", "Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep",
+            "Agent",
         ]
         if egm_root:
             argv += ["--plugin-dir", norm(egm_root)]
