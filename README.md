@@ -106,21 +106,33 @@ blocked by Windows policies, `speckfish` falls back to `uv tool run --from speci
 
 Some managed Windows machines block the unsigned console-script `.exe` that pip/uv generates
 (`'speckfish.exe' has been blocked by your organization's Device Guard policy`), while `python.exe`
-runs fine. Every command is reachable through the module entry point:
+runs fine. `uv tool install` puts the package in its own isolated venv, so `python -m speckfish`
+fails with a plain `python` on PATH ("No module named speckfish") — pick one of these:
 
 ```powershell
-# one-off, no installation
+# A) no installation at all
 uv tool run --from git+https://github.com/jamartif/speckfish python -m speckfish doctor
 
-# with the tool installed: use its interpreter
+# B) the interpreter of the installed tool
 & "$env:APPDATA\uv\tools\speckfish\Scripts\python.exe" -m speckfish doctor
 
-# or drop docs/speckfish.bat somewhere on your PATH and just run:
+# C) install into a regular interpreter once, then `python -m speckfish` works in any folder
+py -3.12 -m pip install --user git+https://github.com/jamartif/speckfish
+python -m speckfish doctor
+
+# D) or drop docs/speckfish.bat in a folder on PATH and run the plain command
 speckfish doctor
 ```
 
-`docs/speckfish.bat` is a three-line launcher that calls `python -m speckfish`, so the blocked
-stub is never executed. On macOS/Linux the normal `speckfish` command works.
+Two Windows details worth knowing:
+
+- `PATHEXT` resolves `.EXE` before `.BAT`, so a `speckfish.bat` never wins over the blocked
+  `speckfish.exe`. Either `uv tool uninstall speckfish` (removing the stub) or call the `.bat`
+  by another name.
+- The `--user` install also generates an `.exe`; it is harmless because you never call it —
+  `python -m speckfish` bypasses it.
+
+On macOS and Linux the regular `speckfish` command works.
 
 ## Usage
 
