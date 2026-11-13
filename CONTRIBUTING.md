@@ -29,8 +29,18 @@ gh pr merge --squash --delete-branch
 | tests on Ubuntu + Windows (3.10, 3.12) | `tests.yml` | a real regression; the suite needs no network and no agent CLI |
 | PR title format | `pr.yml` | the title is not `type: description` (Conventional Commits) |
 
-The PR also gets `type` and `size/*` labels automatically, and reviewers are requested from
-`.github/CODEOWNERS` (plus the repository variable `REVIEWERS` — comma separated logins — when set).
+The PR also gets `type` and `size/*` labels automatically and a generated **review checklist** comment
+(`pr-review.yml`) that is rewritten on every push and lists what a reviewer must confirm for the files
+this PR touches.
+
+### Reviewers
+
+- `.github/CODEOWNERS` requests a review from `@jamartif` on every PR — GitHub skips the request when
+  the owner *is* the author, which is the normal case with a single maintainer.
+- To bring in more people, set the repository variable `REVIEWERS` to a comma-separated list
+  (`alice,bob`): `pr.yml` requests reviews from everyone in it except the PR author.
+- Adding a collaborator is the only way to get a human *approval*; with a single maintainer the merge
+  gate is the required checks (`lint`, `metadata`, the four `pytest` jobs), enforced for admins too.
 macOS runs separately (`tests-macos.yml`, weekly + tags + manual) because shared macOS runners are
 scarce.
 

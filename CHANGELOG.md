@@ -10,6 +10,9 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 - `lint` job (`ruff check src tests`) on every PR; ruff is configured in `pyproject.toml` and the
   existing findings are fixed (no rule silenced except `E501`).
 - `CONTRIBUTING.md`: every change goes through a pull request; `main` is protected.
+- `pr-review.yml`: generated, self-updating review checklist comment on each PR (areas touched, what
+  to verify, reminders for harness/prompt/version changes).
+- Branch protection on `main`: pull request required, six required checks, admins included.
 
 ## 0.1.14
 
