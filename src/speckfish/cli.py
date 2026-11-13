@@ -257,17 +257,24 @@ def main(argv: list[str] | None = None) -> int:
             ok = (info.get("harness") or {}).get("installed") and \
                  (info.get("specify") or {}).get("ok") and (info.get("egm") or {}).get("present")
             return EXIT_OK if ok else EXIT_ENV
-        h = get_harness(cfg, args.harness)
+        # resolved lazily: `config`, `runs`, `show` and `version` must work with no agent installed
+        _harness = {}
+
+        def need_harness():
+            if "h" not in _harness:
+                _harness["h"] = get_harness(cfg, args.harness)
+            return _harness["h"]
+
         if args.cmd == "specify":
-            res = S.do_specify(cfg, args.description, args.run_id, h, stream, args.dry_run)
+            res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd == "plan":
-            res = S.do_plan(cfg, args.stack, args.run_id, h, stream, args.dry_run)
+            res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd == "review":
-            res = S.do_review(cfg, args.target, args.run_id, h, args.profile,
+            res = S.do_review(cfg, args.target, args.run_id, need_harness(), args.profile,
                               args.stage, stream, args.dry_run, args.target_file,
                               interactive=getattr(args, "interactive", False))
         elif args.cmd == "drift":
-            res = S.do_drift(cfg, args.target, args.run_id, h, stream, args.dry_run)
+            res = S.do_drift(cfg, args.target, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd in SKILL_SPECS:
             spec = SKILL_SPECS[args.cmd]
             if spec.get("dangerous") and not getattr(args, "yes", False) and not args.dry_run:
@@ -275,7 +282,7 @@ def main(argv: list[str] | None = None) -> int:
                        f"Re-run with --yes to confirm, or --dry-run to see the command first.")
                 emit({"error": msg, "writes": spec["writes"]}, as_json, f"refusing: {msg}")
                 return EXIT_ENV
-            res = S.do_skill(cfg, args.cmd, args.args, args.run_id, h, stream, args.dry_run)
+            res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd == "pipeline":
             out = S.do_pipeline(cfg, args.description, args.stack, args.target,
                                 args.gate, args.with_drift, args.with_tasks, args.with_analyze,
