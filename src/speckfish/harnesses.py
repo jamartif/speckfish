@@ -264,7 +264,7 @@ class CopilotHarness(Harness):
 
 class CodexHarness(Harness):
     name = "codex"
-    echo_stdout = True         # `codex exec` prints prose, not JSON
+    echo_stdout = False        # `codex exec --json` prints NDJSON: translated into activity lines
     supports_schema = False
     supports_budget = False
     verified = True
@@ -287,7 +287,9 @@ class CodexHarness(Harness):
         # `-c sandbox_mode=workspace-write` are both ignored (`sandbox: read-only` in the banner) so
         # the agent answers in prose and never writes spec.md. With approvals + sandbox bypassed it
         # writes. Headless means nobody can approve, so this adapter declares the filesystem open.
-        argv = (self.prefix() or ["codex"]) + ["exec", "--skip-git-repo-check",
+        # --json: NDJSON events as they happen (that is what the progress line feeds on) instead of
+        # one silent stream until the end
+        argv = (self.prefix() or ["codex"]) + ["exec", "--json", "--skip-git-repo-check",
                                                "--dangerously-bypass-approvals-and-sandbox", prompt]
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
@@ -305,7 +307,27 @@ class CodexHarness(Harness):
         return StepInvocation(argv=argv, interactive=True)
 
     def parse_output(self, stdout, stderr, exit_code):
-        return {"text_tail": (stdout or stderr)[-3000:], "exit_code": exit_code}
+        """codex --json: keep the last message, the token usage and any fatal error."""
+        text, tokens, error = "", 0, ""
+        for line in (stdout or "").splitlines():
+            line = line.strip()
+            if not (line.startswith("{") and line.endswith("}")):
+                continue
+            with contextlib.suppress(ValueError):
+                event = json.loads(line)
+                if not isinstance(event, dict):
+                    continue
+                etype = event.get("type")
+                if etype in ("item.started", "item.completed"):
+                    item = event.get("item") or {}
+                    if item.get("type") == "agent_message" and item.get("text"):
+                        text = str(item["text"])
+                    elif item.get("type") == "error" and item.get("message"):
+                        error = str(item["message"])
+                elif etype == "turn.completed":
+                    tokens = int((event.get("usage") or {}).get("output_tokens") or 0)
+        return {"text_tail": text[-3000:] or (stdout or "")[-1500:], "exit_code": exit_code,
+                "tokens": tokens, "error": error}
 
 
 REGISTRY = {"claude": ClaudeHarness, "copilot": CopilotHarness, "codex": CodexHarness}

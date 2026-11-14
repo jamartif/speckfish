@@ -111,7 +111,8 @@ def test_codex_argv(tmp_path):
     inv = CodexHarness(cfg).build("review", "p", tmp_path, tmp_path, None,
                                   None, 60, None)
     assert "exec" in inv.argv
-    assert inv.argv[inv.argv.index("exec") + 1] == "--skip-git-repo-check"
+    assert "--json" in inv.argv                       # live NDJSON events, not one silent stream
+    assert inv.argv[inv.argv.index("exec") + 1] == "--json"
     # 0.169 ignores --sandbox workspace-write in exec: only the bypass actually writes files
     assert "--dangerously-bypass-approvals-and-sandbox" in inv.argv
 
@@ -1194,3 +1195,73 @@ def test_split_summary_warns_when_a_feature_wrote_nothing():
     text = split_summary({"run_id": "r", "features": ["a", "b", "c"],
                           "specs": [{"path": "specs/001-a/spec.md"}], "steps": {}}, "C:/repo")
     assert "WARNING: 2 feature(s) produced no spec.md" in text
+
+
+# ---------- activity: what the agent is actually doing ----------
+def _codex_events():
+    """Real shape of `codex exec --json`, built with json.dumps so the escapes are right."""
+    shell = ('"C:\\WINDOWS\\System32\\WindowsPowerShell\v1.0\\powershell.exe" '
+             '-Command "Get-Content -Raw .agents/skills/speckit-specify/SKILL.md"')
+    return [json.dumps(e) for e in [
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {"type": "item.completed",
+         "item": {"id": "i1", "type": "agent_message", "text": "I will read the skill."}},
+        {"type": "item.completed",
+         "item": {"id": "i2", "type": "command_execution", "command": shell}},
+        {"type": "item.completed",
+         "item": {"id": "i3", "type": "file_change",
+                  "changes": [{"path": "specs/001-api/spec.md", "kind": "add"}]}},
+        {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
+    ]]
+
+
+CODEX_EVENTS = _codex_events()
+
+
+def test_codex_events_become_activity_lines():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("specify-1", enabled=True, stream=buf, plain_every=999, plain_only=True)
+    for line in CODEX_EVENTS:
+        p.feed(line)
+    out = buf.getvalue()
+    assert "$ Get-Content -Raw .agents/skills/speckit-specify/SKILL.md" in out
+    assert "wrote specs/001-api/spec.md" in out
+    assert "powershell.exe" not in out.split("\n")[0] or "Get-Content" in out
+    assert p.tokens == 5
+    p.stop()
+
+
+def test_claude_tool_use_becomes_activity():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("plan", enabled=True, stream=buf, plain_every=999, plain_only=True)
+    p.feed('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",'
+           '"input":{"file_path":"specs/002/spec.md"}}]}}')
+    p.feed('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent",'
+           '"input":{"subagent_type":"egm:egm-zoom-out"}}]}}')
+    out = buf.getvalue()
+    assert "read specs/002/spec.md" in out
+    assert "subagent egm:egm-zoom-out" in out
+    p.stop()
+
+
+def test_codex_parse_output_reads_the_last_message():
+    from speckfish.harnesses import CodexHarness
+    parsed = CodexHarness.parse_output(None, "\n".join(CODEX_EVENTS), "", 0)
+    assert parsed["text_tail"] == "I will read the skill."
+    assert parsed["tokens"] == 5
+
+
+def test_shell_wrappers_are_stripped_from_activity():
+    from speckfish.progress import _short
+    assert _short(r'"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile '
+                  r'-Command "Get-Content -Raw x.md"') == "Get-Content -Raw x.md"
+    assert _short('/bin/bash -lc "npm test"') == "npm test"
+    assert _short("Get-ChildItem specs") == "Get-ChildItem specs"
+    assert _short("x" * 300).endswith("…") and len(_short("x" * 300)) == 100

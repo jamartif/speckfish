@@ -235,9 +235,15 @@ the clock is visible without overwriting the agent's output:
 
 ```
 [review] 01:42 | subagents 5 | tools 31 | last egm:egm-zoom-out
-[constitution] 00:00 | starting, usually 1-2 min
-[constitution] 00:10 | tools 4 | bash
+[specify-1] 00:13 | $ Get-Content -Raw .agents/skills/speckit-specify/SKILL.md
+[specify-1] 00:21 | $ Get-ChildItem -Force -Recurse specs
+[specify-1] 02:04 | wrote specs/001-api-v1-platform-foundation/spec.md
+[specify-1] 02:11 | finishing
 ```
+
+The activity lines come from the CLI's own events, so they are real actions, not a spinner: which
+command ran, which file was written, which subagent started. `codex` runs with `--json` precisely so
+those events arrive one by one (measured: events at 0.4 s, 4.9 s, 5.0 s of a 10 s run).
 
 Agent JSON is never echoed to the console, even for harnesses that echo prose: whole JSON lines and
 anything over 1200 characters stay in the log. A step ends with the outcome, not a transcript:

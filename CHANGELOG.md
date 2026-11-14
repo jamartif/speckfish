@@ -3,6 +3,17 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.28
+
+- The progress line now shows **what the agent is doing**, not just a clock: one permanent line per
+  command run (`$ Get-Content -Raw …/SKILL.md`), file written (`wrote specs/001-…/spec.md`) and
+  subagent spawned.
+- `codex` runs with `exec --json`: its NDJSON events (item.started/completed, turn.completed) are
+  consumed live, which is what feeds the activity lines, plus its last message and token usage for the
+  step result. Verified against a real run: events arrive at 0.4 s / 4.9 s / 5.0 s of a 10 s run.
+- Shell wrappers are stripped from the display (`"C:\…\powershell.exe" -NoProfile -Command "…"` →
+  the command itself), paths are shown relative to the project, and repeats are collapsed.
+
 ## 0.1.27
 
 - Fix: `--split` listed the features and then aborted with "the agent did not return a usable feature
