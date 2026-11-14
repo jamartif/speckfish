@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## Unreleased
+
+- Fix (hang): `activity()` took the status lock and then called `_clear()`/`_write()`, which re-took
+  the same non-reentrant `threading.Lock`. The thread reading the agent's output blocked on itself, so
+  the clock froze on the same second and nothing else was ever read. Now an `RLock`, with a regression
+  test that fails with a plain `Lock`.
+- Project policy change: **no release per change**. Commits go to `main` and the CLI is installed
+  editable from the working copy (`pip install -e`) until a release is explicitly approved.
+
 ## 0.1.29
 
 - Fix: `--split --dry-run` executed the agent for real and wrote specs (`dry_run` was not forwarded to

@@ -1334,3 +1334,38 @@ def test_split_dry_run_never_runs_the_agent(tmp_path, monkeypatch):
     S.do_specify_split(cfg, "@" + str(big), None, harness=SimpleNamespace(name="codex"),
                        dry_run=True, only=[1])
     assert seen == [("specify-1", True)]      # dry_run reached the step
+
+
+def test_activity_does_not_deadlock_the_reader_on_a_tty():
+    """Regression: activity() took the lock then called _clear()/_write(), which re-took it.
+
+    A plain Lock deadlocked the thread reading the agent's output, so the clock froze at the same
+    second and nothing else was ever read.
+    """
+    import io
+    import threading
+    import time
+
+    from speckfish.progress import Progress
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    buf = TTY()
+    p = Progress("specify-4", enabled=True, stream=buf, every=0.01)
+    p.start()
+    time.sleep(0.05)          # the status line must be on screen (_printed > 0) for the bug to bite
+    done = threading.Event()
+
+    def reader():
+        for i in range(20):
+            p.activity(f"$ command {i}")
+            time.sleep(0.005)
+        done.set()
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    assert done.wait(5), "activity() deadlocked the reader thread"
+    p.stop()
+    assert "command 19" in buf.getvalue()

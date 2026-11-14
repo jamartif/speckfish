@@ -85,7 +85,8 @@ class Progress:
         # `plain_only` when the agent already streams prose to the same terminal: a carriage-return
         # line would be overwritten by its output, so emit standalone lines instead (never nothing)
         self.is_tty = bool(getattr(self.stream, "isatty", lambda: False)()) and not plain_only
-        self._lock = threading.Lock()
+        # RLock: activity() clears the status line while holding it, and _clear/_write re-enter
+        self._lock = threading.RLock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._t0 = time.monotonic()
