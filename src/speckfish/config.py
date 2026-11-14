@@ -133,7 +133,8 @@ def node_entry(name: str) -> str | None:
     if not npm_root.is_dir():
         return None
     cands = []
-    for pat in ("*/npm-loader.js", "*/index.js", "*/*/npm-loader.js", "*/*/index.js"):
+    for pat in ("*/npm-loader.js", "*/index.js", "*/bin/*.js", "*/bin/*.mjs",
+                "*/*/npm-loader.js", "*/*/index.js", "*/*/bin/*.js"):
         cands += list(npm_root.glob(pat))
     for c in cands:
         if f"/{name}/" in c.as_posix():
@@ -205,6 +206,9 @@ def run_cmd(args: list[str], cwd: Path | None = None, timeout: int | None = None
         return 127, "", f"not found: {e}"
     except PermissionError as e:
         return 126, "", f"permission denied (App Control?): {e}"
+    except OSError as e:
+        # WinError 193 (a shim CreateProcess cannot run) is an OSError, not FileNotFoundError
+        return 126, "", f"cannot run {args[0]}: {e}"
     except subprocess.TimeoutExpired:
         return 124, "", f"timeout after {timeout}s"
 

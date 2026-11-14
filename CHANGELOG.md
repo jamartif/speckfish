@@ -3,6 +3,20 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.23
+
+- Codex adapter verified against a real OpenAI-compatible provider (`nan.builders`,
+  `deepseek-v4-flash`): `specify` produces a full `spec.md`.
+  - Runs `--dangerously-bypass-approvals-and-sandbox`: codex-cli 0.169 keeps `exec` in a read-only
+    sandbox even with `--sandbox workspace-write` or `-c sandbox_mode=workspace-write`, so the agent
+    answered in prose and wrote nothing. The notes say so in `doctor`.
+  - `wire_api = "chat"` is no longer accepted by codex; the provider must expose `/v1/responses`.
+- `node_entry()` also finds npm packages that ship `bin/*.js` (codex), so the Windows shim prefix
+  resolves and `doctor` no longer crashes with WinError 193.
+- `run_cmd()` catches `OSError`, and `doctor()` reports a broken binary instead of raising a traceback.
+- A `specify` step that writes no `specs/*/spec.md` is now a failure, not a success with a nice
+  essay in the log.
+
 ## 0.1.22
 
 - Live progress while an agent works: `[review] 01:42 | subagents 5 | tools 31 | last

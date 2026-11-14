@@ -46,8 +46,14 @@ class Harness:
         b = self.binary()
         info = {"harness": self.name, "binary": b, "installed": bool(b), "verified": self.verified}
         if b:
-            code, out, err = run_cmd([b, "--version"], timeout=60)
-            info["version"] = (out or err).strip().splitlines()[0] if (out or err).strip() else ""
+            # `prefix()` knows how to launch npm shims on Windows; a bare path gives WinError 193
+            argv = (self.prefix() or [b]) + ["--version"]
+            try:
+                code, out, err = run_cmd(argv, timeout=60)
+            except Exception as e:      # doctor must report, never raise
+                code, out, err = 1, "", str(e)
+            text = (out or err).strip()
+            info["version"] = text.splitlines()[0] if text else ""
             info["version_exit"] = code
         info["notes"] = self.notes
         return info
@@ -261,9 +267,11 @@ class CodexHarness(Harness):
     echo_stdout = True         # `codex exec` prints prose, not JSON
     supports_schema = False
     supports_budget = False
-    verified = False
-    notes = ("Unverified adapter: codex CLI was not installed on the test machine. "
-             "Uses `codex exec` plus the plugin skills; see EGM docs/codex.md.")
+    verified = True
+    notes = ("Verified on Windows with an OpenAI-compatible provider set in ~/.codex/config.toml. "
+             "Runs `codex exec --skip-git-repo-check --dangerously-bypass-approvals-and-sandbox`: "
+             "0.169 ignores --sandbox workspace-write in exec, so without the bypass it answers in "
+             "prose and writes nothing. No sandbox and no approval prompts = full filesystem.")
 
     def binary(self):
         return shutil.which("codex")
@@ -275,7 +283,12 @@ class CodexHarness(Harness):
         return "codex", ["--integration-options=--skills"]
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
-        argv = (self.prefix() or ["codex"]) + ["exec", "--skip-git-repo-check", prompt]
+        # Measured on codex-cli 0.169: `--sandbox workspace-write` and
+        # `-c sandbox_mode=workspace-write` are both ignored (`sandbox: read-only` in the banner) so
+        # the agent answers in prose and never writes spec.md. With approvals + sandbox bypassed it
+        # writes. Headless means nobody can approve, so this adapter declares the filesystem open.
+        argv = (self.prefix() or ["codex"]) + ["exec", "--skip-git-repo-check",
+                                               "--dangerously-bypass-approvals-and-sandbox", prompt]
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
         if self.cfg.model:
@@ -283,7 +296,7 @@ class CodexHarness(Harness):
         return StepInvocation(argv=argv, schema_supported=False)
 
     def build_interactive(self, kind, prompt, cwd, artifact_dir, egm_root):
-        argv = (self.prefix() or ["codex"])
+        argv = (self.prefix() or ["codex"]) + ["--dangerously-bypass-approvals-and-sandbox"]
         if egm_root:
             argv += ["--add-dir", norm(egm_root)]
         if self.cfg.model:

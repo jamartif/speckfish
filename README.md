@@ -426,6 +426,45 @@ regardless of the language of the input material`), so it applies to `specify`, 
 
 The CLI's own messages, help, README and workflows are in English.
 
+### Using your own provider (no Claude/OpenAI subscription)
+
+Any agent CLI that can be pointed at an OpenAI-compatible endpoint works. `codex` is the direct route
+because it reads a model provider from its own config, so no keys are stored in this repo:
+
+```toml
+# ~/.codex/config.toml
+model = "deepseek-v4-flash"
+model_provider = "nan"
+
+[model_providers.nan]
+name = "nan.builders"
+base_url = "https://api.nan.builders/v1"   # must speak the Responses API
+env_key = "NAN_API_KEY"
+wire_api = "responses"
+```
+
+```bash
+export NAN_API_KEY=...          # read by the agent CLI, never by speckfish
+speckfish doctor --harness codex
+speckfish specify "a tiny JSON task CLI" --harness codex
+```
+
+Two things measured on codex-cli 0.169, both now handled by the adapter:
+
+- `wire_api = "chat"` is rejected outright; the provider must expose `/v1/responses`.
+- `codex exec` stays in a **read-only** sandbox even with `--sandbox workspace-write` or
+  `-c sandbox_mode=workspace-write` (the banner still says `sandbox: read-only`), so the agent answers
+  in prose and writes nothing. The adapter runs `--dangerously-bypass-approvals-and-sandbox`; headless
+  runs have nobody to approve anything, but it does mean the agent has full filesystem access.
+
+`speckfish` now also **verifies the artifact** instead of trusting the exit code: a `specify` run that
+writes no `specs/*/spec.md` is reported as a failure.
+
+Expect less than with Claude: `specify` and `plan` work (a 102-line spec in ~2 min on a cheap model);
+the EGM review is multi-stage and depends on the agent spawning subagents cooperatively — with a
+non-frontier model it wrote the first two stage reports and then looped on `SpawnAgent`/`Wait`.
+For the review, prefer Claude Code or Copilot CLI.
+
 ### Which agent runs, and which model
 
 `speckfish init --integration all` only writes **Spec Kit skills** for every agent. It does not
