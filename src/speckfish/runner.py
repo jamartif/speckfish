@@ -85,7 +85,8 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     from .progress import Progress
 
     echo_lines = getattr(harness, "echo_stdout", False)
-    meter = Progress(step, enabled=progress and not echo_lines)
+    # always show it: a harness that echoes prose still leaves you without a clock or a stage
+    meter = Progress(step, enabled=progress, plain_only=echo_lines)
     started = time.time()
     meter.start()
     popen_kwargs = dict(cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,

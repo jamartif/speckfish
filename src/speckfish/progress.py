@@ -45,14 +45,16 @@ class Progress:
     """Thread-safe, best-effort status line for one running step."""
 
     def __init__(self, label: str, enabled: bool = True, stream=None, every: float = 1.0,
-                 plain_every: float = 15.0, hint: str | None = None):
+                 plain_every: float = 10.0, hint: str | None = None, plain_only: bool = False):
         self.label = label
         self.hint = hint if hint is not None else EXPECTED.get(label, "")
         self.enabled = bool(enabled and ENABLED)
         self.stream = stream if stream is not None else sys.stderr
         self.every = every
         self.plain_every = plain_every
-        self.is_tty = bool(getattr(self.stream, "isatty", lambda: False)())
+        # `plain_only` when the agent already streams prose to the same terminal: a carriage-return
+        # line would be overwritten by its output, so emit standalone lines instead (never nothing)
+        self.is_tty = bool(getattr(self.stream, "isatty", lambda: False)()) and not plain_only
         self._lock = threading.Lock()
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None

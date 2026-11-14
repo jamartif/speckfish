@@ -1099,3 +1099,25 @@ def test_all_features_reaches_every_feature(tmp_path, monkeypatch):
     monkeypatch.setattr(S, "get_harness", lambda cfg: SimpleNamespace(name="fake"))
     assert C.main(["--root", str(tmp_path), "plan", "x", "--all-features"]) == 0
     assert calls == ["001-a", "002-b"]
+
+
+def test_progress_still_shows_when_the_agent_echoes_prose():
+    """codex prints prose to the same terminal: the clock and stage must still appear."""
+    import io
+
+    from speckfish.progress import Progress
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    buf = TTY()
+    p = Progress("constitution", enabled=True, stream=buf, plain_only=True, plain_every=0)
+    p.start()
+    p.feed(_stream_events()[2])
+    p._draw()
+    p.stop()
+    out = buf.getvalue()
+    assert "[constitution]" in out
+    assert "subagents 1" in out       # the stage, not just a clock
+    assert "\r" not in out            # standalone lines, never a carriage-return redraw
