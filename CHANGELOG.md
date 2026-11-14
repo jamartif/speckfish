@@ -3,6 +3,13 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.25
+
+- `plan --all-features`, `tasks --all-features`, `analyze --all-features`: run the step over every
+  feature under `specs/` in creation order, one shared run id, stopping at the first failure with a
+  per-feature summary (`OK`/`FAILED`, duration, cost) and the point where it stopped. `implement` is
+  excluded on purpose.
+
 ## 0.1.24
 
 - `specify --split --inventory-only`: stop after the inventory, write `specs/features.json` and print

@@ -298,6 +298,27 @@ $ speckfish features
 **writes `.specify/feature.json`** — the same file Spec Kit reads — plus tells the agent in the prompt
 which folder to work on. A missing feature fails with the list of what exists instead of guessing.
 
+To run a step over **every** feature, `plan`, `tasks` and `analyze` accept `--all-features`: they walk
+`specs/*/` in creation order, share one run id, stop at the first failure and print where they stopped
+(earlier features stay done, so a re-run only redoes what is missing):
+
+```bash
+speckfish plan "C# .NET 10" --all-features --harness codex
+speckfish tasks --all-features --harness codex
+```
+
+```
+plan  ·  7 feature(s)  ·  run 20261114-123556
+  OK     001-api-v1-platform-foundation  ·  4m12s
+  OK     002-catalog-configuration-permissions  ·  3m48s
+  FAILED 003-capture-grouping-problems  ·  12s
+         the agent ran out of quota (HTTP 429) ...
+  stopped at 003-capture-grouping-problems: fix it and re-run, earlier features are done
+```
+
+`implement` deliberately has no `--all-features`: it writes code, so each feature is launched and
+reviewed on its own.
+
 `speckfish review` and `drift` already take an explicit document/directory, so they do not care which
 feature is active:
 
