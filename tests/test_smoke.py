@@ -1017,3 +1017,29 @@ def test_doctor_never_raises_when_the_binary_is_broken(tmp_path, monkeypatch):
     info = H.CodexHarness(cfg).doctor()
     assert info["installed"] is True
     assert info["version_exit"] == 1          # reported, not raised
+
+
+# ---------- split inventory on harnesses without --json-schema ----------
+def test_inventory_json_is_recovered_from_prose_log(tmp_path):
+    """codex/copilot answer in prose; the log also carries a schema that must not win."""
+    from speckfish.steps import json_object_with
+    log = ('noise\n'
+           '{"type":"object","properties":{"features":{"type":"array"}}}\n'
+           '{"features":[{"title":"short name"}]}\n'
+           'the plan:\n{"features":[{"title":"A","description":"da","why":"wa"},'
+           '{"title":"B","description":"db","why":"wb"}],"notes":"two"}')
+    found = json_object_with(log, "features")
+    assert [f["title"] for f in found["features"]] == ["A", "B"]
+    assert found["notes"] == "two"
+
+
+def test_inventory_payload_reads_the_struct_log(tmp_path):
+    from speckfish.config import Config
+    from speckfish.runner import StepResult
+    from speckfish.steps import inventory_payload
+    log = tmp_path / "split.log"
+    log.write_text('{"features":[{"title":"X","description":"d"}]}', encoding="utf-8")
+    res = StepResult(step="specify-split", ok=True, exit_code=0, duration_s=1.0,
+                     log=str(log), structured=None)
+    payload = inventory_payload(res, Config(root=tmp_path))
+    assert payload["features"][0]["title"] == "X"
