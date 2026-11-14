@@ -5,6 +5,13 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- README status table: Codex is no longer "unverified adapter". It is verified for the Spec Kit steps
+  against an OpenAI-compatible provider (nan.builders / deepseek-v4-flash) and explicitly **not**
+  verified for the EGM review, which loops on `collab: SpawnAgent / Wait` with that model.
+- README explains harness vs provider: `--harness codex` + nan is still the codex harness; nan only
+  supplies the model.
+- The Claude harness note in `doctor` was still in Spanish; now English.
+
 - Diagram fixed and renumbered 1→9: `drift` is now **after** `implement` (it compares documents with
   code that exists), `tasks` is explicitly before `review`, and the optional `brainstorm`/`draft` arrow
   points at `specify` instead of `constitution`. The README states the order in a table with the reason

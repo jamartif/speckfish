@@ -96,11 +96,17 @@ the input is an idea rather than a document.
 |---|---|---|
 | **Claude Code** | ✅ Verified end-to-end | `specify` → `plan` → `egm-review` (7 subagents via `Agent`) → `egm-drift-report`; verdict through `--json-schema`; ~$0.85-1.04 per review |
 | **GitHub Copilot CLI** | ✅ Verified end-to-end | full review: **10 subagents**, 0 blockers with the `speckit` profile, 8 majors; 4.9 AI credits, wall clock ~6m55s; drift in 0.63 credits / 64 s |
-| **Codex CLI** | ⚠️ Unverified adapter | `codex exec`; needs install and login. See EGM `docs/codex.md` |
+| **Codex CLI** | ✅ Verified for the Spec Kit steps · ❌ not for the EGM review | With a local OpenAI-compatible provider (`nan.builders`, `deepseek-v4-flash`): `init`, `doctor`, `constitution` (2m27s), `specify --split` (inventory 75s, then 6-9 min per spec), `plan` (plan + research + data-model) and `tasks` (401 lines, 139 tasks). The EGM review **did not converge**: it wrote two stage reports and then looped on `collab: SpawnAgent / Wait` (killed at 10 min). Requires `wire_api = "responses"`, and 0.169 ignores `--sandbox workspace-write`, so the adapter bypasses approvals. |
 
 `speckfish` counts the subagents launched by each run (Claude: `subagent_stats.spawned`;
 Copilot: `subagent.started` events) and stores it in the step result. That is the evidence that
 a review was a real Goldfish review and not a same-context review.
+
+**Harness vs provider — two different things.** The *harness* is the agent CLI that runs a step
+(`claude`, `copilot`, `codex`). The *provider* is where its model comes from. Running `codex` against
+`nan.builders` is still `--harness codex`: nan only decides which model answers. That combination is
+verified for the Spec Kit steps above and **not** for the EGM review, because the review depends on an
+agent that coordinates subagents (see the table).
 
 EGM documents its Copilot adapter as **experimental** (reviewer isolation unverified by Google).
 `speckfish` does not fix that: it records it.
