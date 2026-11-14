@@ -68,12 +68,20 @@ Allowed types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`
 
 ## Releasing
 
-Releases are cut from `main` by tag; the workflow builds, verifies and publishes:
+**Not on every change.** While the flow is still being validated the CLI is installed editable from the
+working copy, so fixes reach the machine that runs it without publishing anything:
+
+```bash
+pip install --user -e /path/to/speckfish     # once; later edits are live
+speckfish --version
+```
+
+A release is cut only when someone asks for one (a stable point worth pinning):
 
 ```bash
 # bump the version in pyproject.toml and src/speckfish/__init__.py, update CHANGELOG.md, merge the PR
 git switch main && git pull
-git tag v0.1.15 && git push origin v0.1.15
+git tag v0.1.30 && git push origin v0.1.30
 ```
 
 `release.yml` then runs the tests, builds the wheel and the sdist, checks that the tag matches the
