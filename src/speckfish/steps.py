@@ -419,10 +419,61 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
     return res
 
 
+def json_object_with(text: str, key: str) -> dict:
+    """Best JSON object in `text` whose `key` is a non-empty list.
+
+    Harnesses without `--json-schema` (codex, copilot) answer the inventory in prose, so the JSON
+    arrives inside the transcript instead of `structured_output` — and the same log may also contain
+    JSON *schemas* (with `properties`) or one-item examples, which must not win.
+    """
+    decoder = json.JSONDecoder()
+    best: dict = {}
+    best_len = 0
+    idx = 0
+    while True:
+        start = text.find("{", idx)
+        if start < 0:
+            break
+        idx = start + 1
+        try:
+            obj, end = decoder.raw_decode(text[start:])
+        except ValueError:
+            continue
+        if not isinstance(obj, dict) or "$schema" in obj or "properties" in obj:
+            continue
+        items = obj.get(key)
+        if not isinstance(items, list) or not items:
+            continue
+        if not all(isinstance(i, dict) for i in items):
+            continue
+        score = len(items) + sum(1 for i in items if i.get("description") or i.get("why"))
+        if score > best_len:
+            best, best_len = obj, score
+    return best
+
+
+def inventory_payload(res, cfg: Config) -> dict:
+    """The split inventory, from structured output or recovered from the step log."""
+    data = res.structured if isinstance(res.structured, dict) else {}
+    if data.get("features"):
+        return data
+    for source in (res.log,):
+        if not source:
+            continue
+        try:
+            text = Path(source).read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        found = json_object_with(text, "features")
+        if found:
+            return found
+    return data
+
+
 def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
                      harness: Harness | None = None, stream: bool = True,
                      dry_run: bool = False, max_features: int = 6,
-                     review: bool = False) -> dict:
+                     review: bool = False, inventory_only: bool = False) -> dict:
     """Split a big brief into independent features and specify each one.
 
     Two calls to the agent: an inventory (JSON) and then one `/speckit-specify` per feature. Spec Kit
@@ -437,8 +488,16 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
                          cfg.root, rid, cfg.egm_path(), schema=prompts.SPLIT_SCHEMA,
                          stream=stream, dry_run=dry_run)
     out["steps"]["split"] = inventory.to_dict()
-    if dry_run:
-        out["dry_run"] = True
+    payload = inventory_payload(inventory, cfg)
+    features = payload.get("features") or []
+    out["features"] = [f.get("title", "") for f in features]
+    # the inventory is the cheap, high-value half: let the user approve the cut before paying for N specs
+    (cfg.root / "specs").mkdir(parents=True, exist_ok=True)
+    (cfg.root / "specs" / "features.json").write_text(
+        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    if dry_run or inventory_only:
+        out["inventory_only"] = bool(inventory_only)
+        out["dry_run"] = bool(dry_run)
         return out
 
     features = extract_features(inventory)

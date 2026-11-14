@@ -3,6 +3,14 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.24
+
+- `specify --split --inventory-only`: stop after the inventory, write `specs/features.json` and print
+  the proposed cut, so the feature split is approved before paying for one spec per feature.
+- The split inventory is recovered from the step log when the harness has no `--json-schema` (codex,
+  copilot). `json_object_with()` picks the richest `features` array and ignores JSON schemas
+  (`properties`) and one-item examples, which a real codex log contains.
+
 ## 0.1.23
 
 - Codex adapter verified against a real OpenAI-compatible provider (`nan.builders`,

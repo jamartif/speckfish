@@ -234,6 +234,9 @@ def build_parser() -> argparse.ArgumentParser:
                     help="split a big brief into independent features and specify each one")
     sp.add_argument("--max-features", type=int, default=6,
                     help="how many features --split may produce at most (default: 6)")
+    sp.add_argument("--inventory-only", action="store_true",
+                    help="with --split: only list the features it would create, write specs/features.json "
+                         "and stop (review the cut before paying for N specs)")
     sp.add_argument("--review", action="store_true",
                     help="run the EGM goldfish review on the spec(s) right after creating them")
 
@@ -370,7 +373,8 @@ def main(argv: list[str] | None = None) -> int:
             if args.split:
                 out = S.do_specify_split(cfg, args.description, args.run_id, need_harness(),
                                          stream, args.dry_run, args.max_features,
-                                         review=args.review)
+                                         review=args.review,
+                                         inventory_only=getattr(args, "inventory_only", False))
                 human = [f"run {out['run_id']}: {len(out.get('features') or [])} feature(s)"]
                 human += [f"  - {f}" for f in (out.get("features") or [])]
                 if out.get("error"):

@@ -309,6 +309,19 @@ speckfish drift specs/003-safe-staging-commit
 Looping over every feature is deliberately not automatic yet: planning eight features is eight paid
 agent runs. If you want a batch mode (`plan --all-features`), ask for it and it gets built.
 
+### Approve the cut before paying for it
+
+`--split` spends one call on the inventory and then one per feature. Review the cut first:
+
+```bash
+speckfish specify @requirements.md --split --max-features 7 --inventory-only
+cat specs/features.json          # titles, descriptions, why, notes, open questions
+```
+
+It writes `specs/features.json` and stops, so you can drop or merge features before any spec is
+generated. Harnesses without `--json-schema` (codex, copilot) answer in prose: the inventory is
+recovered from the step log, preferring the richest `features` array over schemas or examples.
+
 ### Big briefs: split before specifying
 
 Spec Kit allows **one feature per `/speckit-specify` invocation**, so a brief describing three ideas
