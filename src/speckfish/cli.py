@@ -209,6 +209,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--stream", action="store_true", default=True,
                         help="forward agent output to stderr (default)")
     common.add_argument("--quiet", action="store_true", help="do not forward agent output")
+    common.add_argument("--no-progress", action="store_true",
+                        help="do not print the live progress line while an agent works")
     common.add_argument("--dry-run", action="store_true", help="print the command without running it")
     p = argparse.ArgumentParser(prog="speckfish", parents=[common],
                                 description="Headless orchestrator for Spec Kit + EGM over agent CLIs.")
@@ -316,6 +318,8 @@ def main(argv: list[str] | None = None) -> int:
     if args.model:
         cfg.model = args.model
     as_json = args.json
+    from . import progress as _progress
+    _progress.ENABLED = not (getattr(args, "no_progress", False) or args.quiet or args.json)
     stream = not args.quiet
     try:
         if args.cmd == "editors":

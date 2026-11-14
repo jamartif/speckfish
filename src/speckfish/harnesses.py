@@ -93,7 +93,7 @@ class ClaudeHarness(Harness):
                 "--permission-mode", "acceptEdits",
                 "--allowedTools", "Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep",
                 "Agent",
-                "--output-format", "json"]
+                "--output-format", "stream-json", "--verbose"]
         if egm_root:
             argv += ["--plugin-dir", norm(egm_root)]
         if schema:
@@ -123,6 +123,16 @@ class ClaudeHarness(Harness):
         data = {}
         with contextlib.suppress(Exception):
             data = json.loads(stdout[stdout.find("{"):stdout.rfind("}") + 1])
+        if not data:
+            # stream-json: one event per line, the last `result` holds the whole payload
+            for line in (stdout or "").splitlines():
+                line = line.strip()
+                if not (line.startswith("{") and line.endswith("}")):
+                    continue
+                with contextlib.suppress(ValueError):
+                    event = json.loads(line)
+                    if isinstance(event, dict) and event.get("type") == "result":
+                        data = event
         res = {
             "structured": data.get("structured_output"),
             "cost_usd": data.get("total_cost_usd"),
