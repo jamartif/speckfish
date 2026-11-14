@@ -802,28 +802,13 @@ uv venv && uv pip install -e . pytest
 python -m pytest -q
 ```
 
-No network and no agent CLI is invoked (only `--dry-run`).
+The suite is hermetic: no network and no agent CLI is invoked (steps run with `--dry-run`, the harness
+is monkeypatched). CI runs it on Ubuntu and Windows, Python 3.10 and 3.12, on every push. macOS lives in
+its own workflow (`tests-macos.yml`: weekly, on tags and manually) because this account's macOS runners
+queue and then get cancelled without executing a step — that says nothing about the code.
 
-CI runs on Ubuntu and Windows (Python 3.10/3.12) on every push — that is the badge above. macOS lives
-in its own workflow (`tests-macos.yml`, weekly + tags + manual) because this account's macOS runners
-currently queue for many minutes and then get cancelled without running a single step; that says
-nothing about the code. The suite is platform-neutral (`pathlib`, no shell assumptions) and passes on
-Windows and Linux; run `python -m pytest -q` locally on a Mac to check it there.
-
-### Releasing
-
-Push a tag and the release workflow builds the artifacts and attaches them to a GitHub release:
-
-```bash
-git tag v0.1.0 && git push origin v0.1.0
-```
-
-Each release ships the wheel and the source distribution, so a pinned version can be installed
-without cloning:
-
-```bash
-uv tool install https://github.com/jamartif/speckfish/releases/download/v0.1.0/speckfish-0.1.0-py3-none-any.whl
-```
+Branch → pull request → checks → squash merge. Details, including how a release is cut, are in
+[CONTRIBUTING.md](CONTRIBUTING.md).
 
 ## License
 

@@ -5,6 +5,10 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- README: the `Development` section is now just "how to run the tests" plus a pointer; the release
+  procedure (tags, workflow) moved to `CONTRIBUTING.md`, where it belongs, and states the current
+  policy: no release per change, install editable until one is asked for.
+
 - README status table: Codex is no longer "unverified adapter". It is verified for the Spec Kit steps
   against an OpenAI-compatible provider (nan.builders / deepseek-v4-flash) and explicitly **not**
   verified for the EGM review, which loops on `collab: SpawnAgent / Wait` with that model.
