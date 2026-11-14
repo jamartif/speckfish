@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import re
 import sys
 import threading
 import time
@@ -41,12 +42,41 @@ def _mmss(seconds: float) -> str:
     return f"{total // 60:02d}:{total % 60:02d}"
 
 
+_MAX_ACTIVITY = 100
+
+# the shell wrapper the agent adds around every command, so we can show what it actually ran:
+# `"C:\...\powershell.exe" -NoProfile -Command "..."` -> keep only the command
+_EXE_PREFIX = re.compile(r'^(?:"[^"]*(?:powershell|pwsh|cmd|bash|sh|node)\.exe"'
+                         r'|[^"\s]*(?:powershell|pwsh|cmd|bash|sh|node)\.exe"?'
+                         r'|/[^\s]*(?:bash|sh|zsh)|(?:bash|sh|zsh))\s+', re.I)
+_FLAG = re.compile(r'^-{1,2}[A-Za-z][\w-]*$')
+
+
+def _short(text: str, limit: int = _MAX_ACTIVITY) -> str:
+    """One readable line: drop the shell wrapper, collapse whitespace, cap the length."""
+    text = " ".join(str(text or "").split())
+    # `"C:\...\powershell.exe" -NoProfile -Command "Get-Content ..."` -> `Get-Content ...`
+    prefix = _EXE_PREFIX.match(text)
+    if prefix:
+        text = text[prefix.end():]
+    # keep peeling the wrapper's flags: -NoProfile, -Command, -lc, /c
+    while True:
+        head, _, rest = text.partition(" ")
+        if not rest or not (_FLAG.match(head) or head.lower() == "/c"):
+            break
+        text = rest
+    text = text.strip().strip('"').strip("'").strip()
+    return text if len(text) <= limit else text[: limit - 1] + "…"
+
+
 class Progress:
     """Thread-safe, best-effort status line for one running step."""
 
     def __init__(self, label: str, enabled: bool = True, stream=None, every: float = 1.0,
-                 plain_every: float = 10.0, hint: str | None = None, plain_only: bool = False):
+                 plain_every: float = 10.0, hint: str | None = None, plain_only: bool = False,
+                 root: str = ""):
         self.label = label
+        self.root = str(root or "").replace("\\", "/")
         self.hint = hint if hint is not None else EXPECTED.get(label, "")
         self.enabled = bool(enabled and ENABLED)
         self.stream = stream if stream is not None else sys.stderr
@@ -61,6 +91,7 @@ class Progress:
         self._t0 = time.monotonic()
         self._last_plain = 0.0
         self._printed = 0
+        self._last_activity = ""
         self.subagents: list[str] = []
         self.tools = 0
         self.last_tool = ""
@@ -121,6 +152,12 @@ class Progress:
             usage = event.get("usage") or {}
             self.tokens = int(usage.get("input_tokens") or 0) + int(usage.get("output_tokens") or 0)
             self.finished = True
+        # --- codex exec --json ---
+        elif etype in ("item.started", "item.completed"):
+            self._codex_item(event.get("item") or {}, started=etype == "item.started")
+        elif etype == "turn.completed":
+            self.tokens = int((event.get("usage") or {}).get("output_tokens") or 0)
+            self.finished = True
         # --- copilot JSONL ---
         elif "subagent" in etype:
             name = str(event.get("name") or event.get("agent") or event.get("subagent_type") or "")
@@ -129,6 +166,30 @@ class Progress:
             self.last_tool = "subagent"
         elif "tool" in etype:
             self._tool(str(event.get("name") or event.get("tool") or ""), event)
+
+    def _codex_item(self, item: dict, started: bool) -> None:
+        """codex exec --json items: command_execution, file_change, agent_message, error."""
+        kind = str(item.get("type") or "")
+        if kind == "command_execution":
+            if not started:
+                self.tools += 1
+                self.last_tool = "shell"
+                cmd = _short(item.get("command") or "")
+                if cmd:
+                    self.activity(f"$ {cmd}")
+        elif kind == "file_change":
+            changes = item.get("changes") or []
+            for change in (changes if isinstance(changes, list) else []):
+                path = str((change or {}).get("path") or "")
+                if path:
+                    self.activity(f"wrote {self.relpath(path)}")
+        elif kind in ("agent_message", "reasoning") and not started:
+            if str(item.get("text") or item.get("reasoning") or "").strip():
+                self.last_tool = "thinking"
+        elif kind == "error" and not started:
+            msg = _short(item.get("message") or "", 100)
+            if msg and "Model metadata" not in msg:      # harmless provider warning
+                self.activity(f"warning: {msg}")
 
     def _tool(self, name: str, payload: dict) -> None:
         if not name:
@@ -139,6 +200,43 @@ class Progress:
             sub = str(payload.get("subagent_type") or payload.get("description") or "").strip()
             if sub and sub not in self.subagents:
                 self.subagents.append(sub)
+                self.activity(f"subagent {_short(sub, 60)}")
+        elif name in ("Write", "Edit"):
+            path = str(payload.get("file_path") or payload.get("path") or "")
+            if path:
+                verb = "wrote" if name == "Write" else "edited"
+                self.activity(f"{verb} {self.relpath(path)}")
+        elif name == "Read":
+            path = str(payload.get("file_path") or payload.get("path") or "")
+            if path:
+                self.activity(f"read {self.relpath(path)}")
+        elif name in ("Bash", "PowerShell"):
+            cmd = str(payload.get("command") or "")
+            if cmd:
+                self.activity(f"$ {_short(cmd)}")
+
+    def relpath(self, path: str) -> str:
+        """Show paths relative to the project: absolute ones add nothing readable."""
+        text = str(path or "").replace("\\", "/")
+        if self.root and text.lower().startswith(self.root.lower().rstrip("/") + "/"):
+            text = text[len(self.root.rstrip("/")) + 1:]
+        return _short(text, 70)
+
+    # ---------- activity ----------
+    def activity(self, text: str) -> None:
+        """Permanent line for something that actually happened."""
+        if not self.enabled or not text:
+            return
+        with self._lock:
+            if text == self._last_activity:      # a repeated action is noise
+                return
+            self._last_activity = text
+            stamp = _mmss(time.monotonic() - self._t0)
+            if self.is_tty:
+                self._clear()
+                self._printed = 0
+            self.stream.write(f"[{self.label}] {stamp} | {text}" + "\n")
+            self.stream.flush()
 
     # ---------- rendering ----------
     def status(self) -> str:
