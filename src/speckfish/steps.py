@@ -519,7 +519,8 @@ def inventory_payload(res, cfg: Config) -> dict:
 def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
                      harness: Harness | None = None, stream: bool = True,
                      dry_run: bool = False, max_features: int = 6,
-                     review: bool = False, inventory_only: bool = False) -> dict:
+                     review: bool = False, inventory_only: bool = False,
+                     only: list[int] | None = None) -> dict:
     """Split a big brief into independent features and specify each one.
 
     Two calls to the agent: an inventory (JSON) and then one `/speckit-specify` per feature. Spec Kit
@@ -530,6 +531,25 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
     rid = ensure_run(cfg, run_id)
     out: dict = {"run_id": rid, "harness": h.name, "steps": {}, "features": [], "specs": [],
                  "started": datetime.now().isoformat(timespec="seconds")}
+
+    if only:
+        # continue a split that was interrupted: same cut, only the missing features
+        cut = cfg.root / "specs" / "features.json"
+        if not cut.exists():
+            out["error"] = (f"{norm(cut)} not found: run --split --inventory-only first, "
+                            f"or drop --only and split from scratch")
+            return out
+        payload = json.loads(cut.read_text(encoding="utf-8"))
+        all_feats = payload.get("features") or []
+        wanted = [(i, f) for i, f in enumerate(all_feats, start=1) if i in set(only)]
+        if not wanted:
+            out["error"] = (f"--only {sorted(only)} matches no feature in the saved cut "
+                            f"(it has {len(all_feats)})")
+            return out
+        out["inventory_reused"] = norm(cut)
+        out["features"] = [f.get("title", "") for _i, f in wanted]
+        return _specify_each(cfg, h, rid, wanted, out, stream=stream, review=review,
+                             dry_run=dry_run)
 
     inventory = run_step(cfg, h, "specify-split", with_language(prompts.split_prompt(material, max_features, cfg.root), cfg),
                          cfg.root, rid, cfg.egm_path(), schema=prompts.SPLIT_SCHEMA,
@@ -552,14 +572,23 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
         out["raw"] = (inventory.raw_tail or "")[:1500]
         return out
 
-    for i, feat in enumerate(features, start=1):
+    return _specify_each(cfg, h, rid, list(enumerate(features, start=1)), out,
+                         stream=stream, review=review, dry_run=dry_run)
+
+
+def _specify_each(cfg: Config, h: Harness, rid: str, pairs: list[tuple[int, dict]],
+                  out: dict, stream: bool = True, review: bool = False,
+                  dry_run: bool = False) -> dict:
+    """One `/speckit-specify` per feature, stopping at the first failure."""
+    out["dry_run"] = bool(dry_run)
+    for i, feat in pairs:
         idea = f"{feat.get('title', '')}. {feat.get('description', '')}".strip()
         res = run_step(cfg, h, f"specify-{i}", prompts.specify_prompt(idea, cfg.root),
                        cfg.root, rid, cfg.egm_path(), schema=prompts.SCHEMAS["specify"],
-                       stream=stream)
+                       stream=stream, dry_run=dry_run)
         out["steps"][f"specify-{i}"] = res.to_dict()
         written = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
-        if Path(written).exists():
+        if not dry_run and Path(written).exists():
             out["specs"].append({"feature": feat.get("title", ""), "path": norm(written)})
         if not res.ok:
             out["stopped_at"] = f"specify-{i}"
@@ -569,7 +598,7 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
             if Path(spec).exists():
                 rev = do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md")
                 out["steps"][f"review-{i}"] = rev.to_dict()
-    out["ok"] = all(s.get("ok") for k, s in out["steps"].items() if k != "split") and bool(features)
+    out["ok"] = all(s.get("ok") for k, s in out["steps"].items() if k != "split") and bool(pairs)
     (cfg.runs_dir / rid / "split.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
                                                    encoding="utf-8")
     return out

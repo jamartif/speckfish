@@ -18,7 +18,8 @@ DEFAULTS = {
     "model": "",                  # forwarded to the harness when set
     "profile": "speckit",         # review criteria profile
     "language": "en",             # language of the generated specs/plans/reports
-    "timeouts": {"init": 300, "specify": 600, "plan": 600, "review": 1200, "drift": 600},
+    "timeouts": {"init": 300, "specify": 1800, "plan": 1800, "tasks": 1800,
+                 "analyze": 1200, "review": 1800, "drift": 1200, "implement": 3600},
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
                 "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
 }
@@ -69,7 +70,8 @@ class Config:
         cfg = cls(root=root)
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
-            for k in ("harness", "egm_root", "specify", "model", "profile", "language"):
+            for k in ("harness", "egm_root", "specify", "model", "profile", "language",
+                      "timeouts"):
                 if k in data:
                     setattr(cfg, k, data[k])
             for k in ("timeouts", "budgets"):

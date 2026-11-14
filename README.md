@@ -362,7 +362,22 @@ cat specs/features.json          # titles, descriptions, why, notes, open questi
 ```
 
 It writes `specs/features.json` and stops, so you can drop or merge features before any spec is
-generated. Harnesses without `--json-schema` (codex, copilot) answer in prose: the inventory is
+generated.
+
+A long split can stop halfway (a per-step timeout, a quota, a model that stalls). Continue where it
+stopped without paying for the inventory again:
+
+```bash
+speckfish specify --split --only 5,6,7 --harness codex     # these features, from specs/features.json
+speckfish specify --split --from-feature 5 --harness codex  # this one onwards
+```
+
+Per-step timeouts are configurable, and generous by default (specify/plan/tasks 30 min, review 30 min,
+implement 60 min) because a local model can take 8-9 minutes per spec:
+
+```bash
+speckfish config timeout.specify=2400
+``` Harnesses without `--json-schema` (codex, copilot) answer in prose: the inventory is
 recovered from the step log, preferring the richest `features` array over schemas or examples.
 
 ### Big briefs: split before specifying

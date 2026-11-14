@@ -344,7 +344,9 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.denials = parsed.get("denials") or []
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
-        res.error = f"timeout after {timeout}s"
+        res.error = (f"timed out after {timeout}s — the agent may simply need longer. "
+                     f"Raise it with `speckfish config timeout.{step}={int(timeout * 2)}` "
+                     f"and check the log for how far it got")
         res.ok = False
     elif code != 0:
         res.error = human_error(out, err, code)

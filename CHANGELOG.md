@@ -3,6 +3,18 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.29
+
+- Fix: `--split --dry-run` executed the agent for real and wrote specs (`dry_run` was not forwarded to
+  the per-feature step). `--dry-run` now reports what it would specify and writes nothing.
+- `specify --split --only 5,6,7` / `--from-feature 5`: continue an interrupted split from
+  `specs/features.json` without paying for the inventory again. `description` is optional with them.
+- A per-step timeout now says so and how to fix it: *"timed out after 600s — the agent may simply need
+  longer. Raise it with `speckfish config timeout.specify=1200`"*.
+- Timeouts are configurable (`speckfish config timeout.<step>=N`) and the defaults are generous
+  (specify/plan/tasks/review 30 min, implement 60 min): a slow local model takes 6-9 min per spec and
+  was hitting the old 10-minute wall mid-run.
+
 ## 0.1.28
 
 - The progress line now shows **what the agent is doing**, not just a clock: one permanent line per
