@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import argparse
+import contextlib
 import json
 import sys
 import textwrap
@@ -120,7 +121,13 @@ def split_summary(out: dict, root: str | None = None) -> str:
 
     if out.get("error"):
         return "\n".join([head, f"  ERROR  {out['error']}"])
-    if out.get("inventory_only") or out.get("dry_run"):
+    if out.get("dry_run"):
+        lines = [f"dry run: {len(feats)} feature(s) would be specified (nothing written)"]
+        lines += [f"  {i}. {t}" for i, t in enumerate(feats, 1)]
+        lines.append("")
+        lines.append(f"  {head}")
+        return "\n".join(lines)
+    if out.get("inventory_only"):
         lines = [f"{len(feats)} feature(s) proposed  ·  nothing generated yet"]
         lines += [f"  {i}. {t}" for i, t in enumerate(feats, 1)]
         lines.append("")
@@ -282,12 +289,18 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
 
     sp = sub.add_parser("specify", help="create/update spec.md")
-    sp.add_argument("description", help="feature description, or @path/to/brief.md")
+    sp.add_argument("description", nargs="?", default="",
+                    help="feature description, or @path/to/brief.md (omit with --only/--from-feature)")
     sp.add_argument("--run-id", default=None)
     sp.add_argument("--split", action="store_true",
                     help="split a big brief into independent features and specify each one")
     sp.add_argument("--max-features", type=int, default=6,
                     help="how many features --split may produce at most (default: 6)")
+    sp.add_argument("--only", default=None,
+                    help="with --split: generate only these features from specs/features.json "
+                         "(e.g. 4,5,6,7) — continues an interrupted split without paying again")
+    sp.add_argument("--from-feature", type=int, default=None,
+                    help="with --split: generate from this feature number onwards")
     sp.add_argument("--inventory-only", action="store_true",
                     help="with --split: only list the features it would create, write specs/features.json "
                          "and stop (review the cut before paying for N specs)")
@@ -430,10 +443,30 @@ def main(argv: list[str] | None = None) -> int:
 
         if args.cmd == "specify":
             if args.split:
+                only = None
+                if args.only:
+                    try:
+                        only = [int(x) for x in str(args.only).replace(" ", "").split(",") if x]
+                    except ValueError:
+                        print("ERROR: --only expects numbers, e.g. 4,5,6,7", file=sys.stderr)
+                        return EXIT_ENV
+                if args.from_feature and only is None:
+                    cut = cfg.root / "specs" / "features.json"
+                    total = 0
+                    if cut.exists():
+                        with contextlib.suppress(Exception):
+                            total = len(json.loads(cut.read_text(encoding="utf-8"))
+                                        .get("features") or [])
+                    if not total:
+                        print("ERROR: --from-feature needs specs/features.json "
+                              "(run --split --inventory-only first)", file=sys.stderr)
+                        return EXIT_ENV
+                    only = list(range(args.from_feature, total + 1))
                 out = S.do_specify_split(cfg, args.description, args.run_id, need_harness(),
                                          stream, args.dry_run, args.max_features,
                                          review=args.review,
-                                         inventory_only=getattr(args, "inventory_only", False))
+                                         inventory_only=getattr(args, "inventory_only", False),
+                                         only=only)
                 emit(out, as_json, split_summary(out, norm(cfg.root)))
                 return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
             res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
@@ -506,6 +539,17 @@ def main(argv: list[str] | None = None) -> int:
                 key, value = args.set.split("=", 1)
                 key = key.strip()
                 allowed = {"harness", "model", "profile", "egm_root", "specify", "language"}
+                if key.startswith("timeout."):
+                    step = key.split(".", 1)[1]
+                    if not value.strip().isdigit():
+                        emit({"error": "timeout must be a number of seconds"}, as_json,
+                             "ERROR: timeout must be a number of seconds")
+                        return EXIT_ENV
+                    cfg.timeouts[step] = int(value.strip())
+                    path = cfg.save()
+                    emit({"saved": norm(path), key: cfg.timeouts[step]}, as_json,
+                         f"saved timeout.{step}={cfg.timeouts[step]}s → {norm(path)}")
+                    return EXIT_OK
                 if key not in allowed:
                     msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
                     emit({"error": msg}, as_json, f"ERROR: {msg}")

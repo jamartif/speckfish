@@ -1265,3 +1265,73 @@ def test_shell_wrappers_are_stripped_from_activity():
     assert _short('/bin/bash -lc "npm test"') == "npm test"
     assert _short("Get-ChildItem specs") == "Get-ChildItem specs"
     assert _short("x" * 300).endswith("…") and len(_short("x" * 300)) == 100
+
+
+# ---------- continuing an interrupted split ----------
+def test_split_only_reuses_the_saved_cut(tmp_path, monkeypatch):
+    """--only 3,4 must not pay for the inventory again, and must skip 1-2."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "features.json").write_text(json.dumps({"features": [
+        {"title": "A", "description": "da"}, {"title": "B", "description": "db"},
+        {"title": "C", "description": "dc"}, {"title": "D", "description": "dd"}]}),
+        encoding="utf-8")
+    ran = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        ran.append(step)
+        d = tmp_path / "specs" / f"00{step[-1]}-x"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                          structured={"feature_dir": str(d)})
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    info = {"name": "codex"}
+    out = S.do_specify_split(cfg, "", None, harness=SimpleNamespace(name="codex"),
+                             only=[3, 4])
+    assert "specify-split" not in ran                     # no second inventory
+    assert ran == ["specify-3", "specify-4"]
+    assert out["features"] == ["C", "D"]
+    assert out["inventory_reused"].endswith("features.json")
+
+
+def test_split_only_without_a_saved_cut_says_what_to_do(tmp_path):
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+    out = S.do_specify_split(cfg, "", None, harness=SimpleNamespace(name="codex"), only=[3])
+    assert "not found" in out["error"] and "--inventory-only" in out["error"]
+
+
+def test_timeout_message_tells_you_how_to_raise_it():
+    from speckfish.runner import StepResult
+    res = StepResult(step="specify-3", ok=False, exit_code=124, duration_s=600.3,
+                     error=("timed out after 600s — the agent may simply need longer. Raise it with "
+                            "`speckfish config timeout.specify-3=1200`"))
+    assert "timed out after 600s" in res.error
+    assert "config timeout.specify-3" in res.error
+
+
+def test_split_dry_run_never_runs_the_agent(tmp_path, monkeypatch):
+    """Regression: `--split --only N --dry-run` executed the agent for real and wrote files."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "features.json").write_text(
+        json.dumps({"features": [{"title": "A", "description": "d"}]}), encoding="utf-8")
+    big = tmp_path / "brief.md"
+    big.write_text("x" * 5000, encoding="utf-8")
+    seen = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, dry_run=False, **kw):
+        seen.append((step, dry_run))
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=0.0, error="dry-run")
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    S.do_specify_split(cfg, "@" + str(big), None, harness=SimpleNamespace(name="codex"),
+                       dry_run=True, only=[1])
+    assert seen == [("specify-1", True)]      # dry_run reached the step
