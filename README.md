@@ -239,6 +239,18 @@ the clock is visible without overwriting the agent's output:
 [constitution] 00:10 | tools 4 | bash
 ```
 
+Agent JSON is never echoed to the console, even for harnesses that echo prose: whole JSON lines and
+anything over 1200 characters stay in the log. A step ends with the outcome, not a transcript:
+
+```
+7 spec(s) generated
+  specs/001-api-v1-platform-foundation/spec.md
+  specs/002-catalog-configuration-permissions/spec.md
+  …
+
+  run 20261114-125940  ·  6m20s
+```
+
 What it tells you: the step, the elapsed time, how many Goldfish subagents have been spawned, how many
 tool calls ran, and the last subagent — so you can see the review moving through the stage reports
 instead of guessing. Before the first event it reads `starting, usually 3-5 min`, which sets the

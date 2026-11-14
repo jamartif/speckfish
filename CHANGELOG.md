@@ -3,6 +3,16 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.27
+
+- Fix: `--split` listed the features and then aborted with "the agent did not return a usable feature
+  list" when the harness has no `--json-schema` (codex): the loop still used the old
+  `structured`-only lookup. It now uses the recovered inventory, so N features produce N specs.
+- The console no longer echoes the agent's JSON, even on harnesses that echo prose: whole JSON lines
+  and lines over 1200 characters stay in the log (`is_noise_line`).
+- `specify --split` ends with a short result — how many specs, their paths, the run duration — and for
+  `--inventory-only`, the proposed count plus where the cut was saved.
+
 ## 0.1.26
 
 - Fix: the progress line was disabled for harnesses that echo prose (`codex`), which is exactly the

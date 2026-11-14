@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 from . import prompts
@@ -496,6 +497,12 @@ def inventory_payload(res, cfg: Config) -> dict:
     data = res.structured if isinstance(res.structured, dict) else {}
     if data.get("features"):
         return data
+    # harnesses that keep the transcript in memory (raw_tail) before it is on disk
+    tail = getattr(res, "raw_tail", "") or ""
+    if tail:
+        found = json_object_with(tail, "features")
+        if found:
+            return found
     for source in (res.log,):
         if not source:
             continue
@@ -521,7 +528,8 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
     """
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
-    out: dict = {"run_id": rid, "harness": h.name, "steps": {}, "features": []}
+    out: dict = {"run_id": rid, "harness": h.name, "steps": {}, "features": [], "specs": [],
+                 "started": datetime.now().isoformat(timespec="seconds")}
 
     inventory = run_step(cfg, h, "specify-split", with_language(prompts.split_prompt(material, max_features, cfg.root), cfg),
                          cfg.root, rid, cfg.egm_path(), schema=prompts.SPLIT_SCHEMA,
@@ -539,19 +547,20 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
         out["dry_run"] = bool(dry_run)
         return out
 
-    features = extract_features(inventory)
     if not features:
         out["error"] = "the agent did not return a usable feature list"
         out["raw"] = (inventory.raw_tail or "")[:1500]
         return out
-    out["features"] = [f["title"] for f in features]
 
     for i, feat in enumerate(features, start=1):
-        idea = f"{feat['title']}. {feat['description']}".strip()
+        idea = f"{feat.get('title', '')}. {feat.get('description', '')}".strip()
         res = run_step(cfg, h, f"specify-{i}", prompts.specify_prompt(idea, cfg.root),
                        cfg.root, rid, cfg.egm_path(), schema=prompts.SCHEMAS["specify"],
                        stream=stream)
         out["steps"][f"specify-{i}"] = res.to_dict()
+        written = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
+        if Path(written).exists():
+            out["specs"].append({"feature": feat.get("title", ""), "path": norm(written)})
         if not res.ok:
             out["stopped_at"] = f"specify-{i}"
             break
@@ -566,19 +575,13 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
     return out
 
 
-def extract_features(res) -> list[dict]:
+def extract_features(res, cfg: Config | None = None) -> list[dict]:
     """Pull [{title, description}] out of a split step, whatever the harness returned."""
-    data = res.structured or {}
-    raw = res.raw_tail or ""
-    if not data and raw:
-        start, end = raw.find("{"), raw.rfind("}")
-        if start >= 0 and end > start:
-            try:
-                data = json.loads(raw[start:end + 1])
-            except Exception:
-                data = {}
+    found = inventory_payload(res, cfg or Config(root=Path.cwd())).get("features") or []
     feats = []
-    for item in (data.get("features") or []):
+    for item in found:
+        if not isinstance(item, dict):
+            continue
         title = str(item.get("title") or "").strip()
         desc = str(item.get("description") or "").strip()
         if title or desc:
