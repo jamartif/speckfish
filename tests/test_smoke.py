@@ -1043,3 +1043,57 @@ def test_inventory_payload_reads_the_struct_log(tmp_path):
                      log=str(log), structured=None)
     payload = inventory_payload(res, Config(root=tmp_path))
     assert payload["features"][0]["title"] == "X"
+
+
+# ---------- one step over every feature ----------
+def test_feature_batch_stops_at_the_first_failure(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b", "003-c"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    seen = []
+
+    def fake_plan(cfg_, stack, run_id=None, harness=None, stream=True, dry_run=False, feature=None):
+        seen.append(feature)
+        ok = feature != "002-b"                      # the middle one breaks
+        return StepResult(step="plan", ok=ok, exit_code=0 if ok else 2, duration_s=1.0,
+                          error="" if ok else "boom", cost=0.5, cost_unit="usd")
+
+    monkeypatch.setattr(S, "do_plan", fake_plan)
+    feats = S.features_with_spec(cfg)
+    batch = S.do_feature_batch(cfg, "plan", feats, harness=None)
+    assert seen == ["001-a", "002-b"]                # 003 never ran
+    assert batch["stopped_at"] == "002-b"
+    assert batch["done"] is False
+    assert batch["total_cost"] == 1.0
+
+
+def test_batch_summary_says_where_it_stopped():
+    from speckfish.cli import batch_summary
+    text = batch_summary({"action": "tasks", "run_id": "r1", "order": ["001-a", "002-b"],
+                          "steps": {"001-a": {"ok": True, "duration_s": 61.0},
+                                    "002-b": {"ok": False, "duration_s": 12.0, "error": "boom"}},
+                          "stopped_at": "002-b", "total_cost": 0.0})
+    assert "OK     001-a" in text and "FAILED 002-b" in text
+    assert "stopped at 002-b" in text and "boom" in text
+
+
+def test_all_features_reaches_every_feature(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(S, "do_plan", lambda cfg, stack, rid=None, h=None, stream=True,
+                        dry_run=False, feature=None: (calls.append(feature),
+                                                      StepResult(step="plan", ok=True,
+                                                                 exit_code=0, duration_s=1.0))[1])
+    monkeypatch.setattr(S, "get_harness", lambda cfg: object())
+    assert C.main(["--root", str(tmp_path), "plan", "x", "--all-features"]) == 0
+    assert calls == ["001-a", "002-b"]

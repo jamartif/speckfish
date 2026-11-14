@@ -298,6 +298,45 @@ def with_language(prompt: str, cfg: Config) -> str:
     return prompt
 
 
+BATCHABLE = ("plan", "tasks", "analyze")
+
+
+def features_with_spec(cfg: Config) -> list[Path]:
+    """Every feature that already has a spec.md, in name order (the order the user created them)."""
+    specs_dir = cfg.root / "specs"
+    if not specs_dir.is_dir():
+        return []
+    return [d for d in sorted(specs_dir.iterdir()) if d.is_dir() and (d / "spec.md").exists()]
+
+
+def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Harness | None = None,
+                     run_id: str | None = None, stack: str = "", args: str = "",
+                     stream: bool = True, dry_run: bool = False) -> dict:
+    """Run one step over every feature, in order, stopping at the first failure.
+
+    Spec Kit itself works on a single active feature, so N features mean N agent runs; this walks
+    them without hiding each result.
+    """
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    out: dict = {"run_id": rid, "action": action, "harness": h.name, "steps": {},
+                 "order": [f.name for f in features], "stopped_at": None, "total_cost": 0.0}
+    for f in features:
+        set_active_feature(cfg, f)
+        if action == "plan":
+            res = do_plan(cfg, stack, rid, h, stream, dry_run, feature=f.name)
+        else:
+            res = do_skill(cfg, action, args, rid, h, stream, dry_run, feature=f.name)
+        out["steps"][f.name] = res.to_dict()
+        if res.cost and res.cost_unit == "usd":
+            out["total_cost"] += float(res.cost)
+        if not res.ok:
+            out["stopped_at"] = f.name
+            break
+    out["done"] = out["stopped_at"] is None
+    return out
+
+
 def do_specify(cfg: Config, idea: str, run_id: str | None = None,
                harness: Harness | None = None, stream: bool = True,
                dry_run: bool = False, review: bool = False) -> StepResult:
