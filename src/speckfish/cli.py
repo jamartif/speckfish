@@ -44,6 +44,13 @@ def _dur(seconds) -> str:
     return f"{int(s // 60)}m{int(s % 60):02d}s" if s >= 60 else f"{s:.0f}s"
 
 
+ERROR_HINTS = {
+    "quota": "fix: wait for the limit to reset, or run the same step with another agent "
+             "(`--harness copilot`). Nothing was lost: retry the same command.",
+    "auth": "fix: authenticate the agent CLI (`claude` / `copilot` login) and retry.",
+}
+
+
 def summarize(res: dict, root: str | None = None) -> str:
     """One screen of plain text: what ran, what it found, where the report is."""
     ok = res.get("ok")
@@ -93,6 +100,9 @@ def summarize(res: dict, root: str | None = None) -> str:
 
     if res.get("error"):
         lines.append(f"  ERROR  {res['error']}")
+        hint = ERROR_HINTS.get(res.get("error_kind") or "")
+        if hint:
+            lines.append(f"  {hint}")
     if res.get("artifact_dir"):
         lines.append("")
         lines.append(f"  artifacts: {_rel(res['artifact_dir'], root)}")
@@ -145,6 +155,9 @@ def doctor_summary(info: dict) -> str:
 
 def exit_for(res: dict) -> int:
     if not res.get("ok"):
+        # out of quota or bad credentials is the environment, not the document
+        if res.get("error_kind") in ("quota", "auth"):
+            return EXIT_ENV
         return EXIT_ERROR
     # exit 1 only with blockers: "does not meet the standard" is read from the JSON
     if res.get("step") in ("review", "drift") and res.get("blockers"):

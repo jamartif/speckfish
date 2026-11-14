@@ -809,3 +809,50 @@ def test_report_without_runs_fails_clearly(tmp_path, capsys):
     from speckfish import cli as C
     assert C.main(["--root", str(tmp_path), "report"]) == 2
     assert "no report found" in capsys.readouterr().err
+
+
+# ---------- failures must be readable too ----------
+QUOTA_JSON = (
+    '{"duration_api_ms":792,"session_id":"x","permission_denials":[],"is_error":true,'
+    '"num_turns":1,"api_error_status":429,"api_error_origin":"first_party",'
+    '"api_error":"usage_limit_reached","result":"You\'ve hit your weekly limit \u00b7 resets 8pm '
+    '(Europe/Madrid)","type":"result","subagent_stats":{"spawned":0}}'
+)
+
+
+def test_quota_failure_is_reported_as_a_sentence():
+    from speckfish.runner import error_kind, human_error
+    assert error_kind(QUOTA_JSON, "") == "quota"
+    msg = human_error(QUOTA_JSON, "", 1)
+    assert "ran out of quota" in msg and "weekly limit" in msg
+    assert "{" not in msg and "subagent_stats" not in msg
+
+
+def test_quota_failure_exits_as_environment():
+    from speckfish.cli import summarize
+    res = {"step": "review", "ok": False, "exit_code": 1, "duration_s": 6.0,
+           "error": "the agent ran out of quota (HTTP 429): weekly limit",
+           "error_kind": "quota"}
+    out = summarize(res, "C:/repo")
+    assert "ERROR" in out and "--harness copilot" in out     # tells you what to do
+    assert "{" not in out
+
+
+def test_auth_failure_is_classified():
+    from speckfish.runner import error_kind, human_error
+    raw = '{"is_error":true,"api_error_status":401,"api_error":"authentication_error"}'
+    assert error_kind(raw, "") == "auth"
+    assert "credentials" in human_error(raw, "", 1)
+
+
+def test_plain_text_failure_keeps_a_short_tail():
+    from speckfish.runner import human_error
+    err = "l1\nl2\nl3\ncache miss is old\nboom: cannot start\nsecond line"
+    msg = human_error("", err, 7)
+    assert msg.startswith("exit 7:") and "boom: cannot start" in msg
+    assert "cache miss" not in msg            # only the last useful lines
+
+
+def test_error_without_output_says_so():
+    from speckfish.runner import human_error
+    assert human_error("", "", 1) == "exit 1 with no output"

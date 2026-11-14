@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.21
+
+- Failed runs no longer dump the agent's JSON: `human_error()` classifies the failure
+  (`quota` / `auth` / `agent` / `unknown`) and reads `api_error`, `api_error_status` and `result`,
+  producing e.g. *"the agent ran out of quota (HTTP 429): You've hit your weekly limit · resets 8pm"*.
+  Plain-text failures keep only the last two useful lines.
+- Out-of-quota and bad credentials now exit with **3** (environment) instead of 1, and the summary adds
+  a `fix:` line suggesting to wait or switch `--harness`.
+
 ## 0.1.20
 
 - Console output is readable: the agent's raw JSON is no longer echoed at the user (it is still in
