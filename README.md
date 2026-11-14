@@ -293,6 +293,30 @@ speckfish report --full       # the whole thing
 speckfish report 20261113-211218 --lines 100
 ```
 
+### Exploring before you specify (EGM brainstorm / draft)
+
+Spec Kit turns a decided idea into requirements; it does not explore alternatives. That is what EGM's
+two exploration skills are for, and they are exposed as commands:
+
+```bash
+speckfish brainstorm "an incident manager for small teams" --harness claude   # -> concepts_brief.md
+speckfish draft @concepts_brief.md --harness claude                          # -> design_draft.md
+```
+
+EGM's own chain is `brainstorm → draft → review`, and it feeds a spec, not replaces it:
+
+```
+brainstorm (concepts_brief.md) → draft (design_draft.md) → specify (spec.md) → plan
+```
+
+- **Use them when the input is a vague idea.** With requirements already consolidated, exploring is
+  wasted work: those decisions are taken.
+- Both are **conversational by design** — `egm-draft` asks "how would you like to proceed?" between
+  sections. Headless they still write the artifact, but every unconfirmed decision is marked as a
+  hypothesis. Read it as a draft, never as a decision.
+- `draft` overlaps with `plan`: Spec Kit's plan is the technical design that tasks are built from, and
+  it is written for the implementation, not for exploration. Running both is duplicating.
+
 ### One feature at a time (or all of them)
 
 Spec Kit works on **one feature at a time**: the one in `.specify/feature.json`. That means

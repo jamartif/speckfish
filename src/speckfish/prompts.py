@@ -117,6 +117,23 @@ def egm_prompt_for(harness: str, kind: str, target: str, artifact_dir: Path,
     return "\n\n".join(head)
 
 
+# EGM exploration skills: they feed `/egm-draft` or a review, they do not produce requirements.
+EXPLORE = {
+    "brainstorm": {"skill": "/egm:egm-brainstorm", "writes": "concepts_brief.md"},
+    "draft": {"skill": "/egm:egm-draft", "writes": "design_draft.md"},
+}
+
+
+def explore_prompt(kind: str, material: str, artifact_dir: Path) -> str:
+    """Claude form: `/egm:egm-brainstorm <material>` plus the headless rules."""
+    spec = EXPLORE[kind]
+    parts = [(f"{spec['skill']} {material}").strip(),
+             "Headless run with no user: do not ask questions and do not wait for a review. "
+             "Mark every decision you cannot confirm as a hypothesis instead of inventing it.",
+             f"EGM artifact directory: {norm(artifact_dir)}"]
+    return "\n\n".join(parts)
+
+
 # --- structured output schemas (claude --json-schema) ---
 
 REVIEW_SCHEMA = {

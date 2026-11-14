@@ -284,6 +284,14 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | Non
             res.ok = False
             res.error = ("the agent answered but wrote no spec.md under specs/ "
                          "(read-only sandbox, or it only printed the spec)")
+    elif step in ("brainstorm", "draft"):
+        from .prompts import EXPLORE
+        res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
+        expected = artifact_dir / EXPLORE[step]["writes"]
+        if res.ok and not expected.exists():
+            res.ok = False
+            res.error = (f"the agent finished but wrote no {expected.name} "
+                         f"(check the log: these skills expect a human to answer)")
     elif step == "drift":
         res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
         if not res.reports:

@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- New `speckfish brainstorm <idea|@file>` and `speckfish draft <concept|@file>`: EGM's exploration
+  skills (concepts_brief.md / design_draft.md) in their own artifact directory, for when the input is
+  still a vague idea. The step fails if the expected artifact is missing, and the prompt marks every
+  unconfirmed decision as a hypothesis. They are conversational by design — expect drafts, not
+  decisions.
+
 - Fix (hang): `activity()` took the status lock and then called `_clear()`/`_write()`, which re-took
   the same non-reentrant `threading.Lock`. The thread reading the agent's output blocked on itself, so
   the clock froze on the same second and nothing else was ever read. Now an `RLock`, with a regression
