@@ -3,6 +3,13 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.26
+
+- Fix: the progress line was disabled for harnesses that echo prose (`codex`), which is exactly the
+  case where its own output says nothing about how long it has been running. It now always shows, as
+  standalone lines every 10 s when the agent owns the terminal (`plain_only`), so the clock and stage
+  never overwrite the agent's text.
+
 ## 0.1.25
 
 - `plan --all-features`, `tasks --all-features`, `analyze --all-features`: run the step over every

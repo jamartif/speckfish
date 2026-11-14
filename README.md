@@ -229,10 +229,14 @@ in `.speckfish/runs/<id>/logs/`.
 ### Watching it work
 
 A three-minute silent subprocess looks like a hang, so while the agent runs the console shows one
-line that updates itself in place (once a second on a terminal, once every 15 s when output is piped):
+line that updates itself in place (once a second on a terminal). Harnesses that already stream their
+own prose to the same terminal — `codex` — get the status as standalone lines every 10 s instead, so
+the clock is visible without overwriting the agent's output:
 
 ```
 [review] 01:42 | subagents 5 | tools 31 | last egm:egm-zoom-out
+[constitution] 00:00 | starting, usually 1-2 min
+[constitution] 00:10 | tools 4 | bash
 ```
 
 What it tells you: the step, the elapsed time, how many Goldfish subagents have been spawned, how many
