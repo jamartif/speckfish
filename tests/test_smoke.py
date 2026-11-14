@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -1064,7 +1065,7 @@ def test_feature_batch_stops_at_the_first_failure(tmp_path, monkeypatch):
 
     monkeypatch.setattr(S, "do_plan", fake_plan)
     feats = S.features_with_spec(cfg)
-    batch = S.do_feature_batch(cfg, "plan", feats, harness=None)
+    batch = S.do_feature_batch(cfg, "plan", feats, harness=SimpleNamespace(name="fake"))
     assert seen == ["001-a", "002-b"]                # 003 never ran
     assert batch["stopped_at"] == "002-b"
     assert batch["done"] is False
@@ -1094,6 +1095,7 @@ def test_all_features_reaches_every_feature(tmp_path, monkeypatch):
                         dry_run=False, feature=None: (calls.append(feature),
                                                       StepResult(step="plan", ok=True,
                                                                  exit_code=0, duration_s=1.0))[1])
-    monkeypatch.setattr(S, "get_harness", lambda cfg: object())
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    monkeypatch.setattr(S, "get_harness", lambda cfg: SimpleNamespace(name="fake"))
     assert C.main(["--root", str(tmp_path), "plan", "x", "--all-features"]) == 0
     assert calls == ["001-a", "002-b"]
