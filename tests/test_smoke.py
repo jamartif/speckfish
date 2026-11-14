@@ -856,3 +856,109 @@ def test_plain_text_failure_keeps_a_short_tail():
 def test_error_without_output_says_so():
     from speckfish.runner import human_error
     assert human_error("", "", 1) == "exit 1 with no output"
+
+
+# ---------- live progress while the agent works ----------
+def _stream_events():
+    """Real shape of claude --output-format stream-json events."""
+    return [
+        '{"type":"system","subtype":"init","tools":["Agent","Read"]}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",'
+        '"input":{"file_path":"specs/002/spec.md"}}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent",'
+        '"input":{"subagent_type":"egm:egm-zoom-out"}}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent",'
+        '"input":{"subagent_type":"egm:egm-comprehension"}}]}}',
+        '{"type":"result","subtype":"success","total_cost_usd":0.5,"num_turns":4,'
+        '"structured_output":{"verdict":"ok","meets_standard":true,"blockers":[],"majors":0,'
+        '"nits":0,"reports":[]},"usage":{"input_tokens":10,"output_tokens":5}}',
+    ]
+
+
+def test_progress_shows_subagents_and_elapsed_time():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("review", enabled=True, stream=buf, plain_every=0)
+    for line in _stream_events():
+        p.feed(line)
+    status = p.status()
+    assert status.startswith("[review] ")
+    assert "subagents 2" in status
+    assert "egm:egm-comprehension" in status          # tells you where it is
+    assert "tools 3" in status
+    p.stop()
+
+
+def test_progress_never_breaks_a_run_on_garbage():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("plan", enabled=True, stream=buf, plain_every=0)
+    for junk in ("", "not json", "{broken", "[]", '{"type":"weird"}', None):
+        p.feed(junk)
+    assert p.status().startswith("[plan]")
+    p.stop()
+
+
+def test_progress_prints_a_line_without_a_tty():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("review", enabled=True, stream=buf, plain_every=0)
+    p.feed(_stream_events()[3])
+    p._draw()
+    assert "[review] 00:0" in buf.getvalue()
+
+
+def test_progress_can_be_switched_off_globally():
+    import io
+
+    from speckfish import progress as P
+    buf = io.StringIO()
+    old, P.ENABLED = P.ENABLED, False
+    try:
+        p = P.Progress("review", enabled=True, stream=buf, plain_every=0)
+        assert p.enabled is False
+        p.feed(_stream_events()[3])
+        p.start()
+        p.stop()
+        assert buf.getvalue() == ""
+    finally:
+        P.ENABLED = old
+
+
+def test_claude_parses_stream_json_events():
+    from speckfish.harnesses import ClaudeHarness
+    out = "\n".join(_stream_events()) + "\n"
+    parsed = ClaudeHarness.parse_output(None, out, "", 0)
+    assert parsed["cost_usd"] == 0.5
+    assert parsed["structured"]["verdict"] == "ok"
+    assert parsed["model"] is None or isinstance(parsed["model"], str)
+
+
+def test_real_claude_stream_quota_fixture(tmp_path):
+    """A captured stream-json run that hit the weekly limit (fixture, not invented)."""
+    from speckfish.runner import error_kind, human_error
+    raw = (Path(__file__).parent / "fixtures" / "claude_quota_stream.jsonl").read_text(encoding="utf-8")
+    assert error_kind(raw, "") == "quota"
+    msg = human_error(raw, "", 1)
+    assert "ran out of quota" in msg and "429" in msg
+    assert "reopens at" in msg                      # tells you when to retry
+    assert "rate_limit_event" not in msg and '"type"' not in msg
+
+
+def test_progress_notices_a_rate_limit():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("review", enabled=True, stream=buf, plain_every=0)
+    raw = (Path(__file__).parent / "fixtures" / "claude_quota_stream.jsonl").read_text(encoding="utf-8")
+    for line in raw.splitlines():
+        p.feed(line)
+    assert p.status().startswith("[review]")
+    p.stop()

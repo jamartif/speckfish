@@ -3,6 +3,20 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## 0.1.22
+
+- Live progress while an agent works: `[review] 01:42 | subagents 5 | tools 31 | last
+  egm:egm-zoom-out`, refreshed in place once a second (one line every 15 s when piped). Built from the
+  events the CLI already emits, so it costs nothing. Erased when the step ends. `--no-progress` turns
+  it off (`--quiet` / `--json` imply it).
+- Claude now runs with `--output-format stream-json --verbose` instead of `json`: that is what makes
+  the progress possible. Output parsing reads the last `result` event, with the previous whole-object
+  parsing kept as a fallback.
+- Quota failures also report when the window reopens (`weekly window reopens at 20:00`), read from
+  `rate_limit_info.resetsAt`, and recognise the `rate_limit_event` / `error: rate_limit` shapes.
+- New fixture `tests/fixtures/claude_quota_stream.jsonl`: a real captured stream-json run that hit the
+  weekly limit, used by two tests.
+
 ## 0.1.21
 
 - Failed runs no longer dump the agent's JSON: `human_error()` classifies the failure

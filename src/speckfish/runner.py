@@ -72,7 +72,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
-            run_dir: Path, timeout: int, stream: bool = True) -> tuple[int, str, str, float, bool]:
+            run_dir: Path, timeout: int, stream: bool = True,
+            progress: bool = True) -> tuple[int, str, str, float, bool]:
     """Launch the subprocess, write the log and honour the timeout by killing the tree.
 
     stdout is read on a thread so the timeout does not depend on the child
@@ -81,8 +82,12 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     import threading
 
     log_path = run_dir / "logs" / f"{step}.log"
+    from .progress import Progress
+
     echo_lines = getattr(harness, "echo_stdout", False)
+    meter = Progress(step, enabled=progress and not echo_lines)
     started = time.time()
+    meter.start()
     popen_kwargs = dict(cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
                         stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
                         errors="replace", env={**os.environ, **(inv.env or {})})
@@ -102,6 +107,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
                 chunks.append(line)
                 log.write(line)
                 log.flush()
+                meter.feed(line)
                 if echo and stream:
                     sys.stderr.write(line if line.endswith("\n") else line + "\n")
                     sys.stderr.flush()
@@ -124,6 +130,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     t_err.join(timeout=5)
     with contextlib.suppress(Exception):
         log.close()
+    meter.stop()
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
     return code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out
 
@@ -155,15 +162,20 @@ def _json_payloads(text: str) -> list[dict]:
 
 def error_kind(out: str, err: str) -> str:
     """Classify a failed run: quota / auth / agent error / unknown."""
-    for obj in reversed(_json_payloads(out) or _json_payloads(err)):
+    payloads = _json_payloads(out) or _json_payloads(err)
+    for obj in reversed(payloads):
         api = str(obj.get("api_error") or "").lower()
         status = obj.get("api_error_status")
+        if obj.get("type") == "rate_limit_event":
+            info = obj.get("rate_limit_info") or {}
+            if str(info.get("status") or "") == "rejected":
+                return "quota"
         if "usage_limit" in api or "rate_limit" in api or status == 429:
             return "quota"
         if status in (401, 403) or "auth" in api or "credit" in api:
             return "auth"
-        if obj.get("is_error"):
-            return "agent"
+        if obj.get("is_error") or obj.get("error") == "rate_limit":
+            return "quota" if obj.get("error") == "rate_limit" else "agent"
     low = (err or out or "").lower()
     if "usage limit" in low or "rate limit" in low or "429" in low:
         return "quota"
@@ -172,20 +184,49 @@ def error_kind(out: str, err: str) -> str:
     return "unknown"
 
 
+def _reset_hint(payloads: list[dict]) -> str:
+    """`resets 20:00` when the agent tells us when the window reopens."""
+    for obj in reversed(payloads):
+        info = {}
+        if obj.get("type") == "rate_limit_event":
+            info = obj.get("rate_limit_info") or {}
+        info = info or ((obj.get("api_error_params") or {}).get("rate_limit_info") or {})
+        stamp = info.get("resetsAt")
+        if isinstance(stamp, (int, float)) and stamp > 0:
+            try:
+                when = datetime.fromtimestamp(stamp).strftime("%H:%M")
+            except (OverflowError, OSError, ValueError):
+                return ""
+            window = "weekly" if "seven_day" in str(info.get("rateLimitType") or "") else ""
+            return f" · {window} window reopens at {when}".replace("  ", " ")
+    return ""
+
+
+def _best_payload(payloads: list[dict]) -> dict:
+    """The payload that carries the human message, not just the last event."""
+    for obj in reversed(payloads):
+        if obj.get("result") or obj.get("error") or obj.get("api_error"):
+            return obj
+    return payloads[-1] if payloads else {}
+
+
 def human_error(out: str, err: str, code: int) -> str:
     """A message a human can act on — never the agent's JSON payload."""
-    payload = _json_payloads(out) or _json_payloads(err) or [{}]
-    obj = payload[-1]
+    payloads = _json_payloads(out) or _json_payloads(err)
+    obj = _best_payload(payloads)
     message = str(obj.get("result") or obj.get("error") or "").strip()
+    if message in ("rate_limit", "error"):
+        message = ""
     api = str(obj.get("api_error") or "").strip()
     status = obj.get("api_error_status")
+    hint = _reset_hint(payloads)
 
     kind = error_kind(out, err)
     if kind == "quota":
         detail = message or api or "rate limit reached"
-        return f"the agent ran out of quota (HTTP {status or 429}): {detail}"
+        return f"the agent ran out of quota (HTTP {status or 429}): {detail}{hint}"
     if kind == "auth":
-        return f"the agent rejected the credentials: {message or api or 'not authenticated'}"
+        return f"the agent rejected the credentials: {message or api or 'not authenticated'}{hint}"
     if kind == "agent" and message:
         return message[:300]
     if message:
@@ -253,7 +294,8 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
 def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
              run_id: str, egm_root: Path | None, timeout: int | None = None,
              budget: float | None = None, schema: dict | None = None,
-             stream: bool = True, dry_run: bool = False) -> StepResult:
+             stream: bool = True, dry_run: bool = False,
+             progress: bool = True) -> StepResult:
     run_dir = run_dir_for(cfg, run_id)
     artifact_dir = run_dir / "artifacts" / step
     artifact_dir.mkdir(parents=True, exist_ok=True)
@@ -265,7 +307,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
                           log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
                           error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
-    code, out, err, duration, timed_out = execute(harness, inv, step, cwd, run_dir, timeout, stream)
+    code, out, err, duration, timed_out = execute(harness, inv, step, cwd, run_dir, timeout, stream,
+                                                  progress)
     parsed = harness.parse_output(out, err, code) or {}
     res = StepResult(step=step, ok=(code == 0 and not timed_out), exit_code=code,
                      duration_s=round(duration, 1), log=norm(run_dir / "logs" / f"{step}.log"),

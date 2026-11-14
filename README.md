@@ -226,6 +226,23 @@ Out of quota (HTTP 429) and bad credentials (401/403) exit with **3** (environme
 tell "the document has problems" apart from "the agent could not run". The agent's full output stays
 in `.speckfish/runs/<id>/logs/`.
 
+### Watching it work
+
+A three-minute silent subprocess looks like a hang, so while the agent runs the console shows one
+line that updates itself in place (once a second on a terminal, once every 15 s when output is piped):
+
+```
+[review] 01:42 | subagents 5 | tools 31 | last egm:egm-zoom-out
+```
+
+What it tells you: the step, the elapsed time, how many Goldfish subagents have been spawned, how many
+tool calls ran, and the last subagent — so you can see the review moving through the stage reports
+instead of guessing. Before the first event it reads `starting, usually 3-5 min`, which sets the
+expectation for that step. Turn it off with `--no-progress` (also implied by `--quiet` and `--json`).
+
+When the step ends the line is erased and the summary takes over. Everything the agent printed is
+still written to `.speckfish/runs/<id>/logs/<step>.log`.
+
 ### Reading the outcome
 
 The console shows a summary, never the agent's raw JSON. For a review that is:
