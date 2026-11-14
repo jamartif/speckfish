@@ -83,7 +83,8 @@ class ClaudeHarness(Harness):
     supports_schema = True
     supports_budget = True
     verified = True
-    notes = "Verificado en Windows: slash /egm:*, --plugin-dir, --json-schema, --max-budget-usd."
+    notes = ("Verified on Windows: /egm:* slash commands, --plugin-dir, --json-schema, "
+             "--max-budget-usd, --output-format stream-json.")
 
     def binary(self):
         return shutil.which("claude")
