@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- README: full **command reference** (all 22 commands with their real flags, global flags included) and
+  a **worked example** end to end with measured timings.
+- `docs/flow.svg` redrawn: four lanes (discover / specify / verify / ship) with `brainstorm`, `draft`,
+  `report`, `--split/--only/--from-feature`, `--all-features`, and `codex` marked verified against an
+  OpenAI-compatible provider. Mermaid diagrams updated to match (tasks + report in the sequence).
+
 - New `speckfish brainstorm <idea|@file>` and `speckfish draft <concept|@file>`: EGM's exploration
   skills (concepts_brief.md / design_draft.md) in their own artifact directory, for when the input is
   still a vague idea. The step fails if the expected artifact is missing, and the prompt marks every

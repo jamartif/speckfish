@@ -1,109 +1,147 @@
-<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="620" viewBox="0 0 1160 620" role="img" aria-labelledby="t d">
-  <title id="t">speckfish pipeline</title>
-  <desc id="d">Spec Kit generates the spec and the plan, EGM reviews them with clean-context subagents and reports drift. Each step is one agent subprocess; every run keeps its own logs, artifacts and state.</desc>
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="716" viewBox="0 0 1240 716" role="img" aria-labelledby="t d">
+  <title id="t">speckfish flow</title>
+  <desc id="d">speckfish orchestrates Spec Kit (init, constitution, specify, plan, tasks) and EGM (brainstorm, draft, review, drift) as one agent subprocess per step, with per-run logs, artifacts and state and a short readable summary.</desc>
 
   <defs>
     <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
-      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#64748b"/>
     </marker>
     <style>
       .t  { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
       .m  { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
-      .h1 { font-size: 26px; font-weight: 700; fill: #0f172a; }
-      .h2 { font-size: 13px; font-weight: 600; fill: #475569; letter-spacing: .09em; }
-      .lbl{ font-size: 14px; font-weight: 600; fill: #0f172a; }
-      .sm { font-size: 12px; fill: #475569; }
-      .xs { font-size: 11px; fill: #64748b; }
-      .box      { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.5; }
-      .box-blue { fill: #eff6ff; stroke: #1b6ef3; stroke-width: 1.5; }
-      .box-green{ fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.5; }
-      .box-amber{ fill: #fffbeb; stroke: #d97706; stroke-width: 1.5; }
-      .chip     { fill: #ffffff; stroke: #cbd5e1; stroke-width: 1; }
-      .edge     { stroke: #94a3b8; stroke-width: 1.6; fill: none; }
+      .h1 { font-size: 25px; font-weight: 700; fill: #0f172a; }
+      .lbl{ font-size: 13.5px; font-weight: 700; fill: #0f172a; }
+      .sm { font-size: 11.5px; fill: #475569; }
+      .xs { font-size: 10.5px; fill: #64748b; }
+      .lane { font-size: 11px; font-weight: 700; fill: #64748b; letter-spacing: .12em; }
+      .box       { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.4; }
+      .box-blue  { fill: #eff6ff; stroke: #1b6ef3; stroke-width: 1.4; }
+      .box-green { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.4; }
+      .box-amber { fill: #fffbeb; stroke: #d97706; stroke-width: 1.4; }
+      .box-gray  { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 5 4; }
+      .panel     { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.2; }
+      .edge      { stroke: #94a3b8; stroke-width: 1.5; fill: none; }
+      .dash      { stroke: #cbd5e1; stroke-width: 1.3; fill: none; stroke-dasharray: 5 4; }
     </style>
   </defs>
 
-  <rect x="0" y="0" width="1160" height="620" fill="#ffffff"/>
-  <rect x="0.75" y="0.75" width="1158.5" height="618.5" fill="none" stroke="#e2e8f0" rx="18"/>
+  <rect x="0" y="0" width="1240" height="716" fill="#ffffff"/>
+  <rect x="0.75" y="0.75" width="1238.5" height="714.5" fill="none" stroke="#e2e8f0" rx="18"/>
 
-  <text class="t h1" x="40" y="56">🐟 speckfish — specify → plan → goldfish review</text>
-  <text class="t sm" x="40" y="80">Headless Spec Kit + Elephant-Goldfish Model over agent CLIs. One agent subprocess per step, artifacts per run.</text>
+  <text class="t h1" x="40" y="52">🐟 speckfish — one orchestrator over Spec Kit + EGM</text>
+  <text class="t sm" x="40" y="74">One agent subprocess per step · artifacts, logs and state per run · a short summary instead of a transcript.</text>
 
-  <!-- lane labels -->
-  <text class="t h2" x="40" y="126">PIPELINE</text>
+  <text class="t lane" x="40" y="112">A · DESCUBRIR — OPCIONAL, SOLO SI EL INPUT ES UNA IDEA</text>
+  <rect class="box-amber" x="40" y="124" width="186" height="66" rx="10"/>
+  <text class="m lbl" x="54" y="148">speckfish brainstorm</text>
+  <text class="t sm" x="54" y="166">concepts_brief.md</text>
+  <text class="t xs" x="54" y="181">alternativas · riesgos · hipótesis</text>
 
-  <!-- nodes -->
-  <!-- init -->
-  <rect class="box" x="40" y="140" width="188" height="86" rx="12"/>
-  <text class="t lbl" x="58" y="168">speckfish init</text>
-  <text class="m sm" x="58" y="190">git init</text>
-  <text class="m sm" x="58" y="208">specify init</text>
-  <text class="m xs" x="58" y="222">clone EGM → vendor/</text>
+  <rect class="box-amber" x="256" y="124" width="186" height="66" rx="10"/>
+  <text class="m lbl" x="270" y="148">speckfish draft</text>
+  <text class="t sm" x="270" y="166">design_draft.md</text>
+  <text class="t xs" x="270" y="181">conversacional: marca hipótesis</text>
 
-  <!-- specify -->
-  <rect class="box-blue" x="268" y="140" width="188" height="86" rx="12"/>
-  <text class="t lbl" x="286" y="168">speckfish specify</text>
-  <text class="m sm" x="286" y="190">/speckit-specify</text>
-  <text class="m xs" x="286" y="210">→ specs/NNN-*/spec.md</text>
-  <text class="m xs" x="286" y="224">checklists/requirements.md</text>
+  <rect class="box-gray" x="472" y="124" width="196" height="66" rx="10"/>
+  <text class="t lbl" x="486" y="148">¿ya hay un brief?</text>
+  <text class="t sm" x="486" y="166">@brief.md pasa al carril B</text>
+  <text class="t xs" x="486" y="181">con requisitos cerrados, salta A</text>
 
-  <!-- plan -->
-  <rect class="box-blue" x="496" y="140" width="188" height="86" rx="12"/>
-  <text class="t lbl" x="514" y="168">speckfish plan</text>
-  <text class="m sm" x="514" y="190">/speckit-plan</text>
-  <text class="m xs" x="514" y="210">→ plan.md + research.md</text>
-  <text class="m xs" x="514" y="224">contracts/ · data-model.md</text>
+  <path class="edge" d="M226 157 H256" marker-end="url(#arw)"/>
+  <path class="edge" d="M442 157 H472" marker-end="url(#arw)"/>
+  <path class="dash" d="M570 190 V206 H126 V226" marker-end="url(#arw)"/>
 
-  <!-- review -->
-  <rect class="box-amber" x="724" y="128" width="240" height="110" rx="12"/>
-  <text class="t lbl" x="742" y="156">speckfish review</text>
-  <text class="m sm" x="742" y="178">/egm:egm-review</text>
-  <text class="m xs" x="742" y="198">5 subagents, clean context</text>
-  <text class="m xs" x="742" y="212">zoom-out · comprehension · critic</text>
-  <text class="m xs" x="742" y="226">→ verdict: blockers/majors/nits</text>
+  <text class="t lane" x="40" y="250">B · ESPECIFICAR — SPEC KIT</text>
 
-  <!-- drift -->
-  <rect class="box-green" x="984" y="128" width="136" height="110" rx="12"/>
-  <text class="t lbl" x="1000" y="156">speckfish drift</text>
-  <text class="m sm" x="1000" y="178">egm-drift-report</text>
-  <text class="m xs" x="1000" y="198">design vs code</text>
-  <text class="m xs" x="1000" y="216">→ DRIFT_REPORT.md</text>
+  <rect class="box" x="40" y="262" width="150" height="70" rx="10"/>
+  <text class="m lbl" x="54" y="286">init</text>
+  <text class="t sm" x="54" y="304">git · .specify/</text>
+  <text class="t xs" x="54" y="319">skills · EGM en vendor/</text>
 
-  <!-- edges -->
-  <path class="edge" d="M228 183 H262" marker-end="url(#arw)"/>
-  <path class="edge" d="M456 183 H490" marker-end="url(#arw)"/>
-  <path class="edge" d="M684 183 H718" marker-end="url(#arw)"/>
-  <path class="edge" d="M964 183 H978" marker-end="url(#arw)"/>
+  <rect class="box" x="214" y="262" width="170" height="70" rx="10"/>
+  <text class="m lbl" x="228" y="286">constitution</text>
+  <text class="t sm" x="228" y="304">.specify/memory/</text>
+  <text class="t xs" x="228" y="319">@template.md</text>
 
-  <!-- exit codes -->
-  <text class="t h2" x="40" y="286">EXIT CODES</text>
-  <rect class="chip" x="40" y="298" width="120" height="34" rx="8"/>
-  <text class="m sm" x="54" y="320">0  ok</text>
-  <rect class="chip" x="172" y="298" width="164" height="34" rx="8"/>
-  <text class="m sm" x="186" y="320">1  blockers</text>
-  <rect class="chip" x="348" y="298" width="190" height="34" rx="8"/>
-  <text class="m sm" x="362" y="320">2  execution error</text>
-  <rect class="chip" x="550" y="298" width="184" height="34" rx="8"/>
-  <text class="m sm" x="564" y="320">3  environment</text>
-  <text class="t xs" x="748" y="320">→ fits CI gates:  speckfish review --gate</text>
+  <rect class="box-blue" x="408" y="262" width="190" height="70" rx="10"/>
+  <text class="m lbl" x="422" y="286">specify</text>
+  <text class="t sm" x="422" y="304">specs/NNN-slug/spec.md</text>
+  <text class="t xs" x="422" y="319">--split · --only · --from-feature</text>
 
-  <!-- harness layer -->
-  <text class="t h2" x="40" y="382">HARNESS ADAPTERS — one subprocess per step</text>
-  <rect class="box" x="40" y="396" width="1080" height="76" rx="12"/>
-  <rect class="chip" x="60" y="414" width="180" height="40" rx="9"/>
-  <text class="m sm" x="74" y="439">claude -p  ✓ verified</text>
-  <rect class="chip" x="252" y="414" width="188" height="40" rx="9"/>
-  <text class="m sm" x="266" y="439">copilot -p  ✓ verified</text>
-  <rect class="chip" x="452" y="414" width="176" height="40" rx="9"/>
-  <text class="m sm" x="466" y="439">codex exec  ⚠ untested</text>
-  <text class="t xs" x="648" y="432">each step:  --plugin-dir vendor/egm  ·  budget / credits cap  ·  wall-clock timeout</text>
-  <text class="t xs" x="648" y="452">no chained context: every step must write its own artifact</text>
+  <rect class="box-blue" x="622" y="262" width="170" height="70" rx="10"/>
+  <text class="m lbl" x="636" y="286">plan</text>
+  <text class="t sm" x="636" y="304">plan.md · research.md</text>
+  <text class="t xs" x="636" y="319">--feature · --all-features</text>
 
-  <!-- artifacts -->
-  <text class="t h2" x="40" y="512">RUN ARTIFACTS</text>
-  <rect class="box" x="40" y="526" width="1080" height="66" rx="12"/>
-  <text class="m sm" x="60" y="552">.speckfish/runs/&lt;run-id&gt;/</text>
-  <text class="m xs" x="60" y="574">logs/&lt;step&gt;.log   ·   artifacts/&lt;step&gt;/*.md (EGM writes here)   ·   state.json   ·   &lt;step&gt;.result.json</text>
-  <text class="t xs" x="700" y="552">verdict as JSON:  verdict · meets_standard · blockers[] · majors · nits · subagents</text>
-  <text class="t xs" x="700" y="574">artifacts never collide: EGM report names are fixed, run dirs are not</text>
+  <rect class="box-blue" x="816" y="262" width="170" height="70" rx="10"/>
+  <text class="m lbl" x="830" y="286">tasks</text>
+  <text class="t sm" x="830" y="304">tasks.md</text>
+  <text class="t xs" x="830" y="319">analyze · checklist · clarify</text>
+
+  <path class="edge" d="M190 297 H214" marker-end="url(#arw)"/>
+  <path class="edge" d="M384 297 H408" marker-end="url(#arw)"/>
+  <path class="edge" d="M598 297 H622" marker-end="url(#arw)"/>
+  <path class="edge" d="M792 297 H816" marker-end="url(#arw)"/>
+
+  <text class="t lane" x="40" y="392">C · VERIFICAR — EGM, SUBAGENTES GOLDFISH CON CONTEXTO LIMPIO</text>
+
+  <rect class="box-green" x="408" y="404" width="190" height="70" rx="10"/>
+  <text class="m lbl" x="422" y="428">review</text>
+  <text class="t sm" x="422" y="446">consolidated_review_report.md</text>
+  <text class="t xs" x="422" y="461">blockers · majors · nits · veredicto</text>
+
+  <rect class="box-green" x="622" y="404" width="170" height="70" rx="10"/>
+  <text class="m lbl" x="636" y="428">drift</text>
+  <text class="t sm" x="636" y="446">DRIFT_REPORT.md</text>
+  <text class="t xs" x="636" y="461">diseño vs código real</text>
+
+  <rect class="box-gray" x="816" y="404" width="170" height="70" rx="10"/>
+  <text class="m lbl" x="830" y="428">report</text>
+  <text class="t sm" x="830" y="446">imprime el informe</text>
+  <text class="t xs" x="830" y="461">--full · --lines N</text>
+
+  <path class="edge" d="M705 332 V404" marker-end="url(#arw)"/>
+  <path class="edge" d="M598 439 H622" marker-end="url(#arw)"/>
+  <path class="edge" d="M792 439 H816" marker-end="url(#arw)"/>
+
+  <text class="t lane" x="40" y="532">D · ENTREGAR — UNA FEATURE CADA VEZ, CON --yes</text>
+  <rect class="box" x="408" y="544" width="190" height="62" rx="10"/>
+  <text class="m lbl" x="422" y="568">implement</text>
+  <text class="t sm" x="422" y="586">código y tests reales</text>
+  <text class="t xs" x="422" y="600">sin --all-features, a propósito</text>
+
+  <path class="edge" d="M503 474 V544" marker-end="url(#arw)"/>
+
+  <text class="t xs" x="40" y="642">El carril A es exploratorio: sus artefactos son hipótesis, no requisitos. B puede arrancar con un brief de 200 líneas, un @archivo.md o una idea en una línea.</text>
+  <text class="t xs" x="40" y="662">Verificar después del plan es lo que hace útil la review: ahí ya hay decisiones técnicas que criticar.</text>
+
+  <rect class="panel" x="1010" y="102" width="196" height="200" rx="12"/>
+  <text class="t lane" x="1026" y="126">HARNESSES</text>
+  <text class="t sm" x="1026" y="148">claude · verificado</text>
+  <text class="t sm" x="1026" y="166">copilot · verificado</text>
+  <text class="t sm" x="1026" y="184">codex · verificado*</text>
+  <text class="t xs" x="1026" y="204">*proveedor OpenAI-</text>
+  <text class="t xs" x="1026" y="218">compatible (/v1/responses)</text>
+  <text class="t xs" x="1026" y="242">--harness · --model</text>
+  <text class="t xs" x="1026" y="258">--no-progress · --json</text>
+  <text class="t xs" x="1026" y="274">--quiet · --dry-run</text>
+  <text class="t xs" x="1026" y="290">--root</text>
+
+  <rect class="panel" x="1010" y="322" width="196" height="150" rx="12"/>
+  <text class="t lane" x="1026" y="346">EXIT CODES</text>
+  <text class="t sm" x="1026" y="368">0  ok</text>
+  <text class="t sm" x="1026" y="388">1  blockers</text>
+  <text class="t sm" x="1026" y="408">2  error</text>
+  <text class="t sm" x="1026" y="428">3  entorno (cuota, auth)</text>
+  <text class="t xs" x="1026" y="452">cuota ≠ spec mala</text>
+
+  <rect class="panel" x="1010" y="492" width="196" height="172" rx="12"/>
+  <text class="t lane" x="1026" y="516">RUN ARTIFACTS</text>
+  <text class="m xs" x="1026" y="538">.speckfish/runs/&lt;id&gt;/</text>
+  <text class="t xs" x="1038" y="556">state.json</text>
+  <text class="t xs" x="1038" y="574">split.json</text>
+  <text class="t xs" x="1038" y="592">logs/&lt;step&gt;.log</text>
+  <text class="t xs" x="1038" y="610">artifacts/&lt;step&gt;/*.md</text>
+  <text class="t xs" x="1026" y="634">+ specs/features.json</text>
+  <text class="t xs" x="1026" y="652">(el corte aprobado)</text>
 </svg>

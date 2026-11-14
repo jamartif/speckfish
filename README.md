@@ -19,23 +19,29 @@ speckfish pipeline "a task CLI in Python" --stack "stdlib only" --gate
 
 ## The flow at a glance
 
+![speckfish flow](docs/flow.svg)
+
 ```mermaid
 flowchart LR
+    O["(optional) brainstorm / draft<br/><small>EGM exploration: hypotheses</small>"] -.-> B
     A["speckfish init<br/><small>git init · specify init · clone EGM</small>"] --> B
-    B["speckfish specify<br/><small>/speckit-specify</small>"] --> C
-    C["speckfish plan<br/><small>/speckit-plan</small>"] --> D
-    D{"speckfish review<br/><small>5 goldfish subagents</small>"}
-    D -->|"no blockers"| E["speckfish drift<br/><small>egm-drift-report</small>"]
+    B["constitution + specify<br/><small>--split · --inventory-only · --only</small>"] --> C
+    C["speckfish plan<br/><small>--feature · --all-features</small>"] --> C2["tasks / analyze<br/><small>tasks.md · cross-check</small>"]
+    C2 --> D{"speckfish review<br/><small>goldfish subagents, clean context</small>"}
+    D -->|"no blockers"| E["speckfish drift<br/><small>design vs code</small>"]
     D -->|"blockers → exit 1"| F["fix the spec/plan<br/><small>or --interactive</small>"]
     F --> D
-    E --> G["CI gate<br/><small>exit 0 / 1 / 2 / 3</small>"]
+    E --> G["speckfish report<br/><small>the findings, in the terminal</small>"]
+    G --> H["CI gate<br/><small>exit 0 / 1 / 2 / 3</small>"]
 
     classDef step fill:#eff6ff,stroke:#1b6ef3,stroke-width:1.5px,color:#0f172a
     classDef gate fill:#fffbeb,stroke:#d97706,stroke-width:1.5px,color:#0f172a
     classDef out fill:#f0fdf4,stroke:#16a34a,stroke-width:1.5px,color:#0f172a
-    class A,B,C step
+    classDef soft fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.2px,stroke-dasharray:5 4,color:#0f172a
+    class A,B,C,C2 step
     class D,F gate
-    class E,G out
+    class E,G,H out
+    class O soft
 ```
 
 Every step runs as its own subprocess, so the agent never drags context from the previous step:
@@ -54,11 +60,14 @@ sequenceDiagram
     AG-->>FS: logs/specify.log, result JSON
     CLI->>AG: subprocess #2 with /speckit-plan
     AG->>SK: writes plan.md, research.md, contracts/
-    CLI->>AG: subprocess #3 with /egm:egm-review
+    CLI->>AG: subprocess #3 with /speckit-tasks
+    AG->>SK: writes tasks.md
+    CLI->>AG: subprocess #4 with /egm:egm-review
     AG->>GF: spawn reviewer (clean context, read-only tools)
     GF-->>AG: findings per stage
     AG-->>FS: artifacts/review/*.md + verdict
     CLI-->>CLI: parse verdict → blockers / majors / nits → exit code
+    CLI-->>CLI: speckfish report prints the findings in the terminal
 ```
 
 ## What it solves
@@ -225,6 +234,102 @@ FAILED  review  ·  6s  ·  exit 1
 Out of quota (HTTP 429) and bad credentials (401/403) exit with **3** (environment), so a script can
 tell "the document has problems" apart from "the agent could not run". The agent's full output stays
 in `.speckfish/runs/<id>/logs/`.
+
+## Command reference
+
+Global flags accepted by every command (before or after the subcommand):
+
+| Flag | What it does |
+|---|---|
+| `--root <path>` | project root (default: cwd). `~` and `/c/…` are resolved on Windows |
+| `--harness claude\|copilot\|codex` | which agent CLI runs the steps (default: the first installed) |
+| `--model <name>` | forwarded to the agent CLI; otherwise the CLI picks its own |
+| `--json` | machine-readable output on stdout |
+| `--no-progress` / `--quiet` / `--dry-run` | silence the live line / the agent echo / run nothing, print the command |
+| `--stream` | forward the agent's own output (on by default) |
+
+**Setup and inspection**
+
+| Command | Options | What it does |
+|---|---|---|
+| `init` | `--integration claude\|copilot\|codex\|all\|list` · `--no-egm` · `--no-editors` · `--prefix` | git + `specify init` + EGM in `vendor/` + editor commands |
+| `doctor` | — | versions of specify/EGM/harness and project state |
+| `features` | — | every feature under `specs/`, its artifacts and which one is active |
+| `config [key=value]` | `--set` (harness, model, profile, language, egm_root, `timeout.<step>`) | show or store project defaults |
+| `runs` / `show` | `runs --clean --keep N` | list runs / detail one run |
+| `editors` | `--targets` · `--command` · `--prefix` · `--codex-home` · `--no-force` | VS Code tasks, Copilot prompts, Claude commands, Codex prompts |
+
+**Explore (optional, EGM)**
+
+| Command | Options | What it does |
+|---|---|---|
+| `brainstorm <idea\|@file>` | `--run-id` | `concepts_brief.md`: alternatives, risks, hypotheses |
+| `draft <concept\|@file>` | `--run-id` | `design_draft.md`: design sketch (conversational) |
+
+**Specify (Spec Kit)**
+
+| Command | Options | What it does |
+|---|---|---|
+| `constitution [principles\|@file]` | `--feature` | `.specify/memory/constitution.md` |
+| `specify <desc\|@file>` | `--split` · `--max-features N` · `--inventory-only` · `--only 4,5,6` · `--from-feature N` · `--review` | `specs/NNN-slug/spec.md`, one per feature with `--split` |
+| `plan [stack\|@file]` | `--feature` · `--all-features` | `plan.md`, `research.md`, `data-model.md`, `contracts/` |
+| `tasks` | `--feature` · `--all-features` | `tasks.md` |
+| `analyze` · `checklist` · `clarify` · `converge` | `--feature` (`analyze` also `--all-features`) | cross-check, checklist, clarification questions, remaining work |
+
+**Verify (EGM)**
+
+| Command | Options | What it does |
+|---|---|---|
+| `review <doc>` | `--profile` · `--stage` · `--target-file` · `--interactive` | goldfish review → `consolidated_review_report.md` + verdict |
+| `drift <dir>` | — | design vs code → `DRIFT_REPORT.md` |
+| `report` | `--full` · `--lines N` | print the report in the terminal |
+| `pipeline <desc>` | `--stack` · `--target` · `--gate` · `--with-tasks` · `--with-analyze` · `--with-drift` | the chain with one run id |
+
+**Ship**
+
+| Command | Options | What it does |
+|---|---|---|
+| `implement` | `--feature` · `--yes` | writes code and tests (one feature, gated on purpose) |
+
+### A complete worked example
+
+A 230-line requirements document with seven consolidated specs, run on a local OpenAI-compatible model
+(`codex --harness codex`), with the review moved to Copilot because the EGM chain needs an agent that
+coordinates subagents:
+
+```bash
+speckfish init --integration codex,copilot
+speckfish config language=es
+
+speckfish constitution @constitution-template.md --harness codex      # 2m27s → 195 lines, 15 principles
+speckfish specify @requirements.md --split --max-features 7 \
+        --inventory-only --harness codex                              # 75s → specs/features.json (7 features)
+# read specs/features.json, drop or merge what you disagree with, then:
+speckfish specify --split --only 4,5,6,7 --harness codex              # ~8 min per feature, resumable
+
+speckfish plan "C# .NET 10, Minimal API, PostgreSQL, xUnit" \
+        --all-features --harness codex                                # plan.md + research.md + data-model.md
+speckfish tasks --all-features --harness codex                        # tasks.md (401 lines, 139 tasks measured)
+
+speckfish review specs/001-*/plan.md --harness copilot                # ~7 min, 4.9 AI credits
+speckfish report                                                      # verdict + counts + where the report is
+
+speckfish implement --feature 001 --harness copilot --yes             # code + tests, one feature at a time
+speckfish drift specs/001-* --harness copilot
+```
+
+What the console shows while that runs, and what it ends with:
+
+```
+[specify-4] 00:13 | $ Get-Content -Raw .agents/skills/speckit-specify/SKILL.md
+[specify-4] 02:04 | wrote specs/004-external-escalation-test-mode/spec.md
+
+4 spec(s) generated
+  specs/004-external-escalation-test-mode/spec.md
+  …
+
+  run 20261114-230243  ·  34m12s
+```
 
 ### Watching it work
 
