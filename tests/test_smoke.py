@@ -1290,7 +1290,6 @@ def test_split_only_reuses_the_saved_cut(tmp_path, monkeypatch):
                           structured={"feature_dir": str(d)})
 
     monkeypatch.setattr(S, "run_step", fake_run_step)
-    info = {"name": "codex"}
     out = S.do_specify_split(cfg, "", None, harness=SimpleNamespace(name="codex"),
                              only=[3, 4])
     assert "specify-split" not in ran                     # no second inventory
