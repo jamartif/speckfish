@@ -213,6 +213,19 @@ Every Spec Kit skill is a subcommand (the same nine `speckit-*` skills the integ
 Global flags (before or after the subcommand): `--root`, `--harness claude|copilot|codex`,
 `--json`, `--quiet`, `--dry-run`.
 
+When a step fails, the error is a sentence you can act on — never the agent's payload:
+
+```
+FAILED  review  ·  6s  ·  exit 1
+  ERROR  the agent ran out of quota (HTTP 429): You've hit your weekly limit · resets 8pm (Europe/Madrid)
+  fix: wait for the limit to reset, or run the same step with another agent (`--harness copilot`).
+       Nothing was lost: retry the same command.
+```
+
+Out of quota (HTTP 429) and bad credentials (401/403) exit with **3** (environment), so a script can
+tell "the document has problems" apart from "the agent could not run". The agent's full output stays
+in `.speckfish/runs/<id>/logs/`.
+
 ### Reading the outcome
 
 The console shows a summary, never the agent's raw JSON. For a review that is:

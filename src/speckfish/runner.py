@@ -38,6 +38,7 @@ class StepResult:
     model: str | None = None
     denials: list = field(default_factory=list)
     verdict: str = ""
+    error_kind: str = ""
     run_id: str = ""
     writes: str = ""
     interactive: bool = False
@@ -127,6 +128,75 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     return code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out
 
 
+def _json_payloads(text: str) -> list[dict]:
+    """Every JSON object the agent CLI printed, newest last (it emits NDJSON or one big object)."""
+    found = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            found.append(obj)
+    if not found:
+        start = (text or "").find("{")
+        if start >= 0:
+            try:
+                obj = json.loads(text[start:])
+                if isinstance(obj, dict):
+                    found.append(obj)
+            except ValueError:
+                pass
+    return found
+
+
+def error_kind(out: str, err: str) -> str:
+    """Classify a failed run: quota / auth / agent error / unknown."""
+    for obj in reversed(_json_payloads(out) or _json_payloads(err)):
+        api = str(obj.get("api_error") or "").lower()
+        status = obj.get("api_error_status")
+        if "usage_limit" in api or "rate_limit" in api or status == 429:
+            return "quota"
+        if status in (401, 403) or "auth" in api or "credit" in api:
+            return "auth"
+        if obj.get("is_error"):
+            return "agent"
+    low = (err or out or "").lower()
+    if "usage limit" in low or "rate limit" in low or "429" in low:
+        return "quota"
+    if "not logged in" in low or "unauthorized" in low or "credit" in low:
+        return "auth"
+    return "unknown"
+
+
+def human_error(out: str, err: str, code: int) -> str:
+    """A message a human can act on — never the agent's JSON payload."""
+    payload = _json_payloads(out) or _json_payloads(err) or [{}]
+    obj = payload[-1]
+    message = str(obj.get("result") or obj.get("error") or "").strip()
+    api = str(obj.get("api_error") or "").strip()
+    status = obj.get("api_error_status")
+
+    kind = error_kind(out, err)
+    if kind == "quota":
+        detail = message or api or "rate limit reached"
+        return f"the agent ran out of quota (HTTP {status or 429}): {detail}"
+    if kind == "auth":
+        return f"the agent rejected the credentials: {message or api or 'not authenticated'}"
+    if kind == "agent" and message:
+        return message[:300]
+    if message:
+        return f"exit {code}: {message[:300]}"
+
+    tail = [ln.strip() for ln in (err or out or "").splitlines() if ln.strip()][-2:]
+    if not tail:
+        return f"exit {code} with no output"
+    return f"exit {code}: " + " / ".join(t[-160:] for t in tail)
+
+
 def postprocess(res: StepResult, step: str, artifact_dir: Path) -> None:
     """Collect reports and verdict counts written by the agent for this step."""
     from .config import find_report, parse_consolidated
@@ -212,7 +282,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = f"timeout after {timeout}s"
         res.ok = False
     elif code != 0:
-        res.error = f"exit {code}: {(err or out)[-500:]}"
+        res.error = human_error(out, err, code)
+        res.error_kind = error_kind(out, err)
     res.run_id = run_id
     postprocess(res, step, artifact_dir)
     record_state(cfg, run_dir, run_id, res, step, harness, started_at)
