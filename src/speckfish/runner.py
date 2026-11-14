@@ -238,7 +238,7 @@ def human_error(out: str, err: str, code: int) -> str:
     return f"exit {code}: " + " / ".join(t[-160:] for t in tail)
 
 
-def postprocess(res: StepResult, step: str, artifact_dir: Path) -> None:
+def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None) -> None:
     """Collect reports and verdict counts written by the agent for this step."""
     from .config import find_report, parse_consolidated
 
@@ -262,6 +262,13 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path) -> None:
         if not res.reports:
             res.error = res.error or "no reports were written to the artifact directory"
             res.ok = False
+    elif step == "specify":
+        # a run that writes no spec.md is a failure, not a success with a nice essay
+        root = Path(root) if root else None
+        if res.ok and root is not None and not list((root / "specs").glob("*/spec.md")):
+            res.ok = False
+            res.error = ("the agent answered but wrote no spec.md under specs/ "
+                         "(read-only sandbox, or it only printed the spec)")
     elif step == "drift":
         res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
         if not res.reports:
@@ -328,7 +335,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = human_error(out, err, code)
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
-    postprocess(res, step, artifact_dir)
+    postprocess(res, step, artifact_dir, cwd)
     record_state(cfg, run_dir, run_id, res, step, harness, started_at)
     return res
 
@@ -376,6 +383,6 @@ def run_interactive(cfg: Config, harness: Harness, step: str, prompt: str, cwd: 
     if code != 0:
         res.error = f"exit {code}"
     res.run_id = run_id
-    postprocess(res, step, artifact_dir)
+    postprocess(res, step, artifact_dir, cwd)
     record_state(cfg, run_dir, run_id, res, step, harness, started_at)
     return res

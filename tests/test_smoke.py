@@ -109,7 +109,10 @@ def test_codex_argv(tmp_path):
     cfg = _cfg(tmp_path)
     inv = CodexHarness(cfg).build("review", "p", tmp_path, tmp_path, None,
                                   None, 60, None)
-    assert inv.argv[1] == "exec"
+    assert "exec" in inv.argv
+    assert inv.argv[inv.argv.index("exec") + 1] == "--skip-git-repo-check"
+    # 0.169 ignores --sandbox workspace-write in exec: only the bypass actually writes files
+    assert "--dangerously-bypass-approvals-and-sandbox" in inv.argv
 
 
 def test_dry_run_does_not_execute(tmp_path):
@@ -962,3 +965,55 @@ def test_progress_notices_a_rate_limit():
         p.feed(line)
     assert p.status().startswith("[review]")
     p.stop()
+
+
+# ---------- codex adapter: what a real run taught us ----------
+def test_codex_bypasses_sandbox_or_it_cannot_write(tmp_path):
+    cfg = _cfg(tmp_path)
+    argv = CodexHarness(cfg).build("specify", "p", tmp_path, tmp_path, None,
+                                   None, 60, None).argv
+    assert "--dangerously-bypass-approvals-and-sandbox" in argv
+
+
+def test_designated_spec_is_verified_not_assumed(tmp_path):
+    """A step that says ok but writes no spec.md is a failure (codex read-only sandbox did this)."""
+    from speckfish.runner import StepResult, postprocess
+    res = StepResult(step="specify", ok=True, exit_code=0, duration_s=70.0)
+    postprocess(res, "specify", tmp_path / "art", tmp_path)
+    assert res.ok is False
+    assert "wrote no spec.md" in res.error
+
+
+def test_specification_that_exists_passes_the_check(tmp_path):
+    from speckfish.runner import StepResult, postprocess
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    res = StepResult(step="specify", ok=True, exit_code=0, duration_s=10.0)
+    postprocess(res, "specify", tmp_path / "art", tmp_path)
+    assert res.ok is True and res.error == ""
+
+
+def test_node_entry_finds_a_bin_js_package(tmp_path, monkeypatch):
+    """codex ships bin/codex.js, not index.js: the shim prefix must still resolve."""
+    from speckfish import config as C
+    binjs = tmp_path / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    binjs.parent.mkdir(parents=True)
+    binjs.write_text("// entry", encoding="utf-8")
+    shim = tmp_path / "codex"
+    shim.write_text("", encoding="utf-8")
+    monkeypatch.setattr(C.shutil, "which", lambda n: str(shim) if n == "codex" else None)
+    assert C.node_entry("codex") == str(binjs)
+
+
+def test_doctor_never_raises_when_the_binary_is_broken(tmp_path, monkeypatch):
+    from speckfish import harnesses as H
+    cfg = _cfg(tmp_path)
+
+    def boom(*_a, **_k):
+        raise OSError(193, "not a valid Win32 application")
+
+    monkeypatch.setattr(H, "run_cmd", boom)
+    monkeypatch.setattr(H.CodexHarness, "binary", lambda self: "C:/fake/codex")
+    info = H.CodexHarness(cfg).doctor()
+    assert info["installed"] is True
+    assert info["version_exit"] == 1          # reported, not raised
