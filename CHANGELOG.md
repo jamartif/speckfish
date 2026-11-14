@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Diagram fixed and renumbered 1→9: `drift` is now **after** `implement` (it compares documents with
+  code that exists), `tasks` is explicitly before `review`, and the optional `brainstorm`/`draft` arrow
+  points at `specify` instead of `constitution`. The README states the order in a table with the reason
+  for each position.
+
 - README: full **command reference** (all 22 commands with their real flags, global flags included) and
   a **worked example** end to end with measured timings.
 - `docs/flow.svg` redrawn: four lanes (discover / specify / verify / ship) with `brainstorm`, `draft`,
