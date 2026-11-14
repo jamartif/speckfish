@@ -1162,17 +1162,20 @@ def test_json_lines_are_never_echoed_to_the_console():
     assert not is_noise_line("{")
 
 
-def test_split_summary_states_what_was_created_and_where():
+def test_split_summary_states_what_was_created_and_where(tmp_path):
     from speckfish.cli import split_summary
-    out = {"run_id": "20261114-125940", "features": ["a", "b", "c"],
-           "specs": [{"path": "C:/repo/specs/001-a/spec.md"},
-                     {"path": "C:/repo/specs/002-b/spec.md"},
-                     {"path": "C:/repo/specs/003-c/spec.md"}],
+    specs = []
+    for n in ("001-a", "002-b", "003-c"):
+        p = tmp_path / "specs" / n / "spec.md"
+        p.parent.mkdir(parents=True)
+        p.write_text("# s", encoding="utf-8")
+        specs.append({"path": str(p)})
+    out = {"run_id": "20261114-125940", "features": ["a", "b", "c"], "specs": specs,
            "steps": {"split": {"duration_s": 80.0}, "specify-1": {"duration_s": 250.0}}}
-    text = split_summary(out, "C:/repo")
+    text = split_summary(out, str(tmp_path))
     assert text.startswith("3 spec(s) generated")
     assert "specs/001-a/spec.md" in text
-    assert "C:/repo/specs" not in text                 # relative paths only
+    assert str(tmp_path) not in text                  # relative paths only
     assert "{" not in text and "description" not in text
     assert "2m05s" in text or "5m30s" in text
 
