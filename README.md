@@ -21,24 +21,25 @@ speckfish pipeline "a task CLI in Python" --stack "stdlib only" --gate
 
 ```mermaid
 flowchart LR
-    O["(optional) brainstorm / draft<br/><small>EGM exploration: hypotheses</small>"] -.-> B
-    A["speckfish init<br/><small>git init · specify init · clone EGM</small>"] --> B
-    B["constitution + specify<br/><small>--split · --inventory-only · --only</small>"] --> C
-    C["speckfish plan<br/><small>--feature · --all-features</small>"] --> C2["tasks / analyze<br/><small>tasks.md · cross-check</small>"]
-    C2 --> D{"speckfish review<br/><small>goldfish subagents, clean context</small>"}
-    D -->|"no blockers"| E["speckfish drift<br/><small>design vs code</small>"]
-    D -->|"blockers → exit 1"| F["fix the spec/plan<br/><small>or --interactive</small>"]
-    F --> D
-    E --> G["speckfish report<br/><small>the findings, in the terminal</small>"]
-    G --> H["CI gate<br/><small>exit 0 / 1 / 2 / 3</small>"]
+    O["(optional) brainstorm / draft<br/><small>only when the input is a vague idea</small>"] -.-> SPEC
+    INIT["1 · init<br/><small>git · .specify · EGM in vendor/</small>"] --> CONST
+    CONST["2 · constitution<br/><small>@template.md</small>"] --> SPEC["3 · specify<br/><small>--split · --inventory-only · --only</small>"]
+    SPEC --> PLAN["4 · plan<br/><small>--feature · --all-features</small>"]
+    PLAN --> TASKS["5 · tasks<br/><small>also analyze / checklist / clarify</small>"]
+    TASKS --> REV{"6 · review<br/><small>goldfish review of the plan</small>"}
+    REV -->|"blockers → exit 1"| FIX["fix the plan"] --> REV
+    REV -->|"no blockers"| IMPL["7 · implement<br/><small>code + tests, one feature</small>"]
+    IMPL --> DRIFT["8 · drift<br/><small>design vs the code that now exists</small>"]
+    DRIFT --> REP["9 · report<br/><small>the findings, in the terminal</small>"]
+    REP --> CI["CI gate<br/><small>exit 0 / 1 / 2 / 3</small>"]
 
     classDef step fill:#eff6ff,stroke:#1b6ef3,stroke-width:1.5px,color:#0f172a
     classDef gate fill:#fffbeb,stroke:#d97706,stroke-width:1.5px,color:#0f172a
     classDef out fill:#f0fdf4,stroke:#16a34a,stroke-width:1.5px,color:#0f172a
     classDef soft fill:#f1f5f9,stroke:#94a3b8,stroke-width:1.2px,stroke-dasharray:5 4,color:#0f172a
-    class A,B,C,C2 step
-    class D,F gate
-    class E,G,H out
+    class INIT,CONST,SPEC,PLAN,TASKS step
+    class REV,FIX gate
+    class IMPL,DRIFT,REP,CI out
     class O soft
 ```
 
@@ -67,6 +68,21 @@ sequenceDiagram
     CLI-->>CLI: parse verdict → blockers / majors / nits → exit code
     CLI-->>CLI: speckfish report prints the findings in the terminal
 ```
+
+### What runs before what
+
+The numbers in the diagram are the order, and two of them are not obvious:
+
+| Step | Needs | Why it is there |
+|---|---|---|
+| 5 · `tasks` | `plan.md` | Run it **before** the review: the reviewer can then judge coverage ("the plan promises X, no task builds X"). A review of a plan with no task list cannot catch missing work. |
+| 6 · `review` | `plan.md` (+ `tasks.md`) | Reviewing the spec alone only yields "this is ambiguous"; the plan is where technical decisions exist to be criticised. |
+| 7 · `implement` | `tasks.md` | Writes code. One feature at a time, gated behind `--yes`. |
+| 8 · `drift` | documents **and code** | It compares what the documents promise with the code that exists. **After implement**, never before: with no code the honest answer is "nothing is implemented", a cheap but useless run. |
+
+`analyze`, `checklist` and `clarify` are optional and sit next to `tasks` (they check spec ↔ plan ↔
+tasks consistency); `brainstorm`/`draft` are the only steps that come *before* `specify`, and only when
+the input is an idea rather than a document.
 
 ## What it solves
 
