@@ -111,6 +111,38 @@ def summarize(res: dict, root: str | None = None) -> str:
     return "\n".join(lines)
 
 
+def split_summary(out: dict, root: str | None = None) -> str:
+    """Short and final: how many specs, where they are, how long it took. No feature dump, no JSON."""
+    feats = out.get("features") or []
+    specs = out.get("specs") or []
+    total = sum(float(i.get("duration_s") or 0) for i in (out.get("steps") or {}).values())
+    head = f"run {out.get('run_id')}  ·  {_dur(total)}"
+
+    if out.get("error"):
+        return "\n".join([head, f"  ERROR  {out['error']}"])
+    if out.get("inventory_only") or out.get("dry_run"):
+        lines = [f"{len(feats)} feature(s) proposed  ·  nothing generated yet"]
+        lines += [f"  {i}. {t}" for i, t in enumerate(feats, 1)]
+        lines.append("")
+        lines.append("  cut saved to specs/features.json — drop or merge entries there,")
+        lines.append("  then re-run without --inventory-only to generate the specs")
+        lines.append(f"  {head}")
+        return "\n".join(lines)
+
+    lines = [f"{len(specs)} spec(s) generated"]
+    for item in specs:
+        lines.append(f"  {_rel(item['path'], root)}")
+    if out.get("stopped_at"):
+        lines.append(f"  stopped at {out['stopped_at']}: "
+                     f"{len(specs)} of {len(feats)} feature(s) written")
+    elif len(specs) < len(feats):
+        lines.append(f"  WARNING: {len(feats) - len(specs)} feature(s) produced no spec.md "
+                     f"(see the log)")
+    lines.append("")
+    lines.append(f"  {head}")
+    return "\n".join(lines)
+
+
 def batch_summary(batch: dict, root: str | None = None) -> str:
     """Per-feature result of a --all-features run."""
     lines = [f"{batch.get('action')}  ·  {len(batch.get('order') or [])} feature(s)  ·  "
@@ -402,15 +434,7 @@ def main(argv: list[str] | None = None) -> int:
                                          stream, args.dry_run, args.max_features,
                                          review=args.review,
                                          inventory_only=getattr(args, "inventory_only", False))
-                human = [f"run {out['run_id']}: {len(out.get('features') or [])} feature(s)"]
-                human += [f"  - {f}" for f in (out.get("features") or [])]
-                if out.get("error"):
-                    human.append(f"ERROR: {out['error']}")
-                for step, info in out["steps"].items():
-                    mark = "ok" if info.get("ok") else "FAILED"
-                    human.append(f"  [{mark}] {step} {info.get('duration_s')}s"
-                                 f" cost={info.get('cost')} {info.get('cost_unit')}")
-                emit(out, as_json, "\n".join(human))
+                emit(out, as_json, split_summary(out, norm(cfg.root)))
                 return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
             res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
                                args.dry_run, review=getattr(args, "review", False))

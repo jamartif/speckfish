@@ -109,7 +109,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
                 log.write(line)
                 log.flush()
                 meter.feed(line)
-                if echo and stream:
+                if echo and stream and not is_noise_line(line):
                     sys.stderr.write(line if line.endswith("\n") else line + "\n")
                     sys.stderr.flush()
         except Exception:
@@ -134,6 +134,20 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     meter.stop()
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
     return code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out
+
+
+def is_noise_line(line: str) -> bool:
+    """JSON payloads and very long lines are log material, not console output."""
+    text = (line or "").strip()
+    if len(text) > 1200:
+        return True
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            json.loads(text)
+            return True
+        except ValueError:
+            return False
+    return False
 
 
 def _json_payloads(text: str) -> list[dict]:

@@ -1121,3 +1121,76 @@ def test_progress_still_shows_when_the_agent_echoes_prose():
     assert "[constitution]" in out
     assert "subagents 1" in out       # the stage, not just a clock
     assert "\r" not in out            # standalone lines, never a carriage-return redraw
+
+
+def test_split_generates_one_spec_per_recovered_feature(tmp_path, monkeypatch):
+    """A harness without --json-schema must still produce N specs (regression: it aborted)."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    log = tmp_path / "split.log"
+    log.write_text('{"features":[{"title":"A","description":"da"},'
+                   '{"title":"B","description":"db"}],"notes":"n"}', encoding="utf-8")
+    specs_made = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        if step == "specify-split":
+            return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                              log=str(log), structured=None)
+        specs_made.append(step)
+        d = tmp_path / "specs" / f"00{len(specs_made)}-x"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                          structured={"feature_dir": str(d)})
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    out = S.do_specify_split(cfg, "brief", None, harness=SimpleNamespace(name="codex"))
+    assert out["features"] == ["A", "B"]
+    assert specs_made == ["specify-1", "specify-2"]        # both features were specified
+    assert "error" not in out
+
+
+# ---------- the console says the outcome, not the transcript ----------
+def test_json_lines_are_never_echoed_to_the_console():
+    """codex prints the inventory JSON on stdout; that belongs in the log, not the terminal."""
+    from speckfish.runner import is_noise_line
+    assert is_noise_line('{"features":[{"title":"A","description":"' + "x" * 300 + '"}]}')
+    assert is_noise_line("y" * 2000)
+    assert not is_noise_line("Reading the specification now")
+    assert not is_noise_line("{")
+
+
+def test_split_summary_states_what_was_created_and_where(tmp_path):
+    from speckfish.cli import split_summary
+    specs = []
+    for n in ("001-a", "002-b", "003-c"):
+        p = tmp_path / "specs" / n / "spec.md"
+        p.parent.mkdir(parents=True)
+        p.write_text("# s", encoding="utf-8")
+        specs.append({"path": str(p)})
+    out = {"run_id": "20261114-125940", "features": ["a", "b", "c"], "specs": specs,
+           "steps": {"split": {"duration_s": 80.0}, "specify-1": {"duration_s": 250.0}}}
+    text = split_summary(out, str(tmp_path))
+    assert text.startswith("3 spec(s) generated")
+    assert "specs/001-a/spec.md" in text
+    assert str(tmp_path) not in text                  # relative paths only
+    assert "{" not in text and "description" not in text
+    assert "2m05s" in text or "5m30s" in text
+
+
+def test_split_summary_for_inventory_only_points_at_features_json():
+    from speckfish.cli import split_summary
+    text = split_summary({"run_id": "r", "features": ["a", "b"], "inventory_only": True,
+                          "steps": {"split": {"duration_s": 75.0}}}, "C:/repo")
+    assert "2 feature(s) proposed" in text
+    assert "specs/features.json" in text
+    assert "nothing generated yet" in text
+
+
+def test_split_summary_warns_when_a_feature_wrote_nothing():
+    from speckfish.cli import split_summary
+    text = split_summary({"run_id": "r", "features": ["a", "b", "c"],
+                          "specs": [{"path": "specs/001-a/spec.md"}], "steps": {}}, "C:/repo")
+    assert "WARNING: 2 feature(s) produced no spec.md" in text
