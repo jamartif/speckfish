@@ -618,6 +618,25 @@ def extract_features(res, cfg: Config | None = None) -> list[dict]:
     return feats
 
 
+def do_egm_explore(cfg: Config, kind: str, material: str, run_id: str | None = None,
+                   harness: Harness | None = None, stream: bool = True,
+                   dry_run: bool = False) -> StepResult:
+    """`egm-brainstorm` / `egm-draft`: exploration before (or beside) a spec, never requirements."""
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    egm = cfg.egm_path()
+    if h.name == "claude" and not egm:
+        raise SystemExit("EGM not found: run `speckfish init` or set egm_root in .speckfish/config.json")
+    artifact = cfg.runs_dir / rid / "artifacts" / kind
+    artifact.mkdir(parents=True, exist_ok=True)
+    if h.name == "claude":
+        prompt = with_language(prompts.explore_prompt(kind, material, artifact), cfg)
+    else:
+        prompt = with_language(prompts.egm_prompt_for(h.name, kind, material, artifact,
+                                                      egm or cfg.root), cfg)
+    return run_step(cfg, h, kind, prompt, cfg.root, rid, egm, stream=stream, dry_run=dry_run)
+
+
 def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
              harness: Harness | None = None, stream: bool = True,
              dry_run: bool = False) -> StepResult:

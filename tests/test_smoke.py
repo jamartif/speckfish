@@ -1369,3 +1369,42 @@ def test_activity_does_not_deadlock_the_reader_on_a_tty():
     assert done.wait(5), "activity() deadlocked the reader thread"
     p.stop()
     assert "command 19" in buf.getvalue()
+
+
+# ---------- EGM exploration (brainstorm / draft) ----------
+def test_brainstorm_prompt_names_the_skill_and_marks_hypotheses():
+    from speckfish.prompts import explore_prompt
+    text = explore_prompt("brainstorm", "an incident manager", Path("/tmp/a"))
+    assert text.startswith("/egm:egm-brainstorm an incident manager")
+    assert "hypothesis" in text and "do not ask questions" in text
+    assert "artifact directory" in text
+
+
+def test_brainstorm_requires_its_artifact(tmp_path, monkeypatch):
+    from speckfish.runner import StepResult, postprocess
+    res = StepResult(step="brainstorm", ok=True, exit_code=0, duration_s=1.0)
+    postprocess(res, "brainstorm", tmp_path, tmp_path)
+    assert res.ok is False and "concepts_brief.md" in res.error
+
+
+def test_brainstorm_reports_the_brief(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        art = cfg_.runs_dir / rid / "artifacts" / step
+        art.mkdir(parents=True, exist_ok=True)
+        (art / "concepts_brief.md").write_text("# Concepts", encoding="utf-8")
+        res = StepResult(step=step, ok=True, exit_code=0, duration_s=2.0,
+                         artifact_dir=str(art))
+        from speckfish.runner import postprocess as pp
+        pp(res, step, art, cwd)
+        return res
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    res = S.do_egm_explore(cfg, "brainstorm", "an idea", None,
+                           harness=SimpleNamespace(name="codex"))
+    assert res.ok is True
+    assert any(r.endswith("concepts_brief.md") for r in res.reports)

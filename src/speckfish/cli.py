@@ -373,6 +373,13 @@ def build_parser() -> argparse.ArgumentParser:
     sp = sub.add_parser("runs", help="list runs")
     sp.add_argument("--clean", action="store_true", help="delete old runs, keeping --keep newest")
     sp.add_argument("--keep", type=int, default=10, help="how many runs to keep (default: 10)")
+    for _kind, _help in (("brainstorm", "EGM exploration: concepts brief from a vague idea"),
+                         ("draft", "EGM exploration: design draft from a concepts brief")):
+        sp = sub.add_parser(_kind, help=_help)
+        sp.add_argument("material", nargs="?", default="",
+                        help="idea, @path/to/brief.md or a file path")
+        sp.add_argument("--run-id", default=None)
+
     sp = sub.add_parser("report", help="print the review/drift report of a run in the terminal")
     sp.add_argument("run_id", nargs="?", default=None,
                     help="run id (default: the latest run that has a report)")
@@ -586,6 +593,15 @@ def main(argv: list[str] | None = None) -> int:
                              f"{dur}  [{','.join(r['steps'])}]")
             emit({"runs": rows}, as_json, "\n".join(human) or "(no runs)")
             return EXIT_OK
+        elif args.cmd in ("brainstorm", "draft"):
+            material = (args.material or "").strip()
+            if not material:
+                print(f"{args.cmd} needs something to work on: an idea or @path/to/file.md",
+                      file=sys.stderr)
+                return EXIT_ENV
+            material, _src = S.prompts.expand_input(material, cfg.root)
+            res = S.do_egm_explore(cfg, args.cmd, material, args.run_id, need_harness(),
+                                   stream, args.dry_run)
         elif args.cmd == "report":
             base = cfg.runs_dir
             runs = sorted([p for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
