@@ -11,15 +11,13 @@
 from a terminal or from CI. One agent subprocess per step, per-run artifacts, a
 machine-readable verdict and exit codes you can automate against.
 
-![speckfish pipeline: init → specify → plan → goldfish review → drift](docs/flow.svg)
+![speckfish flow: discover (optional) → specify → verify with goldfish subagents → ship](docs/flow.svg)
 
 ```
 speckfish pipeline "a task CLI in Python" --stack "stdlib only" --gate
 ```
 
 ## The flow at a glance
-
-![speckfish flow](docs/flow.svg)
 
 ```mermaid
 flowchart LR
