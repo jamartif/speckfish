@@ -1558,3 +1558,23 @@ def test_review_with_analyze_runs_analyze_first(tmp_path, monkeypatch):
     monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
     C.main(["--root", str(tmp_path), "review", "specs/001-x/plan.md", "--with-analyze"])
     assert order == ["analyze", "review"]
+
+
+def test_all_features_can_skip_what_is_already_done(tmp_path, monkeypatch):
+    """Re-running a batch after a stop must not redo (and re-pay) finished features."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b", "003-c"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    (tmp_path / "specs" / "001-a" / "plan.md").write_text("# plan", encoding="utf-8")
+    (tmp_path / "specs" / "002-b" / "plan.md").write_text("# plan", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    ran = []
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: ran.append(k.get("feature")) or StepResult(
+        step="plan", ok=True, exit_code=0, duration_s=1.0))
+    batch = S.do_feature_batch(cfg, "plan", S.features_with_spec(cfg),
+                               harness=SimpleNamespace(name="fake"), skip_existing="plan.md")
+    assert ran == ["003-c"]                       # only the missing one
+    assert batch["skipped"] == ["001-a", "002-b"]

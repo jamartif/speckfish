@@ -312,7 +312,8 @@ def features_with_spec(cfg: Config) -> list[Path]:
 
 def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Harness | None = None,
                      run_id: str | None = None, stack: str = "", args: str = "",
-                     stream: bool = True, dry_run: bool = False) -> dict:
+                     stream: bool = True, dry_run: bool = False,
+                     skip_existing: str | None = None) -> dict:
     """Run one step over every feature, in order, stopping at the first failure.
 
     Spec Kit itself works on a single active feature, so N features mean N agent runs; this walks
@@ -320,8 +321,13 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
     """
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
+    skipped = []
+    if skip_existing:
+        skipped = [f.name for f in features if (f / skip_existing).exists()]
+        features = [f for f in features if not (f / skip_existing).exists()]
     out: dict = {"run_id": rid, "action": action, "harness": h.name, "steps": {},
-                 "order": [f.name for f in features], "stopped_at": None, "total_cost": 0.0}
+                 "order": [f.name for f in features], "skipped": skipped,
+                 "stopped_at": None, "total_cost": 0.0}
     for f in features:
         set_active_feature(cfg, f)
         if action == "plan":

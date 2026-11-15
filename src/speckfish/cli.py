@@ -163,6 +163,8 @@ def batch_summary(batch: dict, root: str | None = None) -> str:
         lines.append(line)
         if not ok and step.get("error"):
             lines.append(f"         {step['error']}")
+    if batch.get("skipped"):
+        lines.insert(1, f"  skipped {len(batch['skipped'])} already done: {', '.join(batch['skipped'])}")
     if batch.get("stopped_at"):
         lines.append(f"  stopped at {batch['stopped_at']}: fix it and re-run, earlier features are done")
     else:
@@ -319,6 +321,8 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run clarify first; stop if it leaves questions unless --accept-defaults")
     sp.add_argument("--accept-defaults", action="store_true",
                     help="with --with-clarify: plan even if questions were left unanswered")
+    sp.add_argument("--skip-existing", action="store_true",
+                    help="with --all-features: skip features that already have plan.md")
 
     sp = sub.add_parser("review", help="Goldfish review of a document")
     sp.add_argument("target", nargs="?", default=None, help="document (default: plan.md of the latest feature)")
@@ -367,6 +371,9 @@ def build_parser() -> argparse.ArgumentParser:
         if skill in ("tasks", "analyze"):
             sp.add_argument("--all-features", action="store_true",
                             help="run this step on every feature in order, stopping at the first failure")
+            sp.add_argument("--skip-existing", action="store_true",
+                            help=f"with --all-features: skip features that already have "
+                                 f"{'tasks.md' if skill == 'tasks' else 'the analysis artifact'}")
         if spec.get("dangerous"):
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
@@ -507,7 +514,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
                 return EXIT_ERROR
             batch = S.do_feature_batch(cfg, "plan", feats, need_harness(), args.run_id,
-                                       stack=args.stack, stream=stream, dry_run=args.dry_run)
+                                       stack=args.stack, stream=stream, dry_run=args.dry_run,
+                                       skip_existing="plan.md" if args.skip_existing else None)
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             return EXIT_OK if batch.get("done") else EXIT_ERROR
         elif args.cmd == "plan":
@@ -539,7 +547,9 @@ def main(argv: list[str] | None = None) -> int:
                           file=sys.stderr)
                     return EXIT_ERROR
                 batch = S.do_feature_batch(cfg, args.cmd, feats, need_harness(), args.run_id,
-                                           args=args.args, stream=stream, dry_run=args.dry_run)
+                                           args=args.args, stream=stream, dry_run=args.dry_run,
+                                           skip_existing=("tasks.md" if getattr(args, "skip_existing",
+                                                                               False) else None))
                 emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
                 return EXIT_OK if batch.get("done") else EXIT_ERROR
             res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream,
