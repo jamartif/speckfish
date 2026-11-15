@@ -264,13 +264,17 @@ class CopilotHarness(Harness):
 
 
 CODEX_FILE_HINT = (
-    "Writing files: this session has no apply_patch tool. Do not emit \"*** Begin Patch\" blocks and "
-    "do not look for apply_patch (a run lost 6 of its 10 minutes retrying it). Write files with your "
-    "file-write tool, or with PowerShell: Set-Content -LiteralPath '<path>' -Value $content -Encoding utf8. "
-    "Read whole files with Get-Content -Raw instead of line ranges: one command instead of eight. "
+    "Writing files: there is no apply_patch command in PATH, so do not emit \"*** Begin Patch\" "
+    "blocks. Write with PowerShell, forcing UTF-8 or the accents get mangled: "
+    "[System.IO.File]::WriteAllText('<path>', $content, [System.Text.UTF8Encoding]::new($false)). "
+    "Read with [System.IO.File]::ReadAllText('<path>', [System.Text.Encoding]::UTF8) or "
+    "Get-Content -Raw -Encoding utf8. This machine's PowerShell 5.1 reports output encoding ibm850, so "
+    "a plain Get-Content shows 'CatÃ¡logo' for a file that is correct on disk: that is the console, "
+    "never rewrite a file to fix it, and do not spend turns grepping for mojibake. "
     "Do not install packages (no pip install): if a validator is missing, say so and validate by "
-    "inspection instead of changing the machine."
+    "inspection."
 )
+
 
 class CodexHarness(Harness):
     name = "codex"
