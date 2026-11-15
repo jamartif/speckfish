@@ -335,6 +335,16 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
         json.dumps(res.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
 
 
+def _base_step(cfg: Config, step: str) -> str:
+    """`review-001-foo` -> `review`: a per-feature label must not lose its timeout."""
+    if step in cfg.timeouts:
+        return step
+    for key in cfg.timeouts:
+        if step.startswith(f"{key}-"):
+            return key
+    return step
+
+
 def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
              run_id: str, egm_root: Path | None, timeout: int | None = None,
              budget: float | None = None, schema: dict | None = None,
@@ -345,7 +355,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     label = artifact_name or step
     artifact_dir = run_dir / "artifacts" / label
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    timeout = timeout or int(cfg.timeouts.get(step, 600))
+    # a batch labels the step "<step>-<feature>"; the timeout belongs to the step, not the label
+    timeout = timeout or int(cfg.timeouts.get(_base_step(cfg, step), 600))
     inv = harness.build(kind=step, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
                         egm_root=egm_root, budget=budget, timeout=timeout, schema=schema)
     if dry_run:
@@ -369,7 +380,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
         res.error = (f"timed out after {timeout}s — the agent may simply need longer. "
-                     f"Raise it with `speckfish config timeout.{step}={int(timeout * 2)}` "
+                     f"Raise it with `speckfish config timeout.{_base_step(cfg, step)}="
+                    f"{int(timeout * 2)}` "
                      f"and check the log for how far it got")
         res.ok = False
     elif code != 0:

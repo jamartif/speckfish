@@ -5,6 +5,13 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: a batch runs each step as `<step>-<feature>`, and that label was used to look up the timeout —
+  so `review` (1800 s) and `tasks` (1800 s) fell back to the generic 600 s. `tasks` survived by 8 s;
+  `review` was killed at 10 minutes with its work half done. The timeout now resolves to the base
+  step, and the hint names the key that actually exists (`timeout.review`, not `timeout.review-001-…`).
+- `review` default raised to 2400 s: a Copilot review with ten subagents runs past 10 minutes.
+
+
 - Fix: `clarify` (and `checklist`, `converge`, `brainstorm`, `draft`) had **no default timeout**, so
   `run_step` fell back to the generic 600s and a real 7-feature run lost feature 5 after ten minutes
   of work — the agent had already written its `questions.md`. Every agent step now has its own
