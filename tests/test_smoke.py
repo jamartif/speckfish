@@ -1885,3 +1885,12 @@ def test_a_real_error_does_not_switch_harness(tmp_path):
     assert used == ["copilot"]          # no retry
     assert batch["switched"] == []
     assert batch["done"] is False
+
+
+def test_fallback_flag_works_after_the_subcommand():
+    """Global flags may come after the verb; --fallback has to be moved there like --harness."""
+    from speckfish.cli import build_parser, normalize_argv
+    argv = normalize_argv(["review", "--all-features", "--fallback", "codex"])
+    assert argv[:2] == ["--fallback", "codex"]
+    args = build_parser().parse_args(argv)
+    assert args.fallback == "codex"
