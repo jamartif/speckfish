@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: a batch (`--all-features`) ran every feature into the **same** artifact folder, so
+  `clarify --all-features` on 7 features left a single `questions.md` and the last feature overwrote
+  the other six (and each agent could read the previous feature's file). Every feature now writes to
+  `artifacts/<step>-<feature>/`.
+
+
 - Fix: `--skip-existing` used `tasks.md` as the marker for `analyze`, so right after `tasks` every
   feature counted as "already analyzed" and nothing ran. Only `plan`, `tasks` and `checklist` own a
   file; `analyze`, `clarify` and `converge` never skip.

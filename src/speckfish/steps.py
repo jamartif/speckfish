@@ -388,10 +388,12 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
                  "stopped_at": None, "total_cost": 0.0}
     for f in features:
         set_active_feature(cfg, f)
+        label = f"{action}-{f.name}"
         if action == "plan":
-            res = do_plan(cfg, stack, rid, h, stream, dry_run, feature=f.name)
+            res = do_plan(cfg, stack, rid, h, stream, dry_run, feature=f.name, step_name=label)
         else:
-            res = do_skill(cfg, action, args, rid, h, stream, dry_run, feature=f.name)
+            res = do_skill(cfg, action, args, rid, h, stream, dry_run, feature=f.name,
+                           step_name=label)
         out["steps"][f.name] = res.to_dict()
         if res.cost and res.cost_unit == "usd":
             out["total_cost"] += float(res.cost)
@@ -445,7 +447,8 @@ def spec_path_from(res: StepResult) -> str | None:
 
 def do_plan(cfg: Config, stack: str, run_id: str | None = None,
             harness: Harness | None = None, stream: bool = True,
-            dry_run: bool = False, feature: str | None = None) -> StepResult:
+            dry_run: bool = False, feature: str | None = None,
+            step_name: str | None = None) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     fdir = set_active_feature(cfg, find_feature(cfg, feature)) if feature else active_feature(cfg)
@@ -454,7 +457,8 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
                    f"Work on the feature in {norm(fdir) if fdir else 'the current feature'}."
                    f"\n\nRun the Spec Kit planning flow (speckit-plan skill).")
     return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(),
-                    schema=prompts.SCHEMAS["plan"], stream=stream, dry_run=dry_run)
+                    schema=prompts.SCHEMAS["plan"], stream=stream, dry_run=dry_run,
+                    artifact_name=step_name)
 
 
 def resolve_target(cfg: Config, target: str | None, default_file: str = "plan.md") -> Path:
@@ -505,11 +509,12 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
 
 def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
              harness: Harness | None = None, stream: bool = True,
-             dry_run: bool = False, feature: str | None = None) -> StepResult:
+             dry_run: bool = False, feature: str | None = None,
+             step_name: str | None = None) -> StepResult:
     """Run any of the remaining Spec Kit skills (constitution, tasks, analyze, ...)."""
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
-    artifact = cfg.runs_dir / rid / "artifacts" / skill
+    artifact = cfg.runs_dir / rid / "artifacts" / (step_name or skill)
     spec = prompts.SKILL_SPECS[skill]
     fdir = None
     if feature:
@@ -522,7 +527,7 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
         prompt = with_language(prompts.skill_prompt_for(
             h.name, skill, args, artifact, cfg.egm_path() or cfg.root, cfg.root), cfg)
     res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(),
-                   stream=stream, dry_run=dry_run)
+                   stream=stream, dry_run=dry_run, artifact_name=step_name)
     res.writes = spec.get("writes", "")  # type: ignore[attr-defined]
     return res
 

@@ -1058,7 +1058,8 @@ def test_feature_batch_stops_at_the_first_failure(tmp_path, monkeypatch):
     cfg = Config(root=tmp_path)
     seen = []
 
-    def fake_plan(cfg_, stack, run_id=None, harness=None, stream=True, dry_run=False, feature=None):
+    def fake_plan(cfg_, stack, run_id=None, harness=None, stream=True, dry_run=False, feature=None,
+                  step_name=None):
         seen.append(feature)
         ok = feature != "002-b"                      # the middle one breaks
         return StepResult(step="plan", ok=ok, exit_code=0 if ok else 2, duration_s=1.0,
@@ -1093,7 +1094,7 @@ def test_all_features_reaches_every_feature(tmp_path, monkeypatch):
         (d / "spec.md").write_text("# s", encoding="utf-8")
     calls = []
     monkeypatch.setattr(S, "do_plan", lambda cfg, stack, rid=None, h=None, stream=True,
-                        dry_run=False, feature=None: (calls.append(feature),
+                        dry_run=False, feature=None, step_name=None: (calls.append(feature),
                                                       StepResult(step="plan", ok=True,
                                                                  exit_code=0, duration_s=1.0))[1])
     monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
@@ -1709,3 +1710,29 @@ def test_tasks_being_done_does_not_skip_analyze(tmp_path, monkeypatch):
                        harness=SimpleNamespace(name="fake"),
                        skip_existing=STEP_ARTIFACT["analyze"])
     assert ran == ["analyze"]                                # it ran despite tasks.md
+
+
+def test_batch_gives_each_feature_its_own_artifact_folder(tmp_path, monkeypatch):
+    """clarify --all-features wrote one questions.md for 7 features: the last one won."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    dirs = []
+
+    def fake_skill(cfg_, skill, args="", run_id=None, harness=None, stream=True, dry_run=False,
+                   feature=None, step_name=None):
+        dirs.append(step_name)
+        return StepResult(step=skill, ok=True, exit_code=0, duration_s=1.0,
+                          artifact_dir=str(cfg_.runs_dir / str(run_id) / "artifacts" / str(step_name)))
+
+    monkeypatch.setattr(S, "do_skill", fake_skill)
+    batch = S.do_feature_batch(cfg, "clarify", S.features_with_spec(cfg),
+                               harness=SimpleNamespace(name="fake"))
+    assert dirs == ["clarify-001-a", "clarify-002-b"]
+    a = batch["steps"]["001-a"]["artifact_dir"]
+    b = batch["steps"]["002-b"]["artifact_dir"]
+    assert a != b and a.endswith("clarify-001-a") and b.endswith("clarify-002-b")

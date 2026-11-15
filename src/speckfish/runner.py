@@ -339,9 +339,10 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
              run_id: str, egm_root: Path | None, timeout: int | None = None,
              budget: float | None = None, schema: dict | None = None,
              stream: bool = True, dry_run: bool = False,
-             progress: bool = True) -> StepResult:
+             progress: bool = True, artifact_name: str | None = None) -> StepResult:
     run_dir = run_dir_for(cfg, run_id)
-    artifact_dir = run_dir / "artifacts" / step
+    # a batch runs the same step once per feature: each one needs its own folder or they overwrite
+    artifact_dir = run_dir / "artifacts" / (artifact_name or step)
     artifact_dir.mkdir(parents=True, exist_ok=True)
     timeout = timeout or int(cfg.timeouts.get(step, 600))
     inv = harness.build(kind=step, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
