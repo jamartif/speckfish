@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- An agent that finishes its work and never exits (EGM's last pass does this) no longer burns the whole
+  timeout: a process that writes nothing for `SPECKFISH_IDLE_SECONDS` (default 600) is stopped, and the
+  step counts as done when the artifacts are on disk. A review sat in `finishing` for 31 minutes with
+  its report already written and still ended up FAILED.
+
+
 - A batch stopped by a quota/auth failure now exits **3** (environment) instead of 2, so CI and the
   operator can tell "out of credits" from "the step failed".
 - `total_cost` in the batch summary sums credits as well as dollars (Copilot bills in credits, so it

@@ -1940,3 +1940,28 @@ def test_batch_sums_credits_too(tmp_path, monkeypatch):
     finally:
         S.do_skill = orig
     assert round(batch["total_cost"], 1) == 34.2
+
+
+def test_an_agent_that_finishes_but_never_exits_is_closed_by_inactivity(tmp_path, monkeypatch):
+    """EGM's last pass writes its reports and then keeps the process alive forever."""
+    import sys
+    from types import SimpleNamespace as NS
+
+    from speckfish import runner as R
+    from speckfish.config import Config as Cfg
+
+    monkeypatch.setenv("SPECKFISH_IDLE_SECONDS", "2")
+    cfg = Cfg(root=tmp_path)
+    rid = "20260101-000000"
+    art = tmp_path / ".speckfish" / "runs" / rid / "artifacts" / "review-001-a"
+    art.mkdir(parents=True)
+    (art / "consolidated_review_report.md").write_text("# ok", encoding="utf-8")
+    # writes nothing, then sleeps far longer than the idle limit
+    script = "import time; time.sleep(40)"
+    h = NS(name="fake", parse_output=lambda out, err, code: {},
+           build=lambda **k: NS(argv=[sys.executable, "-c", script], env={}))
+    res = R.run_step(cfg, h, "review", "p", tmp_path, rid, None, progress=False,
+                     artifact_name="review-001-a")
+    assert res.ok is True                       # the report exists: the work is done
+    assert res.duration_s < 30                  # not waiting for the 600 s default
+    assert "stayed alive" in res.error          # and it says why
