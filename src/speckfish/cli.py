@@ -178,8 +178,8 @@ def _positions(value: str) -> list[int] | None:
         return None
     try:
         return [int(x) for x in str(value).replace(" ", "").split(",") if x]
-    except ValueError:
-        raise SystemExit(f"--only expects numbers, e.g. 2,4,5 (got {value!r})")
+    except ValueError as exc:
+        raise SystemExit(f"--only expects numbers, e.g. 2,4,5 (got {value!r})") from exc
 
 
 def select_features(cfg, args) -> list:
