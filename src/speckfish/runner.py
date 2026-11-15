@@ -273,15 +273,23 @@ def human_error(out: str, err: str, code: int) -> str:
 
 
 def _git_dirty(root: Path) -> bool:
-    """Any tracked change or new file outside the tool's own state directory."""
+    """Any tracked change or new file that is real work, not build output or tool state."""
     import subprocess as sp
     try:
         out = sp.run(["git", "status", "--porcelain"], cwd=str(root), capture_output=True,
                      text=True, timeout=60, encoding="utf-8", errors="replace").stdout
     except (OSError, sp.SubprocessError):
         return True                      # cannot tell: do not fail a step over it
-    lines = [ln for ln in out.splitlines() if ".speckfish/" not in ln and ln.strip()]
-    return bool(lines)
+    noise = (".speckfish/", "/bin/", "/obj/", "bin/Debug", "obj/Debug", ".gitignore", "CLAUDE.md",
+             "AGENTS.md", ".agents/", ".claude/")
+    interesting = [ln for ln in out.splitlines()
+                   if ln.strip() and not any(n in ln.replace("\\", "/") for n in noise)]
+    if interesting:
+        return True
+    # a rebuild alone must not count as implementing the feature
+    sources = [ln for ln in out.splitlines()
+               if ln.strip().endswith((".cs", ".ts", ".py", ".go", ".java", ".rs", ".js"))]
+    return any("/obj/" not in ln.replace("\\", "/") for ln in sources)
 
 
 def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None) -> None:
