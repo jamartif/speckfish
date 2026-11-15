@@ -503,8 +503,15 @@ plan  ·  7 feature(s)  ·  run 20261114-123556
 `implement` deliberately has no `--all-features`: it writes code, so each feature is launched and
 reviewed on its own.
 
-`speckfish review` and `drift` already take an explicit document/directory, so they do not care which
-feature is active:
+`review` and `drift` also take `--all-features` (review picks `plan.md` when it exists, `spec.md`
+otherwise), so a whole project is one command instead of a shell loop:
+
+```bash
+speckfish review --all-features --harness copilot     # ~5 credits and ~7 min per feature
+speckfish drift  --all-features --harness copilot
+```
+
+`speckfish review` and `drift` also accept an explicit document/directory when you want just one:
 
 ```bash
 speckfish review specs/002-open-remember-repos/spec.md

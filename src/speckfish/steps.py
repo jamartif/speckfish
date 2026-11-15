@@ -310,6 +310,64 @@ def features_with_spec(cfg: Config) -> list[Path]:
     return [d for d in sorted(specs_dir.iterdir()) if d.is_dir() and (d / "spec.md").exists()]
 
 
+def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
+                    run_id: str | None = None, stream: bool = True, dry_run: bool = False,
+                    profile: str | None = None, stage: str = "uninterrupted",
+                    skip_existing: bool = False) -> dict:
+    """EGM review per feature: plan.md when it exists, spec.md otherwise."""
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    out: dict = {"run_id": rid, "action": "review", "harness": h.name, "steps": {},
+                 "order": [], "skipped": [], "stopped_at": None, "total_cost": 0.0}
+    for f in features:
+        target = f / "plan.md" if (f / "plan.md").exists() else f / "spec.md"
+        if not target.exists():
+            continue
+        if skip_existing and (cfg.runs_dir / rid / "artifacts" / f"review-{f.name}").exists():
+            out["skipped"].append(f.name)
+            continue
+        res = do_review(cfg, str(target), rid, h, profile=profile, stage=stage,
+                        stream=stream, dry_run=dry_run, default_file=target.name,
+                        step_name=f"review-{f.name}")
+        out["order"].append(f.name)
+        out["steps"][f.name] = res.to_dict()
+        if res.cost and res.cost_unit == "usd":
+            out["total_cost"] += float(res.cost)
+        if not res.ok:
+            out["stopped_at"] = f.name
+            break
+    out["done"] = out["stopped_at"] is None
+    out["detail_file"] = "batch-review.json"
+    (cfg.runs_dir / rid / "batch-review.json").write_text(
+        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
+def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
+                   run_id: str | None = None, stream: bool = True,
+                   dry_run: bool = False) -> dict:
+    """EGM drift per feature, over the feature directory itself."""
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    out: dict = {"run_id": rid, "action": "drift", "harness": h.name, "steps": {},
+                 "order": [], "skipped": [], "stopped_at": None, "total_cost": 0.0}
+    for f in features:
+        res = do_drift(cfg, str(f), rid, h, stream=stream, dry_run=dry_run,
+                       step_name=f"drift-{f.name}")
+        out["order"].append(f.name)
+        out["steps"][f.name] = res.to_dict()
+        if res.cost and res.cost_unit == "usd":
+            out["total_cost"] += float(res.cost)
+        if not res.ok:
+            out["stopped_at"] = f.name
+            break
+    out["done"] = out["stopped_at"] is None
+    out["detail_file"] = "batch-drift.json"
+    (cfg.runs_dir / rid / "batch-drift.json").write_text(
+        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    return out
+
+
 def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Harness | None = None,
                      run_id: str | None = None, stack: str = "", args: str = "",
                      stream: bool = True, dry_run: bool = False,
@@ -342,6 +400,7 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
             break
     out["done"] = out["stopped_at"] is None
     # state.json is keyed by step name, so a batch would overwrite itself feature after feature
+    out["detail_file"] = "batch.json"
     (cfg.runs_dir / rid / "batch.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
                                                    encoding="utf-8")
     return out
@@ -422,11 +481,11 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
               harness: Harness | None = None, profile: str | None = None,
               stage: str = "uninterrupted", stream: bool = True,
               dry_run: bool = False, default_file: str = "plan.md",
-              interactive: bool = False) -> StepResult:
+              interactive: bool = False, step_name: str = "review") -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     doc = resolve_target(cfg, target, default_file)
-    artifact = cfg.runs_dir / rid / "artifacts" / "review"
+    artifact = cfg.runs_dir / rid / "artifacts" / step_name
     egm = cfg.egm_path()
     if h.name == "claude":
         if not egm:
@@ -439,8 +498,8 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
             profile or cfg.profile, stage, interactive=interactive), cfg)
     if interactive:
         # the agent takes over this terminal: it asks, the operator answers
-        return run_interactive(cfg, h, "review", prompt, cfg.root, rid, egm, dry_run=dry_run)
-    return run_step(cfg, h, "review", prompt, cfg.root, rid, egm,
+        return run_interactive(cfg, h, step_name, prompt, cfg.root, rid, egm, dry_run=dry_run)
+    return run_step(cfg, h, step_name, prompt, cfg.root, rid, egm,
                     schema=prompts.SCHEMAS["review"], stream=stream, dry_run=dry_run)
 
 
@@ -648,7 +707,7 @@ def do_egm_explore(cfg: Config, kind: str, material: str, run_id: str | None = N
 
 def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
              harness: Harness | None = None, stream: bool = True,
-             dry_run: bool = False) -> StepResult:
+             dry_run: bool = False, step_name: str = "drift") -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     if target:

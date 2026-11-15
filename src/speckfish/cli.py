@@ -171,7 +171,8 @@ def batch_summary(batch: dict, root: str | None = None) -> str:
         lines.append("  all features done")
     if batch.get("total_cost"):
         lines.append(f"  total: ${batch['total_cost']:.2f}")
-    lines.append(f"  per-feature detail: .speckfish/runs/{batch.get('run_id')}/batch.json")
+    detail = batch.get("detail_file") or "batch.json"
+    lines.append(f"  per-feature detail: .speckfish/runs/{batch.get('run_id')}/{detail}")
     return "\n".join(lines)
 
 
@@ -334,10 +335,14 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run the agent in this terminal so it can ask you questions")
     sp.add_argument("--with-analyze", action="store_true",
                     help="run the Spec Kit analyze step on this feature before reviewing it")
+    sp.add_argument("--all-features", action="store_true",
+                    help="review the plan.md (or spec.md) of every feature in order")
 
     sp = sub.add_parser("drift", help="drift between designs and code")
     sp.add_argument("target", nargs="?", default=None, help="specs directory (default: latest feature)")
     sp.add_argument("--run-id", default=None)
+    sp.add_argument("--all-features", action="store_true",
+                    help="run drift on every feature in order")
 
     sp = sub.add_parser("pipeline", help="specify → plan → review (→ drift)")
     sp.add_argument("description", help="feature description")
@@ -521,6 +526,19 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "plan":
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
                             feature=args.feature)
+        elif args.cmd == "review" and getattr(args, "all_features", False):
+            feats = S.features_with_spec(cfg)
+            if not feats:
+                print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
+                return EXIT_ERROR
+            batch = S.do_review_batch(cfg, feats, need_harness(), args.run_id, stream,
+                                      args.dry_run, args.profile, args.stage,
+                                      skip_existing=False)
+            emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
+            if not batch.get("done"):
+                return EXIT_ERROR
+            return EXIT_BLOCKERS if any((s.get("blockers") or [])
+                                        for s in batch["steps"].values()) else EXIT_OK
         elif args.cmd == "review" and getattr(args, "with_analyze", False) and args.target:
             feat = Path(str(args.target)).parent.name or None
             ana = S.do_skill(cfg, "analyze", "", args.run_id, need_harness(), stream,
@@ -531,6 +549,14 @@ def main(argv: list[str] | None = None) -> int:
             res = S.do_review(cfg, args.target, args.run_id, need_harness(), args.profile,
                               args.stage, stream, args.dry_run, args.target_file,
                               interactive=getattr(args, "interactive", False))
+        elif args.cmd == "drift" and getattr(args, "all_features", False):
+            feats = S.features_with_spec(cfg)
+            if not feats:
+                print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
+                return EXIT_ERROR
+            batch = S.do_drift_batch(cfg, feats, need_harness(), args.run_id, stream, args.dry_run)
+            emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
+            return EXIT_OK if batch.get("done") else EXIT_ERROR
         elif args.cmd == "drift":
             res = S.do_drift(cfg, args.target, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd in SKILL_SPECS:

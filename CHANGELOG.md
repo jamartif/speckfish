@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `review --all-features` and `drift --all-features`: walk every feature instead of asking the user to
+  write a PowerShell/Bash loop. Review takes `plan.md` when it exists and `spec.md` otherwise, uses a
+  per-feature artifact directory and writes `batch-review.json` / `batch-drift.json`.
+
+
 - `--skip-existing` for `plan`/`tasks`/`analyze` with `--all-features`: skip the features whose
   artifact is already there and say which ones were skipped, so re-running an interrupted batch does
   not redo (or re-pay) finished work.

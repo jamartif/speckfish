@@ -1578,3 +1578,42 @@ def test_all_features_can_skip_what_is_already_done(tmp_path, monkeypatch):
                                harness=SimpleNamespace(name="fake"), skip_existing="plan.md")
     assert ran == ["003-c"]                       # only the missing one
     assert batch["skipped"] == ["001-a", "002-b"]
+
+
+def test_review_batch_walks_every_feature(tmp_path, monkeypatch):
+    """`review --all-features` exists so nobody has to write a PowerShell loop."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+        (d / "plan.md").write_text("# p", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    seen = []
+
+    def fake_review(cfg_, target, run_id=None, harness=None, profile=None, stage="uninterrupted",
+                    stream=True, dry_run=False, default_file="plan.md", interactive=False,
+                    step_name="review"):
+        seen.append((Path(target).parent.name, default_file, step_name))
+        return StepResult(step=step_name, ok=True, exit_code=0, duration_s=5.0, majors=2, nits=3)
+
+    monkeypatch.setattr(S, "do_review", fake_review)
+    batch = S.do_review_batch(cfg, S.features_with_spec(cfg), harness=SimpleNamespace(name="copilot"))
+    assert seen == [("001-a", "plan.md", "review-001-a"), ("002-b", "plan.md", "review-002-b")]
+    assert batch["done"] is True
+    assert (cfg.runs_dir / batch["run_id"] / "batch-review.json").exists()
+
+
+def test_review_batch_uses_spec_when_there_is_no_plan(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    used = []
+    monkeypatch.setattr(S, "do_review", lambda *a, **k: used.append(k.get("default_file"))
+                        or StepResult(step="review", ok=True, exit_code=0, duration_s=1.0))
+    S.do_review_batch(Config(root=tmp_path), S.features_with_spec(Config(root=tmp_path)),
+                      harness=SimpleNamespace(name="copilot"))
+    assert used == ["spec.md"]
