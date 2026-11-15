@@ -285,7 +285,7 @@ def exit_for(res: dict) -> int:
     return EXIT_OK
 
 
-GLOBAL_FLAGS_VALUE = {"--root", "--harness", "--model"}
+GLOBAL_FLAGS_VALUE = {"--root", "--harness", "--model", "--fallback"}
 GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run"}
 
 
@@ -323,6 +323,8 @@ def build_parser() -> argparse.ArgumentParser:
                         help="show the version and exit")
     common.add_argument("--root", default=".", help="project root (default: cwd)")
     common.add_argument("--harness", default=None, help="claude | copilot | codex (default: auto)")
+    common.add_argument("--fallback", default=None,
+                        help="if a step stops for quota/auth, retry it once with this harness")
     common.add_argument("--model", default=None,
                         help="model passed to the agent CLI (default: the CLI's own choice)")
     common.add_argument("--json", action="store_true", help="JSON output on stdout")
