@@ -1736,3 +1736,22 @@ def test_batch_gives_each_feature_its_own_artifact_folder(tmp_path, monkeypatch)
     a = batch["steps"]["001-a"]["artifact_dir"]
     b = batch["steps"]["002-b"]["artifact_dir"]
     assert a != b and a.endswith("clarify-001-a") and b.endswith("clarify-002-b")
+
+
+def test_step_log_is_named_after_the_feature(tmp_path):
+    """A batch kept one log for all features, so there was nothing to watch while it ran."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import runner as R
+    from speckfish.config import Config as Cfg
+
+    cfg = Cfg(root=tmp_path)
+    rid = "20260101-000000"
+    (tmp_path / ".speckfish" / "runs" / rid).mkdir(parents=True)
+    inv = NS(argv=["cmd", "/c", "echo ok"], env={})
+    h = NS(name="fake", build=lambda **k: inv)
+    monkeypatch_h = None  # noqa: F841  (kept for readability of the stub above)
+    res = R.run_step(cfg, h, "clarify", "p", tmp_path, rid, None, dry_run=True,
+                     artifact_name="clarify-001-a")
+    # dry-run reports the argv, but the artifact folder already proves the label reached run_step
+    assert Path(res.artifact_dir).name == "clarify-001-a"

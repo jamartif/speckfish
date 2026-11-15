@@ -5,6 +5,10 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: a batch also shared one **log** per step (`logs/clarify.log`), overwritten on every feature, so
+  there was nothing to watch while it ran. Logs are now `logs/<step>-<feature>.log`, same as artifacts.
+
+
 - Fix: a batch (`--all-features`) ran every feature into the **same** artifact folder, so
   `clarify --all-features` on 7 features left a single `questions.md` and the last feature overwrote
   the other six (and each agent could read the previous feature's file). Every feature now writes to
