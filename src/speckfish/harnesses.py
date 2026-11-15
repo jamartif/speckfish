@@ -266,7 +266,10 @@ class CopilotHarness(Harness):
 CODEX_FILE_HINT = (
     "Writing files: this session has no apply_patch tool. Do not emit \"*** Begin Patch\" blocks and "
     "do not look for apply_patch (a run lost 6 of its 10 minutes retrying it). Write files with your "
-    "file-write tool, or with PowerShell: Set-Content -LiteralPath '<path>' -Value $content -Encoding utf8."
+    "file-write tool, or with PowerShell: Set-Content -LiteralPath '<path>' -Value $content -Encoding utf8. "
+    "Read whole files with Get-Content -Raw instead of line ranges: one command instead of eight. "
+    "Do not install packages (no pip install): if a validator is missing, say so and validate by "
+    "inspection instead of changing the machine."
 )
 
 class CodexHarness(Harness):

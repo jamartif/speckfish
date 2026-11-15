@@ -1446,3 +1446,28 @@ def test_codex_is_told_not_to_use_apply_patch(tmp_path):
     prompt = argv[-1]
     assert "do the thing" in prompt and CODEX_FILE_HINT in prompt
     assert "no apply_patch tool" in prompt and "Set-Content" in prompt
+
+
+def test_batch_keeps_its_own_detail_file(tmp_path, monkeypatch):
+    """state.json is keyed by step name: seven features would overwrite each other."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: StepResult(step="plan", ok=True,
+                                                                exit_code=0, duration_s=2.0))
+    feats = S.features_with_spec(cfg)
+    batch = S.do_feature_batch(cfg, "plan", feats, harness=SimpleNamespace(name="fake"))
+    written = cfg.runs_dir / batch["run_id"] / "batch.json"
+    assert written.exists()
+    saved = json.loads(written.read_text(encoding="utf-8"))
+    assert list(saved["steps"]) == ["001-a", "002-b"]      # one entry per feature
+
+
+def test_codex_is_told_not_to_install_packages():
+    from speckfish.harnesses import CODEX_FILE_HINT
+    assert "Do not install packages" in CODEX_FILE_HINT
+    assert "Get-Content -Raw" in CODEX_FILE_HINT

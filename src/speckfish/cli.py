@@ -169,6 +169,7 @@ def batch_summary(batch: dict, root: str | None = None) -> str:
         lines.append("  all features done")
     if batch.get("total_cost"):
         lines.append(f"  total: ${batch['total_cost']:.2f}")
+    lines.append(f"  per-feature detail: .speckfish/runs/{batch.get('run_id')}/batch.json")
     return "\n".join(lines)
 
 
