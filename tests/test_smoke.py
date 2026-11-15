@@ -2085,3 +2085,10 @@ def test_implement_that_ticks_tasks_reports_progress(tmp_path, monkeypatch):
     R.postprocess(res, "implement", art, tmp_path, before=(0, 5))
     assert res.ok is True
     assert res.verdict == "5/5 tasks done"
+
+
+def test_implement_prompt_demands_ticking_the_checkbox(tmp_path):
+    """Ten tasks were done in the repo and none ticked, so the next run would redo them."""
+    from speckfish import prompts as P
+    text = P.SKILL_SPECS["implement"]["headless_note"].lower()
+    assert "checkbox" in text and "- [x]" in text
