@@ -5,6 +5,13 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- A `--all-features` run now writes `batch.json` in the run directory. `state.json` is keyed by step
+  name, so seven features overwrote each other and only the last one survived.
+- Codex prompt: no `pip install` (a run installed `openapi-spec-validator` on the machine to validate a
+  contract) and read whole files with `Get-Content -Raw` instead of line ranges — eight commands where
+  one would do.
+
+
 - Fix: a `.speckfish/config.json` written by an older build stored **all** the defaults, so it pinned
   `timeouts.plan = 600` forever and a plan that was writing files at minute 9 was killed at 10. Configs
   now carry `schema: 2`; anything older drops the stored `timeouts` block once and picks up the current

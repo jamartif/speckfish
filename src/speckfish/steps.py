@@ -335,6 +335,9 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
             out["stopped_at"] = f.name
             break
     out["done"] = out["stopped_at"] is None
+    # state.json is keyed by step name, so a batch would overwrite itself feature after feature
+    (cfg.runs_dir / rid / "batch.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
+                                                   encoding="utf-8")
     return out
 
 
