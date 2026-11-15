@@ -5,6 +5,16 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: a `.speckfish/config.json` written by an older build stored **all** the defaults, so it pinned
+  `timeouts.plan = 600` forever and a plan that was writing files at minute 9 was killed at 10. Configs
+  now carry `schema: 2`; anything older drops the stored `timeouts` block once and picks up the current
+  defaults. And `save()` no longer writes a value that equals the default.
+- Codex prompt: it is now told this session has **no `apply_patch`** and how to write files instead. In
+  the run that hit the timeout, 49 `*** Begin Patch` blocks and 25 `apply_patch` lookups ate ~6 of the
+  10 minutes, with broken escapes (`
++#`) in the retries.
+
+
 - README: the `Development` section is now just "how to run the tests" plus a pointer; the release
   procedure (tags, workflow) moved to `CONTRIBUTING.md`, where it belongs, and states the current
   policy: no release per change, install editable until one is asked for.

@@ -263,6 +263,12 @@ class CopilotHarness(Harness):
         }
 
 
+CODEX_FILE_HINT = (
+    "Writing files: this session has no apply_patch tool. Do not emit \"*** Begin Patch\" blocks and "
+    "do not look for apply_patch (a run lost 6 of its 10 minutes retrying it). Write files with your "
+    "file-write tool, or with PowerShell: Set-Content -LiteralPath '<path>' -Value $content -Encoding utf8."
+)
+
 class CodexHarness(Harness):
     name = "codex"
     echo_stdout = False        # `codex exec --json` prints NDJSON: translated into activity lines
@@ -290,6 +296,7 @@ class CodexHarness(Harness):
         # writes. Headless means nobody can approve, so this adapter declares the filesystem open.
         # --json: NDJSON events as they happen (that is what the progress line feeds on) instead of
         # one silent stream until the end
+        prompt = prompt + "\n\n" + CODEX_FILE_HINT
         argv = (self.prefix() or ["codex"]) + ["exec", "--json", "--skip-git-repo-check",
                                                "--dangerously-bypass-approvals-and-sandbox", prompt]
         if egm_root:
