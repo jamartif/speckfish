@@ -150,6 +150,57 @@ def split_summary(out: dict, root: str | None = None) -> str:
     return "\n".join(lines)
 
 
+# what each step produces, so `--skip-existing` knows what "already done" means
+STEP_ARTIFACT = {
+    "plan": "plan.md",
+    "tasks": "tasks.md",
+    "analyze": "tasks.md",       # analyze runs on the same feature set
+    "clarify": None,             # questions.md lives in the run dir, checked separately
+    "checklist": "checklists",
+    "converge": "tasks.md",
+}
+
+
+def add_feature_selection(sp) -> None:
+    """The same resume flags everywhere: one feature, a list, a range, or all of them."""
+    sp.add_argument("--all-features", action="store_true",
+                    help="run this step on every feature in order, stopping at the first failure")
+    sp.add_argument("--only", default=None,
+                    help="only these features, by position: 2,4,5")
+    sp.add_argument("--from-feature", type=int, default=None,
+                    help="from this feature position onwards")
+    sp.add_argument("--skip-existing", action="store_true",
+                    help="skip the features that already have the artifact for this step")
+
+
+def _positions(value: str) -> list[int] | None:
+    if not value:
+        return None
+    try:
+        return [int(x) for x in str(value).replace(" ", "").split(",") if x]
+    except ValueError:
+        raise SystemExit(f"--only expects numbers, e.g. 2,4,5 (got {value!r})")
+
+
+def select_features(cfg, args) -> list:
+    """Every step resolves `--feature` / `--only` / `--from-feature` / `--all-features` the same way."""
+    feats = S.features_with_spec(cfg)
+    only = _positions(getattr(args, "only", None))
+    if getattr(args, "feature", None):
+        return [S.find_feature(cfg, args.feature)]
+    if only:
+        return [f for i, f in enumerate(feats, start=1) if i in only]
+    start = getattr(args, "from_feature", None)
+    if start:
+        return feats[max(0, int(start) - 1):]
+    return feats
+
+
+def is_batch(args) -> bool:
+    return bool(getattr(args, "all_features", False) or getattr(args, "only", None)
+                or getattr(args, "from_feature", None))
+
+
 def batch_summary(batch: dict, root: str | None = None) -> str:
     """Per-feature result of a --all-features run."""
     lines = [f"{batch.get('action')}  ·  {len(batch.get('order') or [])} feature(s)  ·  "
@@ -316,14 +367,12 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--run-id", default=None)
     sp.add_argument("--feature", default=None,
                     help="feature to plan: number (002), directory name or path (default: the active one)")
-    sp.add_argument("--all-features", action="store_true",
-                    help="plan every feature under specs/ in order, stopping at the first failure")
+    add_feature_selection(sp)
     sp.add_argument("--with-clarify", action="store_true",
                     help="run clarify first; stop if it leaves questions unless --accept-defaults")
     sp.add_argument("--accept-defaults", action="store_true",
                     help="with --with-clarify: plan even if questions were left unanswered")
-    sp.add_argument("--skip-existing", action="store_true",
-                    help="with --all-features: skip features that already have plan.md")
+
 
     sp = sub.add_parser("review", help="Goldfish review of a document")
     sp.add_argument("target", nargs="?", default=None, help="document (default: plan.md of the latest feature)")
@@ -335,14 +384,12 @@ def build_parser() -> argparse.ArgumentParser:
                     help="run the agent in this terminal so it can ask you questions")
     sp.add_argument("--with-analyze", action="store_true",
                     help="run the Spec Kit analyze step on this feature before reviewing it")
-    sp.add_argument("--all-features", action="store_true",
-                    help="review the plan.md (or spec.md) of every feature in order")
+    add_feature_selection(sp)
 
     sp = sub.add_parser("drift", help="drift between designs and code")
     sp.add_argument("target", nargs="?", default=None, help="specs directory (default: latest feature)")
     sp.add_argument("--run-id", default=None)
-    sp.add_argument("--all-features", action="store_true",
-                    help="run drift on every feature in order")
+    add_feature_selection(sp)
 
     sp = sub.add_parser("pipeline", help="specify → plan → review (→ drift)")
     sp.add_argument("description", help="feature description")
@@ -373,12 +420,8 @@ def build_parser() -> argparse.ArgumentParser:
         sp.add_argument("--run-id", default=None)
         sp.add_argument("--feature", default=None,
                         help="feature to work on: number (002), name or path (default: the active one)")
-        if skill in ("tasks", "analyze"):
-            sp.add_argument("--all-features", action="store_true",
-                            help="run this step on every feature in order, stopping at the first failure")
-            sp.add_argument("--skip-existing", action="store_true",
-                            help=f"with --all-features: skip features that already have "
-                                 f"{'tasks.md' if skill == 'tasks' else 'the analysis artifact'}")
+        if skill not in ("constitution",):
+            add_feature_selection(sp)
         if spec.get("dangerous"):
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
@@ -513,10 +556,11 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_OK
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
                             feature=feature)
-        elif args.cmd == "plan" and getattr(args, "all_features", False):
-            feats = S.features_with_spec(cfg)
+        elif args.cmd == "plan" and is_batch(args) and not getattr(args, "with_clarify", False):
+            feats = select_features(cfg, args)
             if not feats:
-                print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
+                print("no feature matched: run `speckfish specify` first, or check --only",
+                      file=sys.stderr)
                 return EXIT_ERROR
             batch = S.do_feature_batch(cfg, "plan", feats, need_harness(), args.run_id,
                                        stack=args.stack, stream=stream, dry_run=args.dry_run,
@@ -526,8 +570,8 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "plan":
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
                             feature=args.feature)
-        elif args.cmd == "review" and getattr(args, "all_features", False):
-            feats = S.features_with_spec(cfg)
+        elif args.cmd == "review" and is_batch(args):
+            feats = select_features(cfg, args)
             if not feats:
                 print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
                 return EXIT_ERROR
@@ -549,8 +593,8 @@ def main(argv: list[str] | None = None) -> int:
             res = S.do_review(cfg, args.target, args.run_id, need_harness(), args.profile,
                               args.stage, stream, args.dry_run, args.target_file,
                               interactive=getattr(args, "interactive", False))
-        elif args.cmd == "drift" and getattr(args, "all_features", False):
-            feats = S.features_with_spec(cfg)
+        elif args.cmd == "drift" and is_batch(args):
+            feats = select_features(cfg, args)
             if not feats:
                 print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
                 return EXIT_ERROR
@@ -566,16 +610,16 @@ def main(argv: list[str] | None = None) -> int:
                        f"Re-run with --yes to confirm, or --dry-run to see the command first.")
                 emit({"error": msg, "writes": spec["writes"]}, as_json, f"refusing: {msg}")
                 return EXIT_ENV
-            if getattr(args, "all_features", False):
-                feats = S.features_with_spec(cfg)
+            if is_batch(args):
+                feats = select_features(cfg, args)
                 if not feats:
-                    print("no feature has a spec.md yet: run `speckfish specify` first",
+                    print("no feature matched: run `speckfish specify` first, or check --only",
                           file=sys.stderr)
                     return EXIT_ERROR
                 batch = S.do_feature_batch(cfg, args.cmd, feats, need_harness(), args.run_id,
                                            args=args.args, stream=stream, dry_run=args.dry_run,
-                                           skip_existing=("tasks.md" if getattr(args, "skip_existing",
-                                                                               False) else None))
+                                           skip_existing=(STEP_ARTIFACT.get(args.cmd)
+                                                          if args.skip_existing else None))
                 emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
                 return EXIT_OK if batch.get("done") else EXIT_ERROR
             res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream,

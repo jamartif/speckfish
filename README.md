@@ -482,6 +482,23 @@ $ speckfish features
 **writes `.specify/feature.json`** — the same file Spec Kit reads — plus tells the agent in the prompt
 which folder to work on. A missing feature fails with the list of what exists instead of guessing.
 
+**Every feature-oriented step** (`plan`, `tasks`, `analyze`, `clarify`, `checklist`, `converge`,
+`review`, `drift`) takes the same four flags, so resuming works the same everywhere:
+
+| Flag | Meaning |
+|---|---|
+| `--feature 003` | just that one (number, name or path) |
+| `--only 2,4,5` | these, by position in `specs/` |
+| `--from-feature 4` | this one onwards |
+| `--all-features` | every feature, in order |
+| `--skip-existing` | skip the ones that already have this step's artifact |
+
+```bash
+speckfish tasks --only 2,4 --harness codex        # redo just these
+speckfish tasks --from-feature 4 --skip-existing  # carry on where it stopped
+speckfish review --only 1 --harness copilot       # review one feature
+```
+
 To run a step over **every** feature, `plan`, `tasks` and `analyze` accept `--all-features`: they walk
 `specs/*/` in creation order, share one run id, stop at the first failure and print where they stopped
 (earlier features stay done, so a re-run only redoes what is missing):
