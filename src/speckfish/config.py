@@ -63,6 +63,8 @@ class Config:
     def path(root: Path) -> Path:
         return root / STATE_DIR / "config.json"
 
+    SCHEMA = 2          # bump when a stored default would shadow a better one
+
     @classmethod
     def load(cls, root: Path) -> Config:
         root = _native(root).resolve()   # `--root ~/repo` and `/c/repo` both work
@@ -70,8 +72,11 @@ class Config:
         cfg = cls(root=root)
         if p.exists():
             data = json.loads(p.read_text(encoding="utf-8"))
-            for k in ("harness", "egm_root", "specify", "model", "profile", "language",
-                      "timeouts"):
+            # configs written by older builds stored every default, so a better timeout default
+            # could never reach an existing project: drop that block once and migrate
+            if int(data.get("schema") or 1) < cls.SCHEMA:
+                data.pop("timeouts", None)
+            for k in ("harness", "egm_root", "specify", "model", "profile", "language"):
                 if k in data:
                     setattr(cfg, k, data[k])
             for k in ("timeouts", "budgets"):
@@ -92,6 +97,12 @@ class Config:
         p.parent.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         data.pop("root", None)
+        data["schema"] = self.SCHEMA
+        # never write a default back: a stored default would outlive a better one in a later build
+        if data.get("timeouts") == DEFAULTS["timeouts"]:
+            data.pop("timeouts", None)
+        if data.get("budgets") == DEFAULTS["budgets"]:
+            data.pop("budgets", None)
         p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
         return p
 

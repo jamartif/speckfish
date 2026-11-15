@@ -9,7 +9,7 @@ import pytest
 
 from speckfish import prompts
 from speckfish.cli import build_parser, exit_for, normalize_argv
-from speckfish.config import Config, find_report, parse_consolidated
+from speckfish.config import DEFAULTS, Config, find_report, parse_consolidated
 from speckfish.harnesses import ClaudeHarness, CodexHarness, CopilotHarness
 from speckfish.runner import run_interactive, run_step
 
@@ -1408,3 +1408,41 @@ def test_brainstorm_reports_the_brief(tmp_path, monkeypatch):
                            harness=SimpleNamespace(name="codex"))
     assert res.ok is True
     assert any(r.endswith("concepts_brief.md") for r in res.reports)
+
+
+def test_stored_defaults_do_not_pin_old_timeouts(tmp_path):
+    """An old config.json stored every default, so a better timeout never reached the project."""
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    (tmp_path / ".speckfish" / "config.json").write_text(json.dumps({
+        "language": "es", "timeouts": {"plan": 600, "specify": 600}}), encoding="utf-8")
+    cfg = Config.load(tmp_path)
+    assert cfg.language == "es"                      # real settings survive
+    assert cfg.timeouts["plan"] == DEFAULTS["timeouts"]["plan"]     # the stale 600 does not
+    assert cfg.timeouts["plan"] != 600
+
+
+def test_explicit_timeout_is_kept_and_persisted(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    assert C.main(["--root", str(tmp_path), "config", "timeout.plan=2400"]) == 0
+    stored = json.loads((tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8"))
+    assert stored["timeouts"]["plan"] == 2400 and stored["schema"] == Config.SCHEMA
+    assert Config.load(tmp_path).timeouts["plan"] == 2400
+
+
+def test_save_does_not_write_default_timeouts(tmp_path):
+    cfg = Config(root=tmp_path)
+    cfg.language = "es"
+    stored = json.loads(cfg.save().read_text(encoding="utf-8"))
+    assert "timeouts" not in stored                  # defaults stay in code, not in the file
+
+
+def test_codex_is_told_not_to_use_apply_patch(tmp_path):
+    """A real run spent 6 of its 10 minutes retrying a non-existent apply_patch."""
+    from speckfish.harnesses import CODEX_FILE_HINT, CodexHarness
+    cfg = _cfg(tmp_path)
+    argv = CodexHarness(cfg).build("plan", "do the thing", tmp_path, tmp_path, None,
+                                   None, 60, None).argv
+    prompt = argv[-1]
+    assert "do the thing" in prompt and CODEX_FILE_HINT in prompt
+    assert "no apply_patch tool" in prompt and "Set-Content" in prompt
