@@ -102,9 +102,12 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     log = log_path.open("w", encoding="utf-8")
     log.write("$ " + " ".join(inv.argv) + "\n\n")
 
+    activity = {"t": time.time()}
+
     def pump(pipe, chunks, echo=False):
         try:
             for line in pipe:
+                activity["t"] = time.time()
                 chunks.append(line)
                 log.write(line)
                 log.flush()
@@ -120,20 +123,36 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     t_out.start()
     t_err.start()
     timed_out = False
-    try:
-        proc.wait(timeout=timeout)
-    except subprocess.TimeoutExpired:
-        timed_out = True
-        _kill_tree(proc)
-        with contextlib.suppress(subprocess.TimeoutExpired):
-            proc.wait(timeout=30)
+    idle_closed = False
+    # an agent can finish its work and never exit (EGM's final pass does this): a long silence with
+    # the process still alive is a finished run, not a hang worth burning the whole timeout on
+    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    while True:
+        try:
+            proc.wait(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            now = time.time()
+            if idle_limit and now - activity["t"] >= idle_limit:
+                idle_closed = True
+            elif now - started >= timeout:
+                timed_out = True
+            else:
+                continue
+            _kill_tree(proc)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=30)
+            break
     t_out.join(timeout=15)
     t_err.join(timeout=5)
     with contextlib.suppress(Exception):
         log.close()
     meter.stop()
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
-    return code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out
+    if idle_closed:
+        code = 0 if code is None else code
+    return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
+            idle_closed)
 
 
 def is_noise_line(line: str) -> bool:
@@ -364,8 +383,9 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
                           log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
                           error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
-    code, out, err, duration, timed_out = execute(harness, inv, step, cwd, run_dir, timeout, stream,
-                                                  progress)
+    code, out, err, duration, timed_out, idle_closed = execute(
+        harness, inv, step, cwd, run_dir, timeout, stream, progress)
+    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
     parsed = harness.parse_output(out, err, code) or {}
     res = StepResult(step=step, ok=(code == 0 and not timed_out), exit_code=code,
                      duration_s=round(duration, 1), log=norm(run_dir / "logs" / f"{label}.log"),
@@ -389,6 +409,12 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
     postprocess(res, step, artifact_dir, cwd)
+    if idle_closed:
+        # the work landed but the CLI never exited: keep the result, say how it ended
+        res.error = (f"the agent wrote nothing for {idle_limit}s yet stayed alive; stopped it and "
+                     f"kept what it had already written")
+        if res.reports:
+            res.ok = True
     record_state(cfg, run_dir, run_id, res, step, harness, started_at)
     return res
 
