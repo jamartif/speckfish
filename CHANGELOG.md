@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `--skip-existing` for `plan`/`tasks`/`analyze` with `--all-features`: skip the features whose
+  artifact is already there and say which ones were skipped, so re-running an interrupted batch does
+  not redo (or re-pay) finished work.
+
+
 - `plan --with-clarify [--accept-defaults]`: runs `clarify` first and **stops** if it left questions
   (planning on unreviewed assumed defaults is how a misunderstanding gets into the design).
 - `review --with-analyze`: runs the cheap Spec Kit `analyze` before the paid EGM review.
