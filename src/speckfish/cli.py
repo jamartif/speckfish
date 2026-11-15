@@ -52,6 +52,13 @@ ERROR_HINTS = {
 }
 
 
+def _tasks_note(res: dict) -> str:
+    done, total = res.get("tasks_done"), res.get("tasks_total")
+    if done is None or not total:
+        return ""
+    return f"  tasks {done}/{total}"
+
+
 def summarize(res: dict, root: str | None = None) -> str:
     """One screen of plain text: what ran, what it found, where the report is."""
     ok = res.get("ok")
@@ -63,6 +70,7 @@ def summarize(res: dict, root: str | None = None) -> str:
         unit = res.get("cost_unit") or "usd"
         value = f"${res['cost']:.2f}" if unit == "usd" else f"{float(res['cost']):.1f} {unit}"
         head += f"  ·  {value}"
+    head += _tasks_note(res)
     if not ok and res.get("exit_code"):
         head += f"  ·  exit {res['exit_code']}"
     lines = [head]

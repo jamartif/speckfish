@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `implement` now reports how much of `tasks.md` it actually did (`OK implement · tasks 16/113`) and
+  fails when it ticks **no** task at all. Four implements this night reported OK, cost 51.5 credits
+  and left 871 tasks pending and three endpoints in the whole API: "something changed in the repo"
+  was too weak a criterion for a 113-task feature.
+
+
 - The "did it write code?" check ignored `bin/`, `obj/`, `.speckfish/` and tool state: a `dotnet build`
   alone touched `obj/*.AssemblyInfo.cs` and counted as an implementation.
 
