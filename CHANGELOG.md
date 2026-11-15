@@ -5,6 +5,14 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `clarify` reports what it actually did: *"5 clarification question(s), each with the default it
+  assumed — the spec was NOT modified"*, with `questions.md` marked as the file to open. Before, the
+  step just said OK and the questions sat unnoticed in the run directory. It now fails loudly if the
+  agent finished without writing `questions.md`.
+- README: the order table includes `clarify` (before `plan`), and the review example no longer mixes
+  `--interactive` with a positional argument that was read as the document.
+
+
 - Fix (wasted run time): the codex hint now explains the mojibake trap. This machine's PowerShell 5.1
   reports output encoding **ibm850**, so `Get-Content` shows `CatÃ¡logo` for a file that is correct
   UTF-8 on disk. A 15-minute `plan` spent ~4 of them grepping for mojibake that never existed. The

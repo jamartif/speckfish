@@ -75,6 +75,7 @@ The numbers in the diagram are the order, and two of them are not obvious:
 
 | Step | Needs | Why it is there |
 |---|---|---|
+| 3b · `clarify` | `spec.md` | Optional, **before** `plan`: headless it cannot answer, so it writes `questions.md` with every question *and the default it assumed*, and leaves the spec untouched. Read it, accept or edit, then plan. |
 | 5 · `tasks` | `plan.md` | Run it **before** the review: the reviewer can then judge coverage ("the plan promises X, no task builds X"). A review of a plan with no task list cannot catch missing work. |
 | 6 · `review` | `plan.md` (+ `tasks.md`) | Reviewing the spec alone only yields "this is ambiguous"; the plan is where technical decisions exist to be criticised. |
 | 7 · `implement` | `tasks.md` | Writes code. One feature at a time, gated behind `--yes`. |

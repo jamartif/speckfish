@@ -1481,3 +1481,28 @@ def test_codex_hint_explains_the_mojibake_trap():
     assert "UTF8Encoding" in CODEX_FILE_HINT        # how to write accents safely
     assert "never rewrite a file to fix it" in CODEX_FILE_HINT
     assert "Do not install packages" in CODEX_FILE_HINT
+
+
+def test_clarify_reports_its_questions_and_does_not_touch_the_spec(tmp_path):
+    """Headless clarify cannot answer: it must say how many questions it left and where."""
+    from speckfish.runner import StepResult, postprocess
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "questions.md").write_text(
+        "- ¿A o B? — Importa porque X. — Supuesto: A.\n- ¿C o D? — Importa porque Y. — Supuesto: C.\n",
+        encoding="utf-8")
+    res = StepResult(step="clarify", ok=True, exit_code=0, duration_s=3.0)
+    postprocess(res, "clarify", art, tmp_path)
+    assert res.ok is True
+    assert "2 clarification question(s)" in res.verdict
+    assert "NOT modified" in res.verdict
+    assert any(r.endswith("questions.md") for r in res.reports)
+
+
+def test_clarify_without_questions_file_is_a_failure(tmp_path):
+    from speckfish.runner import StepResult, postprocess
+    art = tmp_path / "art"
+    art.mkdir()
+    res = StepResult(step="clarify", ok=True, exit_code=0, duration_s=3.0)
+    postprocess(res, "clarify", art, tmp_path)
+    assert res.ok is False and "questions.md" in res.error

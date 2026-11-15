@@ -284,6 +284,20 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | Non
             res.ok = False
             res.error = ("the agent answered but wrote no spec.md under specs/ "
                          "(read-only sandbox, or it only printed the spec)")
+    elif step == "clarify":
+        # headless clarify cannot answer: it leaves the questions (and the defaults it assumed)
+        res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
+        questions = artifact_dir / "questions.md"
+        if questions.exists():
+            text = questions.read_text(encoding="utf-8", errors="replace")
+            asks = [ln for ln in text.splitlines() if ln.strip().startswith(("-", "*"))]
+            res.verdict = (f"{len(asks)} clarification question(s), each with the default it assumed "
+                           f"— the spec was NOT modified. Read them, then either accept the defaults, "
+                           f"edit spec.md, or re-run with --interactive")
+        elif res.ok:
+            res.ok = False
+            res.error = ("clarify finished but wrote no questions.md "
+                         "(nothing was ambiguous, or it answered in the chat)")
     elif step in ("brainstorm", "draft"):
         from .prompts import EXPLORE
         res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
