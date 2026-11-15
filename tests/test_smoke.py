@@ -1894,3 +1894,17 @@ def test_fallback_flag_works_after_the_subcommand():
     assert argv[:2] == ["--fallback", "codex"]
     args = build_parser().parse_args(argv)
     assert args.fallback == "codex"
+
+
+def test_a_dry_run_batch_does_not_count_as_done(tmp_path):
+    """--dry-run batches wrote ok=True, so --skip-existing skipped reviews that never ran."""
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+    old = cfg.runs_dir / "20260101-000000"
+    old.mkdir(parents=True)
+    (old / "batch-review.json").write_text(json.dumps({"steps": {
+        "001-a": {"ok": True, "error": "dry-run"},
+        "002-b": {"ok": True, "error": ""},
+    }}), encoding="utf-8")
+    assert S.review_already_done(cfg, "001-a") is False     # dry-run, not really reviewed
+    assert S.review_already_done(cfg, "002-b") is True      # real run

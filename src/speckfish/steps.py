@@ -337,7 +337,8 @@ def review_already_done(cfg: Config, feature: str, action: str = "review") -> bo
         except (OSError, ValueError):
             continue
         entry = (data.get("steps") or {}).get(feature) or {}
-        if entry.get("ok"):
+        # a --dry-run batch records ok=True without spending a credit: never count it as done
+        if entry.get("ok") and (entry.get("error") or "") != "dry-run":
             return True
     marker = "consolidated_review_report.md" if action == "review" else "drift_report.md"
     return bool(list(cfg.runs_dir.glob(f"*/artifacts/{action}-{feature}/{marker}")))
