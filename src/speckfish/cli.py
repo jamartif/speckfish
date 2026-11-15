@@ -315,6 +315,10 @@ def build_parser() -> argparse.ArgumentParser:
                     help="feature to plan: number (002), directory name or path (default: the active one)")
     sp.add_argument("--all-features", action="store_true",
                     help="plan every feature under specs/ in order, stopping at the first failure")
+    sp.add_argument("--with-clarify", action="store_true",
+                    help="run clarify first; stop if it leaves questions unless --accept-defaults")
+    sp.add_argument("--accept-defaults", action="store_true",
+                    help="with --with-clarify: plan even if questions were left unanswered")
 
     sp = sub.add_parser("review", help="Goldfish review of a document")
     sp.add_argument("target", nargs="?", default=None, help="document (default: plan.md of the latest feature)")
@@ -324,6 +328,8 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--run-id", default=None)
     sp.add_argument("--interactive", action="store_true",
                     help="run the agent in this terminal so it can ask you questions")
+    sp.add_argument("--with-analyze", action="store_true",
+                    help="run the Spec Kit analyze step on this feature before reviewing it")
 
     sp = sub.add_parser("drift", help="drift between designs and code")
     sp.add_argument("target", nargs="?", default=None, help="specs directory (default: latest feature)")
@@ -479,6 +485,22 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
             res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
                                args.dry_run, review=getattr(args, "review", False))
+        elif args.cmd == "plan" and getattr(args, "with_clarify", False) and not args.all_features:
+            feature = args.feature or (S.active_feature(cfg).name if S.active_feature(cfg) else None)
+            if not feature:
+                print("--with-clarify needs a feature: pass --feature NNN", file=sys.stderr)
+                return EXIT_ENV
+            clar = S.do_skill(cfg, "clarify", "", args.run_id, need_harness(), stream,
+                              args.dry_run, feature=feature)
+            emit(clar.to_dict(), as_json, summarize(clar.to_dict(), norm(cfg.root)))
+            if not clar.ok:
+                return EXIT_ERROR
+            if clar.verdict and not args.accept_defaults:
+                print("\nclarify left questions above: answer them (or accept the defaults with "
+                      "--accept-defaults) and re-run plan", file=sys.stderr)
+                return EXIT_OK
+            res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
+                            feature=feature)
         elif args.cmd == "plan" and getattr(args, "all_features", False):
             feats = S.features_with_spec(cfg)
             if not feats:
@@ -491,7 +513,13 @@ def main(argv: list[str] | None = None) -> int:
         elif args.cmd == "plan":
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
                             feature=args.feature)
-        elif args.cmd == "review":
+        elif args.cmd == "review" and getattr(args, "with_analyze", False) and args.target:
+            feat = Path(str(args.target)).parent.name or None
+            ana = S.do_skill(cfg, "analyze", "", args.run_id, need_harness(), stream,
+                             args.dry_run, feature=feat)
+            emit(ana.to_dict(), as_json, summarize(ana.to_dict(), norm(cfg.root)))
+            if not ana.ok:
+                return EXIT_ERROR
             res = S.do_review(cfg, args.target, args.run_id, need_harness(), args.profile,
                               args.stage, stream, args.dry_run, args.target_file,
                               interactive=getattr(args, "interactive", False))

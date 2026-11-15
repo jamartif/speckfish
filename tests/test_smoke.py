@@ -1506,3 +1506,55 @@ def test_clarify_without_questions_file_is_a_failure(tmp_path):
     res = StepResult(step="clarify", ok=True, exit_code=0, duration_s=3.0)
     postprocess(res, "clarify", art, tmp_path)
     assert res.ok is False and "questions.md" in res.error
+
+
+# ---------- composite steps: chain, do not fuse ----------
+def test_plan_with_clarify_stops_when_questions_are_left(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    (tmp_path / ".specify").mkdir()
+    (tmp_path / ".specify" / "feature.json").write_text('{"feature_directory": "specs/001-x"}',
+                                                       encoding="utf-8")
+    planned = []
+    monkeypatch.setattr(S, "do_skill", lambda *a, **k: StepResult(
+        step="clarify", ok=True, exit_code=0, duration_s=1.0,
+        verdict="3 clarification question(s), each with the default it assumed"))
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: planned.append(1) or StepResult(
+        step="plan", ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    code = C.main(["--root", str(tmp_path), "plan", "stack", "--feature", "001", "--with-clarify"])
+    assert code == 0 and planned == []          # stopped: a human must read the questions
+
+
+def test_plan_with_clarify_and_accept_defaults_continues(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    planned = []
+    monkeypatch.setattr(S, "do_skill", lambda *a, **k: StepResult(
+        step="clarify", ok=True, exit_code=0, duration_s=1.0, verdict="2 questions"))
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: planned.append(1) or StepResult(
+        step="plan", ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    code = C.main(["--root", str(tmp_path), "plan", "stack", "--feature", "001",
+                   "--with-clarify", "--accept-defaults"])
+    assert code == 0 and planned == [1]         # the user chose the defaults
+
+
+def test_review_with_analyze_runs_analyze_first(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    order = []
+    monkeypatch.setattr(S, "do_skill", lambda cfg, name, *a, **k: order.append(name) or StepResult(
+        step=name, ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(S, "do_review", lambda *a, **k: order.append("review") or StepResult(
+        step="review", ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    C.main(["--root", str(tmp_path), "review", "specs/001-x/plan.md", "--with-analyze"])
+    assert order == ["analyze", "review"]

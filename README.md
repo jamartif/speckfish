@@ -81,9 +81,21 @@ The numbers in the diagram are the order, and two of them are not obvious:
 | 7 · `implement` | `tasks.md` | Writes code. One feature at a time, gated behind `--yes`. |
 | 8 · `drift` | documents **and code** | It compares what the documents promise with the code that exists. **After implement**, never before: with no code the honest answer is "nothing is implemented", a cheap but useless run. |
 
-`analyze`, `checklist` and `clarify` are optional and sit next to `tasks` (they check spec ↔ plan ↔
-tasks consistency); `brainstorm`/`draft` are the only steps that come *before* `specify`, and only when
-the input is an idea rather than a document.
+`clarify` is optional and sits **before** `plan`; `analyze`, `checklist` and `converge` are optional and
+sit **after** `tasks` (they check spec ↔ plan ↔ tasks consistency); `brainstorm`/`draft` are the only
+steps that come *before* `specify`, and only when the input is an idea rather than a document.
+
+Two steps can be chained so you type less, without fusing them into one agent run:
+
+```bash
+speckfish plan "stack" --feature 001 --with-clarify     # clarify first, then STOP if it left questions
+speckfish plan "stack" --feature 001 --with-clarify --accept-defaults   # plan anyway
+speckfish review specs/001-*/plan.md --with-analyze     # cheap Spec Kit analyze before the EGM review
+```
+
+`--with-clarify` stopping is the point: planning on top of unreviewed assumed defaults is how a design
+consolidates a misunderstanding. `--with-analyze` is the opposite case — `analyze` is cheap and catches
+spec ↔ plan ↔ tasks gaps before you pay for a goldfish review.
 
 ## What it solves
 
