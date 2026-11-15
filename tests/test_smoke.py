@@ -1908,3 +1908,35 @@ def test_a_dry_run_batch_does_not_count_as_done(tmp_path):
     }}), encoding="utf-8")
     assert S.review_already_done(cfg, "001-a") is False     # dry-run, not really reviewed
     assert S.review_already_done(cfg, "002-b") is True      # real run
+
+
+def test_a_quota_stop_exits_3_not_2():
+    """429 is an environment problem: CI must be able to tell it from a failed step."""
+    from speckfish.cli import batch_exit_code
+    assert batch_exit_code({"stopped_at": "003-x",
+                            "steps": {"003-x": {"error_kind": "quota"}}}) == 3
+    assert batch_exit_code({"stopped_at": "003-x",
+                            "steps": {"003-x": {"error_kind": "agent"}}}) == 2
+    assert batch_exit_code({"stopped_at": None, "steps": {}}) == 0
+
+
+def test_batch_sums_credits_too(tmp_path, monkeypatch):
+    """Copilot bills in credits; total_cost was only summing dollars, so it always read 0.0."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    orig = S.do_skill
+    S.do_skill = lambda *a, **k: StepResult(step="tasks", ok=True, exit_code=0, duration_s=1.0,
+                                            cost=17.1, cost_unit="credits")
+    try:
+        batch = S.do_feature_batch(cfg, "tasks", S.features_with_spec(cfg),
+                                   harness=NS(name="fake"))
+    finally:
+        S.do_skill = orig
+    assert round(batch["total_cost"], 1) == 34.2

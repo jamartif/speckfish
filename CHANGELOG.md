@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- A batch stopped by a quota/auth failure now exits **3** (environment) instead of 2, so CI and the
+  operator can tell "out of credits" from "the step failed".
+- `total_cost` in the batch summary sums credits as well as dollars (Copilot bills in credits, so it
+  always read 0.0).
+
+
 - Fix: a `--dry-run` batch wrote `batch-review.json` with every step `ok: true`, and `review
   --skip-existing` then treated those features as reviewed — it skipped five real reviews without
   spending anything. Dry runs never count as done now.

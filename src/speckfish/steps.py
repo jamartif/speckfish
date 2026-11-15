@@ -372,7 +372,7 @@ def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None =
                             step_name=f"review-{f.name}")
         out["order"].append(f.name)
         out["steps"][f.name] = res.to_dict()
-        if res.cost and res.cost_unit == "usd":
+        if res.cost:
             out["total_cost"] += float(res.cost)
         if not res.ok:
             out["stopped_at"] = f.name
@@ -407,7 +407,7 @@ def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = 
                            step_name=f"drift-{f.name}")
         out["order"].append(f.name)
         out["steps"][f.name] = res.to_dict()
-        if res.cost and res.cost_unit == "usd":
+        if res.cost:
             out["total_cost"] += float(res.cost)
         if not res.ok:
             out["stopped_at"] = f.name
@@ -455,7 +455,7 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
                 res = do_skill(cfg, action, args, rid, alt, stream, dry_run, feature=f.name,
                                step_name=label)
         out["steps"][f.name] = res.to_dict()
-        if res.cost and res.cost_unit == "usd":
+        if res.cost:
             out["total_cost"] += float(res.cost)
         if not res.ok:
             out["stopped_at"] = f.name

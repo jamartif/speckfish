@@ -198,6 +198,15 @@ def select_features(cfg, args) -> list:
     return feats
 
 
+def batch_exit_code(batch: dict) -> int:
+    """A quota stop is an environment problem (3), not a failed step (2): CI can tell them apart."""
+    stopped = batch.get("stopped_at")
+    if not stopped:
+        return EXIT_OK
+    entry = (batch.get("steps") or {}).get(stopped) or {}
+    return EXIT_ENV if entry.get("error_kind") in ("quota", "auth") else EXIT_ERROR
+
+
 def is_batch(args) -> bool:
     return bool(getattr(args, "all_features", False) or getattr(args, "only", None)
                 or getattr(args, "from_feature", None))
@@ -573,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
                                        skip_existing="plan.md" if args.skip_existing else None,
                                        fallback=getattr(args, "fallback", None))
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-            return EXIT_OK if batch.get("done") else EXIT_ERROR
+            return batch_exit_code(batch)
         elif args.cmd == "plan":
             res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
                             feature=args.feature)
@@ -587,7 +596,7 @@ def main(argv: list[str] | None = None) -> int:
                                       skip_existing=args.skip_existing, fallback=getattr(args, "fallback", None))
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             if not batch.get("done"):
-                return EXIT_ERROR
+                return batch_exit_code(batch)
             return EXIT_BLOCKERS if any((s.get("blockers") or [])
                                         for s in batch["steps"].values()) else EXIT_OK
         elif args.cmd == "review" and getattr(args, "with_analyze", False) and args.target:
@@ -609,7 +618,7 @@ def main(argv: list[str] | None = None) -> int:
                                      args.dry_run, skip_existing=args.skip_existing,
                                      fallback=getattr(args, "fallback", None))
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-            return EXIT_OK if batch.get("done") else EXIT_ERROR
+            return batch_exit_code(batch)
         elif args.cmd == "drift":
             res = S.do_drift(cfg, args.target, args.run_id, need_harness(), stream, args.dry_run)
         elif args.cmd in SKILL_SPECS:
@@ -631,7 +640,7 @@ def main(argv: list[str] | None = None) -> int:
                                                           if args.skip_existing else None),
                                            fallback=getattr(args, "fallback", None))
                 emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-                return EXIT_OK if batch.get("done") else EXIT_ERROR
+                return batch_exit_code(batch)
             res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream,
                              args.dry_run, feature=getattr(args, "feature", None))
         elif args.cmd == "pipeline":
