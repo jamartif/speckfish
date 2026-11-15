@@ -5,6 +5,13 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: `clarify` (and `checklist`, `converge`, `brainstorm`, `draft`) had **no default timeout**, so
+  `run_step` fell back to the generic 600s and a real 7-feature run lost feature 5 after ten minutes
+  of work — the agent had already written its `questions.md`. Every agent step now has its own
+  default (`clarify` 1200s, like `analyze`), and a project config that only stores a few keys still
+  gets the new default for the rest.
+
+
 - Fix: a batch also shared one **log** per step (`logs/clarify.log`), overwritten on every feature, so
   there was nothing to watch while it ran. Logs are now `logs/<step>-<feature>.log`, same as artifacts.
 

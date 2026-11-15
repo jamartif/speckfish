@@ -1422,6 +1422,30 @@ def test_stored_defaults_do_not_pin_old_timeouts(tmp_path):
     assert cfg.timeouts["plan"] != 600
 
 
+def test_every_agent_step_has_its_own_timeout_default():
+    """clarify silently fell back to the generic 600s and timed out on a real 7-feature project.
+
+    A step with no default gets `timeouts.get(step, 600)` in run_step, so the steps that read the
+    whole spec and write a report ended up with the tightest budget of all (init uses 300).
+    """
+    agent_steps = {"specify", "plan", "tasks", "analyze", "review", "drift", "implement",
+                   "clarify", "checklist", "converge", "brainstorm", "draft"}
+    missing = sorted(agent_steps - set(DEFAULTS["timeouts"]))
+    assert not missing, f"no default timeout for {missing}: they would fall back to 600s"
+    assert DEFAULTS["timeouts"]["clarify"] >= 1200   # same order of work as analyze
+
+
+def test_clarify_timeout_default_reaches_a_project_that_never_set_it(tmp_path):
+    """The timeout block a project already stores must not hide a new default key."""
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    (tmp_path / ".speckfish" / "config.json").write_text(json.dumps({
+        "language": "es", "schema": Config.SCHEMA,
+        "timeouts": {"plan": 600, "review": 1200}}), encoding="utf-8")
+    cfg = Config.load(tmp_path)
+    assert cfg.timeouts["plan"] == 600                              # explicit stays explicit
+    assert cfg.timeouts["clarify"] == DEFAULTS["timeouts"]["clarify"]  # new key gets its default
+
+
 def test_explicit_timeout_is_kept_and_persisted(tmp_path):
     from speckfish import cli as C
     (tmp_path / ".speckfish").mkdir(parents=True)
