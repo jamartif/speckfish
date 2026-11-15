@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `plan --with-clarify [--accept-defaults]`: runs `clarify` first and **stops** if it left questions
+  (planning on unreviewed assumed defaults is how a misunderstanding gets into the design).
+- `review --with-analyze`: runs the cheap Spec Kit `analyze` before the paid EGM review.
+- Diagram renumbered 1→11 with `clarify` as its own step between `specify` and `plan`.
+
+
 - `clarify` reports what it actually did: *"5 clarification question(s), each with the default it
   assumed — the spec was NOT modified"*, with `questions.md` marked as the file to open. Before, the
   step just said OK and the questions sat unnoticed in the run directory. It now fails loudly if the
