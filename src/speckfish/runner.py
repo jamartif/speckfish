@@ -38,6 +38,8 @@ class StepResult:
     model: str | None = None
     denials: list = field(default_factory=list)
     verdict: str = ""
+    tasks_done: int | None = None
+    tasks_total: int | None = None
     error_kind: str = ""
     run_id: str = ""
     writes: str = ""
@@ -272,6 +274,28 @@ def human_error(out: str, err: str, code: int) -> str:
     return f"exit {code}: " + " / ".join(t[-160:] for t in tail)
 
 
+def task_progress(root: Path) -> tuple[int, int] | None:
+    """(done, total) checkboxes in the active feature's tasks.md — the honest measure of implement."""
+    import json as _json
+    import re
+    try:
+        feat = _json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8"))
+        rel = feat.get("feature_directory") or ""
+    except (OSError, ValueError):
+        rel = ""
+    candidates = [root / rel / "tasks.md"] if rel else []
+    candidates += sorted((root / "specs").glob("*/tasks.md"), reverse=True)
+    for path in candidates:
+        if not path.exists():
+            continue
+        text = path.read_text(encoding="utf-8", errors="replace")
+        done = len(re.findall(r"^-\s*\[[xX]\]", text, re.MULTILINE))
+        total = done + len(re.findall(r"^-\s*\[\s\]", text, re.MULTILINE))
+        if total:
+            return done, total
+    return None
+
+
 def _git_dirty(root: Path) -> bool:
     """Any tracked change or new file that is real work, not build output or tool state."""
     import subprocess as sp
@@ -292,16 +316,29 @@ def _git_dirty(root: Path) -> bool:
     return any("/obj/" not in ln.replace("\\", "/") for ln in sources)
 
 
-def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None) -> None:
+def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None,
+                before: tuple[int, int] | None = None) -> None:
     """Collect reports and verdict counts written by the agent for this step."""
     from .config import find_report, parse_consolidated
 
     base = step.split("-")[0] if step not in ("implement",) else step
+    progress = before
     # "preparation finished" is not an implementation: this step must change the repository
     if base == "implement" and root is not None and res.exit_code == 0 and not _git_dirty(root):
         res.ok = False
         res.error = ("the agent answered but wrote no code: nothing changed in the repository. "
                      "It likely stopped at the skill's preparation phase")
+    if base == "implement" and progress is not None and root is not None:
+        after = task_progress(root)
+        if after:
+            done_before, total = progress
+            done_after = after[0]
+            res.tasks_done, res.tasks_total = done_after, total
+            res.verdict = f"{done_after}/{total} tasks done"
+            if res.exit_code == 0 and done_after <= done_before:
+                res.ok = False
+                res.error = (f"implement finished without ticking a single task in tasks.md "
+                             f"({done_before}/{total} before, {done_after}/{total} after)")
 
     if step == "review":
         report = find_report(artifact_dir, "consolidated_review_report.md")
@@ -374,7 +411,7 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                   "majors": res.majors, "nits": res.nits,
                   "meets_standard": res.meets_standard, "verdict": res.verdict,
                   "denials": res.denials, "artifact_dir": res.artifact_dir,
-                  "log": res.log})
+                  "log": res.log, "tasks_done": res.tasks_done, "tasks_total": res.tasks_total})
     state["steps"][step] = entry
     state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
     (run_dir / f"{step}.result.json").write_text(
@@ -410,6 +447,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
                           log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
                           error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
+    before_tasks = task_progress(Path(cwd)) if _base_step(cfg, step) == "implement" else None
     code, out, err, duration, timed_out, idle_closed = execute(
         harness, inv, step, cwd, run_dir, timeout, stream, progress)
     idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
@@ -435,7 +473,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = human_error(out, err, code)
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
-    postprocess(res, step, artifact_dir, cwd)
+    postprocess(res, step, artifact_dir, cwd, before=before_tasks)
     if idle_closed:
         # the work landed but the CLI never exited: keep the result, say how it ended
         res.error = (f"the agent wrote nothing for {idle_limit}s yet stayed alive; stopped it and "

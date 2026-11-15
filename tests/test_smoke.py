@@ -2029,3 +2029,59 @@ def test_build_output_does_not_count_as_implementing(tmp_path, monkeypatch):
         stdout = " M src/Api/Program.cs\n"
     monkeypatch.setattr(sp, "run", lambda *a, **k: _Real())
     assert R._git_dirty(tmp_path) is True
+
+
+def _feat_with_tasks(root, done=0, pending=5):
+    d = root / "specs" / "001-a"
+    d.mkdir(parents=True, exist_ok=True)
+    lines = ["# Tasks"] + [f"- [x] T{i:03d}" for i in range(done)]
+    lines += [f"- [ ] T{i:03d}" for i in range(done, done + pending)]
+    (d / "tasks.md").write_text("\n".join(lines), encoding="utf-8")
+    (root / ".specify").mkdir(exist_ok=True)
+    (root / ".specify" / "feature.json").write_text(
+        json.dumps({"feature_directory": "specs/001-a"}), encoding="utf-8")
+    return d
+
+
+def test_task_progress_reads_the_active_feature(tmp_path):
+    from speckfish.runner import task_progress
+    _feat_with_tasks(tmp_path, done=3, pending=7)
+    assert task_progress(tmp_path) == (3, 10)
+
+
+def test_implement_that_ticks_no_task_is_not_ok(tmp_path, monkeypatch):
+    """871 tasks were pending after four implements that all reported OK."""
+    import subprocess as sp
+
+    from speckfish import runner as R
+    _feat_with_tasks(tmp_path, done=0, pending=5)
+    art = tmp_path / "art"
+
+    class _Out:
+        stdout = " M src/Program.cs\n"          # something changed, so _git_dirty passes
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=600.0)
+    R.postprocess(res, "implement", art, tmp_path, before=(0, 5))
+    assert res.ok is False
+    assert "without ticking a single task" in res.error
+    assert (res.tasks_done, res.tasks_total) == (0, 5)
+
+
+def test_implement_that_ticks_tasks_reports_progress(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    from speckfish import runner as R
+    d = _feat_with_tasks(tmp_path, done=0, pending=5)
+    art = tmp_path / "art"
+
+    class _Out:
+        stdout = " M src/Program.cs\n"
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    (d / "tasks.md").write_text("\n".join(["# Tasks"] + [f"- [x] T{i:03d}" for i in range(5)]),
+                                encoding="utf-8")
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=600.0)
+    R.postprocess(res, "implement", art, tmp_path, before=(0, 5))
+    assert res.ok is True
+    assert res.verdict == "5/5 tasks done"
