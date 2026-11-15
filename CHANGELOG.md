@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: a `--dry-run` batch wrote `batch-review.json` with every step `ok: true`, and `review
+  --skip-existing` then treated those features as reviewed — it skipped five real reviews without
+  spending anything. Dry runs never count as done now.
+
+
 - `--fallback <harness>`: when a step stops for quota/auth, the same feature is retried once with the
   other agent CLI, so an overnight batch finishes instead of dying at 40% of a Copilot allowance.
   Only quota/auth switches — anything else would fail on both. Every switch is listed in the summary.
