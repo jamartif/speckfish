@@ -1779,3 +1779,16 @@ def test_step_log_is_named_after_the_feature(tmp_path):
                      artifact_name="clarify-001-a")
     # dry-run reports the argv, but the artifact folder already proves the label reached run_step
     assert Path(res.artifact_dir).name == "clarify-001-a"
+
+
+def test_a_feature_label_keeps_the_step_timeout(tmp_path):
+    """`review-001-foo` fell through to the generic 600 s instead of review's own budget."""
+    from speckfish.config import Config as Cfg
+    from speckfish.runner import _base_step
+
+    cfg = Cfg(root=tmp_path)
+    assert cfg.timeouts["review"] >= 1800
+    assert _base_step(cfg, "review-001-api-base-v1-security") == "review"
+    assert _base_step(cfg, "tasks-007-whatever") == "tasks"
+    assert _base_step(cfg, "plan") == "plan"
+    assert _base_step(cfg, "unknown-step") == "unknown-step"
