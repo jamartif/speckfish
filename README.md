@@ -528,6 +528,15 @@ speckfish review --all-features --harness copilot     # ~5 credits and ~7 min pe
 speckfish drift  --all-features --harness copilot
 ```
 
+If the agent CLI runs out of quota mid-batch, `--fallback` finishes the feature with the other one:
+
+```bash
+speckfish review --all-features --skip-existing --harness copilot --fallback codex
+```
+
+It only switches on quota/auth failures (a broken spec would fail on both), once per feature, and the
+summary names every switch: `fallback: 004-x -> codex (quota/auth on the primary harness)`.
+
 `speckfish review` and `drift` also accept an explicit document/directory when you want just one:
 
 ```bash

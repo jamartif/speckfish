@@ -310,6 +310,20 @@ def features_with_spec(cfg: Config) -> list[Path]:
     return [d for d in sorted(specs_dir.iterdir()) if d.is_dir() and (d / "spec.md").exists()]
 
 
+def _fallback_for(cfg: Config, name: str | None) -> Harness | None:
+    """A second agent CLI to finish the night with when the first one runs out of quota."""
+    if not name:
+        return None
+    try:
+        return get_harness(cfg, name)
+    except SystemExit:
+        return None
+
+
+def _needs_fallback(res: StepResult) -> bool:
+    return (not res.ok) and res.error_kind in ("quota", "auth")
+
+
 def review_already_done(cfg: Config, feature: str, action: str = "review") -> bool:
     """True when an earlier run finished this step for that feature.
 
@@ -332,12 +346,14 @@ def review_already_done(cfg: Config, feature: str, action: str = "review") -> bo
 def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
                     run_id: str | None = None, stream: bool = True, dry_run: bool = False,
                     profile: str | None = None, stage: str = "uninterrupted",
-                    skip_existing: bool = False) -> dict:
+                    skip_existing: bool = False, fallback: str | None = None) -> dict:
     """EGM review per feature: plan.md when it exists, spec.md otherwise."""
     h = harness or get_harness(cfg)
+    alt = _fallback_for(cfg, fallback)
     rid = ensure_run(cfg, run_id)
     out: dict = {"run_id": rid, "action": "review", "harness": h.name, "steps": {},
-                 "order": [], "skipped": [], "stopped_at": None, "total_cost": 0.0}
+                 "order": [], "skipped": [], "switched": [], "stopped_at": None,
+                 "total_cost": 0.0}
     for f in features:
         target = f / "plan.md" if (f / "plan.md").exists() else f / "spec.md"
         if not target.exists():
@@ -348,6 +364,11 @@ def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None =
         res = do_review(cfg, str(target), rid, h, profile=profile, stage=stage,
                         stream=stream, dry_run=dry_run, default_file=target.name,
                         step_name=f"review-{f.name}")
+        if _needs_fallback(res) and alt is not None:
+            out["switched"].append(f"{f.name} -> {alt.name}")
+            res = do_review(cfg, str(target), rid, alt, profile=profile, stage=stage,
+                            stream=stream, dry_run=dry_run, default_file=target.name,
+                            step_name=f"review-{f.name}")
         out["order"].append(f.name)
         out["steps"][f.name] = res.to_dict()
         if res.cost and res.cost_unit == "usd":
@@ -364,18 +385,25 @@ def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None =
 
 def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
                    run_id: str | None = None, stream: bool = True,
-                   dry_run: bool = False, skip_existing: bool = False) -> dict:
+                   dry_run: bool = False, skip_existing: bool = False,
+                   fallback: str | None = None) -> dict:
     """EGM drift per feature, over the feature directory itself."""
     h = harness or get_harness(cfg)
+    alt = _fallback_for(cfg, fallback)
     rid = ensure_run(cfg, run_id)
     out: dict = {"run_id": rid, "action": "drift", "harness": h.name, "steps": {},
-                 "order": [], "skipped": [], "stopped_at": None, "total_cost": 0.0}
+                 "order": [], "skipped": [], "switched": [], "stopped_at": None,
+                 "total_cost": 0.0}
     for f in features:
         if skip_existing and review_already_done(cfg, f.name, action="drift"):
             out["skipped"].append(f.name)
             continue
         res = do_drift(cfg, str(f), rid, h, stream=stream, dry_run=dry_run,
                        step_name=f"drift-{f.name}")
+        if _needs_fallback(res) and alt is not None:
+            out["switched"].append(f"{f.name} -> {alt.name}")
+            res = do_drift(cfg, str(f), rid, alt, stream=stream, dry_run=dry_run,
+                           step_name=f"drift-{f.name}")
         out["order"].append(f.name)
         out["steps"][f.name] = res.to_dict()
         if res.cost and res.cost_unit == "usd":
@@ -393,13 +421,14 @@ def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = 
 def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Harness | None = None,
                      run_id: str | None = None, stack: str = "", args: str = "",
                      stream: bool = True, dry_run: bool = False,
-                     skip_existing: str | None = None) -> dict:
+                     skip_existing: str | None = None, fallback: str | None = None) -> dict:
     """Run one step over every feature, in order, stopping at the first failure.
 
     Spec Kit itself works on a single active feature, so N features mean N agent runs; this walks
     them without hiding each result.
     """
     h = harness or get_harness(cfg)
+    alt = _fallback_for(cfg, fallback)
     rid = ensure_run(cfg, run_id)
     skipped = []
     if skip_existing:
@@ -407,7 +436,7 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
         features = [f for f in features if not (f / skip_existing).exists()]
     out: dict = {"run_id": rid, "action": action, "harness": h.name, "steps": {},
                  "order": [f.name for f in features], "skipped": skipped,
-                 "stopped_at": None, "total_cost": 0.0}
+                 "switched": [], "stopped_at": None, "total_cost": 0.0}
     for f in features:
         set_active_feature(cfg, f)
         label = f"{action}-{f.name}"
@@ -416,6 +445,14 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
         else:
             res = do_skill(cfg, action, args, rid, h, stream, dry_run, feature=f.name,
                            step_name=label)
+        if _needs_fallback(res) and alt is not None:
+            out["switched"].append(f"{f.name} -> {alt.name}")
+            if action == "plan":
+                res = do_plan(cfg, stack, rid, alt, stream, dry_run, feature=f.name,
+                              step_name=label)
+            else:
+                res = do_skill(cfg, action, args, rid, alt, stream, dry_run, feature=f.name,
+                               step_name=label)
         out["steps"][f.name] = res.to_dict()
         if res.cost and res.cost_unit == "usd":
             out["total_cost"] += float(res.cost)
