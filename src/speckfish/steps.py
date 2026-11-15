@@ -585,7 +585,8 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
         prompt = with_language(prompts.skill_prompt(skill, args, artifact, cfg.root, fdir), cfg)
     else:
         prompt = with_language(prompts.skill_prompt_for(
-            h.name, skill, args, artifact, cfg.egm_path() or cfg.root, cfg.root), cfg)
+            h.name, skill, args, artifact, cfg.egm_path() or cfg.root, cfg.root,
+            feature_dir=fdir), cfg)
     res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(),
                    stream=stream, dry_run=dry_run, artifact_name=step_name)
     res.writes = spec.get("writes", "")  # type: ignore[attr-defined]

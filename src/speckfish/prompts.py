@@ -274,6 +274,10 @@ SKILL_SPECS = {
         "hint": "optional implementation guidance or task filter",
         "args_required": False,
         "default_args": "",
+        "headless_note": "Nobody can answer questions: implement the tasks. Create and edit the real "
+                         "files listed in tasks.md and run the build/tests. Do not stop at a "
+                         "preparation or validation report, and do not only describe what you would "
+                         "do — write the code.",
         "writes": "source code and tests (destructive: it writes files)",
         "dangerous": True,
     },
@@ -342,7 +346,8 @@ def expand_input(value: str, cfg_root: Path | None = None) -> tuple[str, Path | 
 
 
 def skill_prompt_for(harness: str, skill: str, args: str, artifact_dir: Path,
-                     egm_root: Path, cfg_root: Path | None = None) -> str:
+                     egm_root: Path, cfg_root: Path | None = None,
+                     feature_dir: Path | None = None) -> str:
     """Same, for harnesses without slash commands: point at the installed skill file."""
     spec = SKILL_SPECS[skill]
     body, _src = expand_input((args or "").strip(), cfg_root)
@@ -350,6 +355,10 @@ def skill_prompt_for(harness: str, skill: str, args: str, artifact_dir: Path,
     docs = {"copilot": "docs/copilot.md", "codex": "docs/codex.md"}.get(harness, "docs/claude.md")
     parts = [f"Read {docs} of the Spec Kit project and run the `{spec['skill']}` skill"
              f"{' with: ' + given if given else ''}.", NO_QUESTIONS]
+    if feature_dir:
+        # without this the agent follows .specify/feature.json and implements the wrong feature
+        parts.append(f"Work ONLY on the feature in {norm(feature_dir)}. Ignore any other feature "
+                     f"under specs/.")
     note = spec.get("headless_note")
     if note:
         parts.append(note.format(questions_file=norm(Path(artifact_dir) / "questions.md")))

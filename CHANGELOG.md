@@ -5,6 +5,16 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: `implement` reported **OK** after the agent only ran the skill's preparation phase — 2 minutes,
+  1.8 credits and not a single file written. The step now fails when the repository is unchanged
+  ("the agent answered but wrote no code").
+- Fix: for copilot/codex the prompt never named the feature, so the agent followed
+  `.specify/feature.json` and worked on the last one instead of `--feature 001`. It now says
+  `Work ONLY on the feature in <dir>`.
+- `implement` gained a headless note: write the files from tasks.md and run the build, do not stop at
+  a preparation/validation report.
+
+
 - An agent that finishes its work and never exits (EGM's last pass does this) no longer burns the whole
   timeout: a process that writes nothing for `SPECKFISH_IDLE_SECONDS` (default 600) is stopped, and the
   step counts as done when the artifacts are on disk. A review sat in `finishing` for 31 minutes with
