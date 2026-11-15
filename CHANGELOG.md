@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix: `--skip-existing` used `tasks.md` as the marker for `analyze`, so right after `tasks` every
+  feature counted as "already analyzed" and nothing ran. Only `plan`, `tasks` and `checklist` own a
+  file; `analyze`, `clarify` and `converge` never skip.
+
+
 - Uniform resume flags on **every** feature-oriented step (`plan`, `tasks`, `analyze`, `clarify`,
   `checklist`, `converge`, `review`, `drift`): `--feature`, `--only 2,4,5`, `--from-feature 4`,
   `--all-features`, `--skip-existing`. One `select_features()` decides what runs, so the flags mean the

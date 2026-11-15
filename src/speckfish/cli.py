@@ -151,13 +151,15 @@ def split_summary(out: dict, root: str | None = None) -> str:
 
 
 # what each step produces, so `--skip-existing` knows what "already done" means
+# Only steps that own a file can be skipped. `analyze`, `clarify` and `converge` write into the run
+# directory (or append), so treating "tasks.md exists" as "analyze is done" would skip everything.
 STEP_ARTIFACT = {
     "plan": "plan.md",
     "tasks": "tasks.md",
-    "analyze": "tasks.md",       # analyze runs on the same feature set
-    "clarify": None,             # questions.md lives in the run dir, checked separately
     "checklist": "checklists",
-    "converge": "tasks.md",
+    "analyze": None,
+    "clarify": None,
+    "converge": None,
 }
 
 

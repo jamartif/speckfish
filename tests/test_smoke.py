@@ -1689,3 +1689,23 @@ def test_every_feature_step_exposes_the_same_flags():
             continue
         opts = {a.dest for a in subs._actions}
         assert {"all_features", "only", "from_feature", "skip_existing"} <= opts, cmd
+
+
+def test_tasks_being_done_does_not_skip_analyze(tmp_path, monkeypatch):
+    """analyze owns no file: using tasks.md as its marker made it skip every feature."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    (d / "tasks.md").write_text("# t", encoding="utf-8")     # tasks already ran
+    cfg = Config(root=tmp_path)
+    ran = []
+    monkeypatch.setattr(S, "do_skill", lambda cfg_, name, *a, **k: ran.append(name) or StepResult(
+        step=name, ok=True, exit_code=0, duration_s=1.0))
+    from speckfish.cli import STEP_ARTIFACT
+    assert STEP_ARTIFACT["analyze"] is None
+    S.do_feature_batch(cfg, "analyze", S.features_with_spec(cfg),
+                       harness=SimpleNamespace(name="fake"),
+                       skip_existing=STEP_ARTIFACT["analyze"])
+    assert ran == ["analyze"]                                # it ran despite tasks.md
