@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- The `implement` prompt now asks the agent to tick each `- [ ]` as it finishes. Without that the work
+  was on disk but `tasks.md` stayed untouched: 10 tasks done, 0 recorded, and the next run would start
+  from T001 again.
+
+
 - `implement` now reports how much of `tasks.md` it actually did (`OK implement · tasks 16/113`) and
   fails when it ticks **no** task at all. Four implements this night reported OK, cost 51.5 credits
   and left 871 tasks pending and three endpoints in the whole API: "something changed in the repo"
