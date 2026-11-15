@@ -2011,3 +2011,21 @@ def test_the_feature_is_named_in_prompts_for_copilot(tmp_path):
     assert "001-api-base-v1-security" in text
     assert "Work ONLY on the feature" in text
     assert "write the code" in text.lower()
+
+
+def test_build_output_does_not_count_as_implementing(tmp_path, monkeypatch):
+    """dotnet build only touches obj/: that is not the feature being implemented."""
+    import subprocess as sp
+
+    from speckfish import runner as R
+
+    class _Out:
+        stdout = (" M src/Api/obj/Debug/net10.0/Api.AssemblyInfo.cs\n"
+                  " M src/Api/bin/Debug/net10.0/Api.dll\n")
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    assert R._git_dirty(tmp_path) is False
+
+    class _Real:
+        stdout = " M src/Api/Program.cs\n"
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Real())
+    assert R._git_dirty(tmp_path) is True

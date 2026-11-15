@@ -5,6 +5,10 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- The "did it write code?" check ignored `bin/`, `obj/`, `.speckfish/` and tool state: a `dotnet build`
+  alone touched `obj/*.AssemblyInfo.cs` and counted as an implementation.
+
+
 - Fix: `implement` reported **OK** after the agent only ran the skill's preparation phase — 2 minutes,
   1.8 credits and not a single file written. The step now fails when the repository is unchanged
   ("the agent answered but wrote no code").
