@@ -1445,7 +1445,7 @@ def test_codex_is_told_not_to_use_apply_patch(tmp_path):
                                    None, 60, None).argv
     prompt = argv[-1]
     assert "do the thing" in prompt and CODEX_FILE_HINT in prompt
-    assert "no apply_patch tool" in prompt and "Set-Content" in prompt
+    assert "no apply_patch" in prompt and "UTF8Encoding" in prompt
 
 
 def test_batch_keeps_its_own_detail_file(tmp_path, monkeypatch):
@@ -1471,3 +1471,13 @@ def test_codex_is_told_not_to_install_packages():
     from speckfish.harnesses import CODEX_FILE_HINT
     assert "Do not install packages" in CODEX_FILE_HINT
     assert "Get-Content -Raw" in CODEX_FILE_HINT
+
+
+def test_codex_hint_explains_the_mojibake_trap():
+    """PowerShell 5.1 on this machine reports ibm850: UTF-8 files look corrupt and a run spent
+    4 of its 15 minutes grepping for mojibake that was never on disk."""
+    from speckfish.harnesses import CODEX_FILE_HINT
+    assert "ibm850" in CODEX_FILE_HINT
+    assert "UTF8Encoding" in CODEX_FILE_HINT        # how to write accents safely
+    assert "never rewrite a file to fix it" in CODEX_FILE_HINT
+    assert "Do not install packages" in CODEX_FILE_HINT

@@ -5,6 +5,14 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Fix (wasted run time): the codex hint now explains the mojibake trap. This machine's PowerShell 5.1
+  reports output encoding **ibm850**, so `Get-Content` shows `CatÃ¡logo` for a file that is correct
+  UTF-8 on disk. A 15-minute `plan` spent ~4 of them grepping for mojibake that never existed. The
+  prompt now says: read with `-Encoding utf8` or `[System.IO.File]::ReadAllText(..., UTF8)`, write with
+  `[System.IO.File]::WriteAllText(..., UTF8Encoding::new($false))`, and never rewrite a file to "fix"
+  what only the console is mangling.
+
+
 - A `--all-features` run now writes `batch.json` in the run directory. `state.json` is keyed by step
   name, so seven features overwrote each other and only the last one survived.
 - Codex prompt: no `pip install` (a run installed `openapi-spec-validator` on the machine to validate a
