@@ -1965,3 +1965,49 @@ def test_an_agent_that_finishes_but_never_exits_is_closed_by_inactivity(tmp_path
     assert res.ok is True                       # the report exists: the work is done
     assert res.duration_s < 30                  # not waiting for the 600 s default
     assert "stayed alive" in res.error          # and it says why
+
+
+def test_implement_that_writes_nothing_is_not_ok(tmp_path, monkeypatch):
+    """The agent answered "preparation finished" and wrote no code: that is a failure."""
+    import subprocess as sp
+
+    from speckfish import runner as R
+    art = tmp_path / "art"
+    art.mkdir()
+
+    class _Out:
+        stdout = ""            # clean tree: nothing changed
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=120.0)
+    R.postprocess(res, "implement", art, tmp_path)
+    assert res.ok is False
+    assert "wrote no code" in res.error
+
+
+def test_implement_that_changes_files_is_ok(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    from speckfish import runner as R
+    art = tmp_path / "art"
+    art.mkdir()
+
+    class _Out:
+        stdout = " M src/Program.cs\n?? tests/Unit.cs\n"
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=120.0)
+    R.postprocess(res, "implement", art, tmp_path)
+    assert res.ok is True
+
+
+def test_the_feature_is_named_in_prompts_for_copilot(tmp_path):
+    """Without the feature dir the agent follows .specify/feature.json and does the wrong one."""
+    from speckfish import prompts as P
+    fdir = tmp_path / "specs" / "001-api-base-v1-security"
+    fdir.mkdir(parents=True)
+    text = P.skill_prompt_for("copilot", "implement", "", tmp_path / "art", tmp_path,
+                              tmp_path, feature_dir=fdir)
+    assert "001-api-base-v1-security" in text
+    assert "Work ONLY on the feature" in text
+    assert "write the code" in text.lower()

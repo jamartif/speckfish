@@ -272,9 +272,28 @@ def human_error(out: str, err: str, code: int) -> str:
     return f"exit {code}: " + " / ".join(t[-160:] for t in tail)
 
 
+def _git_dirty(root: Path) -> bool:
+    """Any tracked change or new file outside the tool's own state directory."""
+    import subprocess as sp
+    try:
+        out = sp.run(["git", "status", "--porcelain"], cwd=str(root), capture_output=True,
+                     text=True, timeout=60, encoding="utf-8", errors="replace").stdout
+    except (OSError, sp.SubprocessError):
+        return True                      # cannot tell: do not fail a step over it
+    lines = [ln for ln in out.splitlines() if ".speckfish/" not in ln and ln.strip()]
+    return bool(lines)
+
+
 def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None) -> None:
     """Collect reports and verdict counts written by the agent for this step."""
     from .config import find_report, parse_consolidated
+
+    base = step.split("-")[0] if step not in ("implement",) else step
+    # "preparation finished" is not an implementation: this step must change the repository
+    if base == "implement" and root is not None and res.exit_code == 0 and not _git_dirty(root):
+        res.ok = False
+        res.error = ("the agent answered but wrote no code: nothing changed in the repository. "
+                     "It likely stopped at the skill's preparation phase")
 
     if step == "review":
         report = find_report(artifact_dir, "consolidated_review_report.md")
