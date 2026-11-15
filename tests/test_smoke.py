@@ -1617,3 +1617,75 @@ def test_review_batch_uses_spec_when_there_is_no_plan(tmp_path, monkeypatch):
     S.do_review_batch(Config(root=tmp_path), S.features_with_spec(Config(root=tmp_path)),
                       harness=SimpleNamespace(name="copilot"))
     assert used == ["spec.md"]
+
+
+# ---------- uniform resume: --feature / --only / --from-feature everywhere ----------
+def _proj(tmp_path, n=4):
+    for i in range(1, n + 1):
+        d = tmp_path / "specs" / f"00{i}-f{i}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    return Config(root=tmp_path)
+
+
+def test_only_selects_features_by_position(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    cfg = _proj(tmp_path)
+    got = select_features(cfg, NS(feature=None, only="2,4", from_feature=None))
+    assert [f.name for f in got] == ["002-f2", "004-f4"]
+
+
+def test_from_feature_selects_the_rest(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    cfg = _proj(tmp_path)
+    got = select_features(cfg, NS(feature=None, only=None, from_feature=3))
+    assert [f.name for f in got] == ["003-f3", "004-f4"]
+
+
+def test_feature_wins_over_only(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    cfg = _proj(tmp_path)
+    got = select_features(cfg, NS(feature="002", only="4", from_feature=1))
+    assert [f.name for f in got] == ["002-f2"]
+
+
+def test_only_rejects_junk():
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    with pytest.raises(SystemExit):
+        select_features(Config(root=Path(".")), NS(feature=None, only="2,x", from_feature=None))
+
+
+def test_review_respects_only(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    _proj(tmp_path)
+    seen = []
+
+    def fake_review_batch(cfg_, feats, *a, **k):
+        seen.extend(f.name for f in feats)
+        return {"run_id": "r", "action": "review", "steps": {}, "order": seen, "done": True}
+
+    monkeypatch.setattr(S, "do_review_batch", fake_review_batch)
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    assert C.main(["--root", str(tmp_path), "review", "--only", "1,3"]) == 0
+    assert seen == ["001-f1", "003-f3"]
+
+
+def test_every_feature_step_exposes_the_same_flags():
+    from speckfish.cli import build_parser
+    p = build_parser()
+    for cmd, subs in p._subparsers._group_actions[0].choices.items():
+        # not feature-oriented: setup, inspection, exploration over a material, or split by task
+        if cmd in ("init", "doctor", "config", "features", "runs", "show", "report",
+                   "editors", "pipeline", "specify", "constitution", "brainstorm", "draft"):
+            continue
+        opts = {a.dest for a in subs._actions}
+        assert {"all_features", "only", "from_feature", "skip_existing"} <= opts, cmd

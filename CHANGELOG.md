@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Uniform resume flags on **every** feature-oriented step (`plan`, `tasks`, `analyze`, `clarify`,
+  `checklist`, `converge`, `review`, `drift`): `--feature`, `--only 2,4,5`, `--from-feature 4`,
+  `--all-features`, `--skip-existing`. One `select_features()` decides what runs, so the flags mean the
+  same thing in every command (`specify --only` already did this over the saved cut).
+
+
 - `review --all-features` and `drift --all-features`: walk every feature instead of asking the user to
   write a PowerShell/Bash loop. Review takes `plan.md` when it exists and `spec.md` otherwise, uses a
   per-feature artifact directory and writes `batch-review.json` / `batch-drift.json`.
