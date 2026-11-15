@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `review --skip-existing` / `drift --skip-existing` now work across runs: a feature whose review
+  already succeeded in an earlier run is skipped, so resuming after a quota stop does not pay for the
+  same review twice. `review`'s flag was accepted but hard-wired to false.
+
+
 - Fix: a batch runs each step as `<step>-<feature>`, and that label was used to look up the timeout —
   so `review` (1800 s) and `tasks` (1800 s) fell back to the generic 600 s. `tasks` survived by 8 s;
   `review` was killed at 10 minutes with its work half done. The timeout now resolves to the base

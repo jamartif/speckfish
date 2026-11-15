@@ -579,7 +579,7 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_ERROR
             batch = S.do_review_batch(cfg, feats, need_harness(), args.run_id, stream,
                                       args.dry_run, args.profile, args.stage,
-                                      skip_existing=False)
+                                      skip_existing=args.skip_existing)
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             if not batch.get("done"):
                 return EXIT_ERROR
@@ -600,7 +600,8 @@ def main(argv: list[str] | None = None) -> int:
             if not feats:
                 print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
                 return EXIT_ERROR
-            batch = S.do_drift_batch(cfg, feats, need_harness(), args.run_id, stream, args.dry_run)
+            batch = S.do_drift_batch(cfg, feats, need_harness(), args.run_id, stream,
+                                     args.dry_run, skip_existing=args.skip_existing)
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             return EXIT_OK if batch.get("done") else EXIT_ERROR
         elif args.cmd == "drift":

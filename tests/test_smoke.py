@@ -1792,3 +1792,36 @@ def test_a_feature_label_keeps_the_step_timeout(tmp_path):
     assert _base_step(cfg, "tasks-007-whatever") == "tasks"
     assert _base_step(cfg, "plan") == "plan"
     assert _base_step(cfg, "unknown-step") == "unknown-step"
+
+
+def test_review_skip_existing_does_not_rebuy_finished_features(tmp_path):
+    """After a quota stop, re-running the batch must not pay again for reviews already done."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    d2 = tmp_path / "specs" / "002-b"
+    d2.mkdir(parents=True)
+    (d2 / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    old = cfg.runs_dir / "20260101-000000"
+    old.mkdir(parents=True)
+    (old / "batch-review.json").write_text(json.dumps({
+        "steps": {"001-a": {"ok": True}}}), encoding="utf-8")
+    assert S.review_already_done(cfg, "001-a") is True
+    assert S.review_already_done(cfg, "002-b") is False
+
+    ran = []
+    monkeypatch_target = S.do_review
+    S.do_review = lambda cfg_, target, *a, **k: ran.append(Path(target).parent.name) or StepResult(
+        step="review", ok=True, exit_code=0, duration_s=1.0)
+    try:
+        batch = S.do_review_batch(cfg, S.features_with_spec(cfg),
+                                  harness=NS(name="fake"), skip_existing=True)
+    finally:
+        S.do_review = monkeypatch_target
+    assert ran == ["002-b"]              # 001 already paid for
+    assert batch["skipped"] == ["001-a"]

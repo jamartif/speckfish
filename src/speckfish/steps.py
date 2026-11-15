@@ -310,6 +310,25 @@ def features_with_spec(cfg: Config) -> list[Path]:
     return [d for d in sorted(specs_dir.iterdir()) if d.is_dir() and (d / "spec.md").exists()]
 
 
+def review_already_done(cfg: Config, feature: str, action: str = "review") -> bool:
+    """True when an earlier run finished this step for that feature.
+
+    Credits are the scarce resource: re-running a batch after a quota stop must not pay twice for the
+    reviews that already succeeded, so look across every run, not just the current one.
+    """
+    batch_name = "batch-review.json" if action == "review" else "batch-drift.json"
+    for batch in sorted(cfg.runs_dir.glob(f"*/{batch_name}")):
+        try:
+            data = json.loads(batch.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        entry = (data.get("steps") or {}).get(feature) or {}
+        if entry.get("ok"):
+            return True
+    marker = "consolidated_review_report.md" if action == "review" else "drift_report.md"
+    return bool(list(cfg.runs_dir.glob(f"*/artifacts/{action}-{feature}/{marker}")))
+
+
 def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
                     run_id: str | None = None, stream: bool = True, dry_run: bool = False,
                     profile: str | None = None, stage: str = "uninterrupted",
@@ -323,7 +342,7 @@ def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None =
         target = f / "plan.md" if (f / "plan.md").exists() else f / "spec.md"
         if not target.exists():
             continue
-        if skip_existing and (cfg.runs_dir / rid / "artifacts" / f"review-{f.name}").exists():
+        if skip_existing and review_already_done(cfg, f.name):
             out["skipped"].append(f.name)
             continue
         res = do_review(cfg, str(target), rid, h, profile=profile, stage=stage,
@@ -345,13 +364,16 @@ def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None =
 
 def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
                    run_id: str | None = None, stream: bool = True,
-                   dry_run: bool = False) -> dict:
+                   dry_run: bool = False, skip_existing: bool = False) -> dict:
     """EGM drift per feature, over the feature directory itself."""
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     out: dict = {"run_id": rid, "action": "drift", "harness": h.name, "steps": {},
                  "order": [], "skipped": [], "stopped_at": None, "total_cost": 0.0}
     for f in features:
+        if skip_existing and review_already_done(cfg, f.name, action="drift"):
+            out["skipped"].append(f.name)
+            continue
         res = do_drift(cfg, str(f), rid, h, stream=stream, dry_run=dry_run,
                        step_name=f"drift-{f.name}")
         out["order"].append(f.name)
