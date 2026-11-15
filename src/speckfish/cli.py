@@ -216,6 +216,8 @@ def batch_summary(batch: dict, root: str | None = None) -> str:
         lines.append(line)
         if not ok and step.get("error"):
             lines.append(f"         {step['error']}")
+    for switch in batch.get("switched") or []:
+        lines.append(f"  fallback: {switch} (quota/auth on the primary harness)")
     if batch.get("skipped"):
         lines.insert(1, f"  skipped {len(batch['skipped'])} already done: {', '.join(batch['skipped'])}")
     if batch.get("stopped_at"):
@@ -566,7 +568,8 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_ERROR
             batch = S.do_feature_batch(cfg, "plan", feats, need_harness(), args.run_id,
                                        stack=args.stack, stream=stream, dry_run=args.dry_run,
-                                       skip_existing="plan.md" if args.skip_existing else None)
+                                       skip_existing="plan.md" if args.skip_existing else None,
+                                       fallback=getattr(args, "fallback", None))
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             return EXIT_OK if batch.get("done") else EXIT_ERROR
         elif args.cmd == "plan":
@@ -579,7 +582,7 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_ERROR
             batch = S.do_review_batch(cfg, feats, need_harness(), args.run_id, stream,
                                       args.dry_run, args.profile, args.stage,
-                                      skip_existing=args.skip_existing)
+                                      skip_existing=args.skip_existing, fallback=getattr(args, "fallback", None))
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             if not batch.get("done"):
                 return EXIT_ERROR
@@ -601,7 +604,8 @@ def main(argv: list[str] | None = None) -> int:
                 print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
                 return EXIT_ERROR
             batch = S.do_drift_batch(cfg, feats, need_harness(), args.run_id, stream,
-                                     args.dry_run, skip_existing=args.skip_existing)
+                                     args.dry_run, skip_existing=args.skip_existing,
+                                     fallback=getattr(args, "fallback", None))
             emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
             return EXIT_OK if batch.get("done") else EXIT_ERROR
         elif args.cmd == "drift":
@@ -622,7 +626,8 @@ def main(argv: list[str] | None = None) -> int:
                 batch = S.do_feature_batch(cfg, args.cmd, feats, need_harness(), args.run_id,
                                            args=args.args, stream=stream, dry_run=args.dry_run,
                                            skip_existing=(STEP_ARTIFACT.get(args.cmd)
-                                                          if args.skip_existing else None))
+                                                          if args.skip_existing else None),
+                                           fallback=getattr(args, "fallback", None))
                 emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
                 return EXIT_OK if batch.get("done") else EXIT_ERROR
             res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream,

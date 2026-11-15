@@ -1825,3 +1825,63 @@ def test_review_skip_existing_does_not_rebuy_finished_features(tmp_path):
         S.do_review = monkeypatch_target
     assert ran == ["002-b"]              # 001 already paid for
     assert batch["skipped"] == ["001-a"]
+
+
+def test_a_quota_failure_switches_to_the_fallback_harness(tmp_path):
+    """The user's rule: if Copilot runs out, finish the night with codex."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    (d / "plan.md").write_text("# p", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    used = []
+
+    def fake_review(cfg_, target, run_id=None, harness=None, **k):
+        used.append(harness.name)
+        if harness.name == "copilot":
+            return StepResult(step="review", ok=False, exit_code=3, duration_s=5.0,
+                              error_kind="quota", error="ran out of quota")
+        return StepResult(step="review", ok=True, exit_code=0, duration_s=5.0, majors=1)
+
+    # CI has no agent installed, so the fallback harness must be stubbed too
+    orig_review, orig_h = S.do_review, S.get_harness
+    S.do_review = fake_review
+    S.get_harness = lambda cfg_, name=None: NS(name=name or "copilot")
+    try:
+        batch = S.do_review_batch(cfg, S.features_with_spec(cfg),
+                                  harness=NS(name="copilot"), fallback="codex")
+    finally:
+        S.do_review, S.get_harness = orig_review, orig_h
+    assert used == ["copilot", "codex"]
+    assert batch["done"] is True
+    assert batch["switched"] == ["001-a -> codex"]
+
+
+def test_a_real_error_does_not_switch_harness(tmp_path):
+    """Only quota/auth switches: a broken spec would fail on the other harness too."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    used = []
+    orig, orig_h = S.do_review, S.get_harness
+    S.do_review = lambda cfg_, t, run_id=None, harness=None, **k: (
+        used.append(harness.name) or StepResult(step="review", ok=False, exit_code=2,
+                                                duration_s=1.0, error_kind="agent"))
+    S.get_harness = lambda cfg_, name=None: NS(name=name or "copilot")
+    try:
+        batch = S.do_review_batch(cfg, S.features_with_spec(cfg),
+                                  harness=NS(name="copilot"), fallback="codex")
+    finally:
+        S.do_review, S.get_harness = orig, orig_h
+    assert used == ["copilot"]          # no retry
+    assert batch["switched"] == []
+    assert batch["done"] is False

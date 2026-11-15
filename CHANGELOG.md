@@ -5,6 +5,11 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `--fallback <harness>`: when a step stops for quota/auth, the same feature is retried once with the
+  other agent CLI, so an overnight batch finishes instead of dying at 40% of a Copilot allowance.
+  Only quota/auth switches — anything else would fail on both. Every switch is listed in the summary.
+
+
 - `review --skip-existing` / `drift --skip-existing` now work across runs: a feature whose review
   already succeeded in an earlier run is skipped, so resuming after a quota stop does not pay for the
   same review twice. `review`'s flag was accepted but hard-wired to false.
