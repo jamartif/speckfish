@@ -5,6 +5,20 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Phase 2 of `PLAN.md`, structure (no change to the commands):
+  - `run_step` takes the **kind** of step (`review`) apart from its **label** (`review-001-foo`):
+    budgets, timeouts and validation follow the kind; folders, logs and state follow the label.
+    A batch review used to lose its budget and a `plan` batch shared one `state.json` entry.
+  - New `registry.py`: one `StepSpec` per kind (requires, produces, timeout key, schema, validator).
+    `postprocess` is now a dispatch to the registered validator instead of an if-chain.
+  - New `workspace.py` (task progress, git snapshot, current feature).
+  - One `run_batch` replaces three near-identical batch loops (fallback, skip, stop, totals).
+  - `cli.main` is a table of handlers (`HANDLERS`), one function per command.
+  - `Harness.slash_commands` replaces the `name == "claude"` checks.
+  - Fixed: plain `speckfish review` (no flags) fell through every branch and exited 2 silently
+    since #28.
+  - `constitution` had no default timeout (fell back to 600 s); it now has 1200 s.
+
 - Phase 0 of `PLAN.md`, batch correctness:
   - `review/drift --all-features` and `specify --split` now validate each step as its kind
     (`review-001-x` was never recognised), so blockers set exit 1 and a drift with no report fails.

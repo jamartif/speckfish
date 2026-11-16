@@ -21,7 +21,7 @@ DEFAULTS = {
     "timeouts": {"init": 300, "specify": 1800, "plan": 1800, "tasks": 1800,
                  "analyze": 1200, "review": 2400, "drift": 1200, "implement": 3600,
                  "clarify": 1200, "checklist": 1200, "converge": 1800,
-                 "brainstorm": 1200, "draft": 1200},
+                 "brainstorm": 1200, "draft": 1200, "constitution": 1200},
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
                 "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
 }

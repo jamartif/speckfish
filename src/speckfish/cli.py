@@ -297,7 +297,8 @@ def exit_for(res: dict) -> int:
             return EXIT_ENV
         return EXIT_ERROR
     # exit 1 only with blockers: "does not meet the standard" is read from the JSON
-    if res.get("step") in ("review", "drift") and res.get("blockers"):
+    kind = res.get("kind") or str(res.get("step") or "").split("-")[0]
+    if kind in ("review", "drift") and res.get("blockers"):
         return EXIT_BLOCKERS
     return EXIT_OK
 
@@ -476,6 +477,409 @@ def build_parser() -> argparse.ArgumentParser:
     return p
 
 
+class Run:
+    """Everything a command handler needs: config, parsed args and how to talk to the user."""
+
+    def __init__(self, cfg: Config, args):
+        self.cfg = cfg
+        self.args = args
+        self.as_json = args.json
+        self.stream = not args.quiet
+        self._harness = None
+
+    @property
+    def root(self) -> str:
+        return norm(self.cfg.root)
+
+    def harness(self):
+        """Resolved lazily: `config`, `runs`, `show` and `version` must work with no agent installed."""
+        if self._harness is None:
+            self._harness = get_harness(self.cfg, self.args.harness)
+        return self._harness
+
+    def emit(self, obj, human: str | None = None) -> None:
+        emit(obj, self.as_json, human)
+
+    def finish(self, res) -> int:
+        """Print one step's outcome and turn it into an exit code."""
+        self.emit(res.to_dict(), summarize(res.to_dict(), self.root))
+        return exit_for(res.to_dict())
+
+    def finish_batch(self, batch: dict) -> int:
+        self.emit(batch, batch_summary(batch, self.root))
+        return batch_exit_code(batch)
+
+    def batch_features(self, empty_hint: str) -> list | None:
+        feats = select_features(self.cfg, self.args)
+        if not feats:
+            print(empty_hint, file=sys.stderr)
+            return None
+        return feats
+
+
+NO_FEATURE_HINT = "no feature matched: run `speckfish specify` first, or check --only"
+NO_SPEC_HINT = "no feature has a spec.md yet: run `speckfish specify` first"
+
+
+def cmd_editors(run: Run) -> int:
+    from .editors import generate
+    args = run.args
+    targets = [t.strip() for t in args.targets.split(",") if t.strip()]
+    gen = generate(run.cfg, targets, args.command, args.codex_home,
+                   force=not args.no_force, prefix=args.prefix)
+    human = [f"command: {gen['command']}  prefix: {gen['prefix']}-*",
+             f"written: {len(gen['written'])}"]
+    human += [f"  {p}" for p in gen["written"]]
+    if gen.get("codex_dir"):
+        human.append(f"codex prompts (user-global): {gen['codex_dir']}")
+    if gen.get("removed"):
+        human.append(f"removed {len(gen['removed'])} stale command(s) from the old prefix")
+    if gen["skipped"]:
+        human += [f"skipped: {s['path']} ({s['reason']})" for s in gen["skipped"]]
+    run.emit(gen, "\n".join(human))
+    return EXIT_OK
+
+
+def cmd_init(run: Run) -> int:
+    args = run.args
+    out = S.do_init(run.cfg, args.integration, skip_egm=args.no_egm,
+                    editors=getattr(args, "editors", True),
+                    editor_prefix=getattr(args, "prefix", "spfish"))
+    ok_int = ", ".join(out.get("installed") or []) or "none"
+    failed = [a["integration"] for a in out["actions"]
+              if a.get("integration") and not a.get("specify_init")]
+    human = [f"integrations installed: {ok_int}"]
+    if failed:
+        human.append(f"failed: {', '.join(failed)}")
+    human.append(f"egm: {out.get('egm_root')}")
+    run.emit(out, "\n".join(human))
+    return EXIT_OK if all(a.get("specify_init", True) for a in out["actions"]) else EXIT_ERROR
+
+
+def cmd_doctor(run: Run) -> int:
+    info = S.do_doctor(run.cfg)
+    run.emit(info, doctor_summary(info))
+    ok = (info.get("harness") or {}).get("installed") and \
+        (info.get("specify") or {}).get("ok") and (info.get("egm") or {}).get("present")
+    return EXIT_OK if ok else EXIT_ENV
+
+
+def _split_selection(run: Run) -> tuple[list[int] | None, int | None]:
+    """The `--only` / `--from-feature` selection of `specify --split` (an error code when invalid)."""
+    args, cfg = run.args, run.cfg
+    only = None
+    if args.only:
+        try:
+            only = [int(x) for x in str(args.only).replace(" ", "").split(",") if x]
+        except ValueError:
+            print("ERROR: --only expects numbers, e.g. 4,5,6,7", file=sys.stderr)
+            return None, EXIT_ENV
+    if args.from_feature and only is None:
+        cut = cfg.root / "specs" / "features.json"
+        total = 0
+        if cut.exists():
+            with contextlib.suppress(Exception):
+                total = len(json.loads(cut.read_text(encoding="utf-8")).get("features") or [])
+        if not total:
+            print("ERROR: --from-feature needs specs/features.json "
+                  "(run --split --inventory-only first)", file=sys.stderr)
+            return None, EXIT_ENV
+        only = list(range(args.from_feature, total + 1))
+    return only, None
+
+
+def cmd_specify(run: Run) -> int:
+    args, cfg = run.args, run.cfg
+    if args.split:
+        only, error = _split_selection(run)
+        if error is not None:
+            return error
+        out = S.do_specify_split(cfg, args.description, args.run_id, run.harness(),
+                                 run.stream, args.dry_run, args.max_features,
+                                 review=args.review,
+                                 inventory_only=getattr(args, "inventory_only", False),
+                                 only=only)
+        run.emit(out, split_summary(out, run.root))
+        return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
+    return run.finish(S.do_specify(cfg, args.description, args.run_id, run.harness(), run.stream,
+                                   args.dry_run, review=getattr(args, "review", False)))
+
+
+def _refuse_chain_in_batch(args, flag: str) -> int:
+    # chaining runs one feature at a time; silently dropping it would plan/review unchecked
+    print(f"{flag} works on one feature at a time: drop --all-features/--only/--from-feature "
+          f"or pass --feature NNN", file=sys.stderr)
+    return EXIT_ENV
+
+
+def cmd_plan(run: Run) -> int:
+    args, cfg = run.args, run.cfg
+    with_clarify = getattr(args, "with_clarify", False)
+    if with_clarify and is_batch(args):
+        return _refuse_chain_in_batch(args, "--with-clarify")
+    if with_clarify:
+        feature = args.feature or (S.active_feature(cfg).name if S.active_feature(cfg) else None)
+        if not feature:
+            print("--with-clarify needs a feature: pass --feature NNN", file=sys.stderr)
+            return EXIT_ENV
+        clar = S.do_skill(cfg, "clarify", "", args.run_id, run.harness(), run.stream,
+                          args.dry_run, feature=feature)
+        run.emit(clar.to_dict(), summarize(clar.to_dict(), run.root))
+        if not clar.ok:
+            return EXIT_ERROR
+        if clar.verdict and not args.accept_defaults:
+            print("\nclarify left questions above: answer them (or accept the defaults with "
+                  "--accept-defaults) and re-run plan", file=sys.stderr)
+            return EXIT_OK
+        return run.finish(S.do_plan(cfg, args.stack, args.run_id, run.harness(), run.stream,
+                                    args.dry_run, feature=feature))
+    if is_batch(args):
+        feats = run.batch_features(NO_FEATURE_HINT)
+        if feats is None:
+            return EXIT_ERROR
+        return run.finish_batch(S.do_feature_batch(
+            cfg, "plan", feats, run.harness(), args.run_id, stack=args.stack, stream=run.stream,
+            dry_run=args.dry_run, skip_existing="plan.md" if args.skip_existing else None,
+            fallback=getattr(args, "fallback", None)))
+    return run.finish(S.do_plan(cfg, args.stack, args.run_id, run.harness(), run.stream,
+                                args.dry_run, feature=args.feature))
+
+
+def cmd_review(run: Run) -> int:
+    args, cfg = run.args, run.cfg
+    with_analyze = getattr(args, "with_analyze", False)
+    if with_analyze and is_batch(args):
+        return _refuse_chain_in_batch(args, "--with-analyze")
+    if is_batch(args):
+        feats = run.batch_features(NO_SPEC_HINT)
+        if feats is None:
+            return EXIT_ERROR
+        batch = S.do_review_batch(cfg, feats, run.harness(), args.run_id, run.stream,
+                                  args.dry_run, args.profile, args.stage,
+                                  skip_existing=args.skip_existing,
+                                  fallback=getattr(args, "fallback", None))
+        run.emit(batch, batch_summary(batch, run.root))
+        if not batch.get("done"):
+            return batch_exit_code(batch)
+        return EXIT_BLOCKERS if any((s.get("blockers") or [])
+                                    for s in batch["steps"].values()) else EXIT_OK
+    if with_analyze:
+        # without a target the review defaults to the current feature: analyze that same one
+        doc = Path(args.target) if args.target else S.resolve_target(cfg, None, args.target_file)
+        ana = S.do_skill(cfg, "analyze", "", args.run_id, run.harness(), run.stream,
+                         args.dry_run, feature=doc.parent.name or None)
+        run.emit(ana.to_dict(), summarize(ana.to_dict(), run.root))
+        if not ana.ok:
+            return EXIT_ERROR
+        return run.finish(S.do_review(cfg, str(doc), args.run_id, run.harness(), args.profile,
+                                      args.stage, run.stream, args.dry_run, args.target_file,
+                                      interactive=getattr(args, "interactive", False)))
+    return run.finish(S.do_review(cfg, args.target, args.run_id, run.harness(), args.profile,
+                                  args.stage, run.stream, args.dry_run, args.target_file,
+                                  interactive=getattr(args, "interactive", False)))
+
+
+def cmd_drift(run: Run) -> int:
+    args, cfg = run.args, run.cfg
+    if is_batch(args):
+        feats = run.batch_features(NO_SPEC_HINT)
+        if feats is None:
+            return EXIT_ERROR
+        return run.finish_batch(S.do_drift_batch(
+            cfg, feats, run.harness(), args.run_id, run.stream, args.dry_run,
+            skip_existing=args.skip_existing, fallback=getattr(args, "fallback", None)))
+    return run.finish(S.do_drift(cfg, args.target, args.run_id, run.harness(), run.stream,
+                                 args.dry_run))
+
+
+def cmd_skill(run: Run) -> int:
+    """constitution, tasks, analyze, checklist, clarify, implement, converge."""
+    args, cfg = run.args, run.cfg
+    spec = SKILL_SPECS[args.cmd]
+    if spec.get("dangerous") and not getattr(args, "yes", False) and not args.dry_run:
+        msg = (f"`{args.cmd}` is destructive: {spec['writes']}. "
+               f"Re-run with --yes to confirm, or --dry-run to see the command first.")
+        run.emit({"error": msg, "writes": spec["writes"]}, f"refusing: {msg}")
+        return EXIT_ENV
+    if is_batch(args):
+        feats = run.batch_features(NO_FEATURE_HINT)
+        if feats is None:
+            return EXIT_ERROR
+        return run.finish_batch(S.do_feature_batch(
+            cfg, args.cmd, feats, run.harness(), args.run_id, args=args.args, stream=run.stream,
+            dry_run=args.dry_run,
+            skip_existing=STEP_ARTIFACT.get(args.cmd) if args.skip_existing else None,
+            fallback=getattr(args, "fallback", None)))
+    return run.finish(S.do_skill(cfg, args.cmd, args.args, args.run_id, run.harness(), run.stream,
+                                 args.dry_run, feature=getattr(args, "feature", None)))
+
+
+def cmd_explore(run: Run) -> int:
+    """brainstorm / draft."""
+    args, cfg = run.args, run.cfg
+    material = (args.material or "").strip()
+    if not material:
+        print(f"{args.cmd} needs something to work on: an idea or @path/to/file.md", file=sys.stderr)
+        return EXIT_ENV
+    material, _src = S.prompts.expand_input(material, cfg.root)
+    return run.finish(S.do_egm_explore(cfg, args.cmd, material, args.run_id, run.harness(),
+                                       run.stream, args.dry_run))
+
+
+def cmd_pipeline(run: Run) -> int:
+    args = run.args
+    out = S.do_pipeline(run.cfg, args.description, args.stack, args.target,
+                        args.gate, args.with_drift, args.with_tasks, args.with_analyze,
+                        run.stream, args.dry_run)
+    run.emit(out, json.dumps(out, indent=2, ensure_ascii=False))
+    if not out.get("ok"):
+        return EXIT_ERROR
+    if any((s.get("blockers") or []) for s in out["steps"].values()):
+        return EXIT_BLOCKERS
+    return EXIT_OK
+
+
+def cmd_features(run: Run) -> int:
+    rows = S.list_features(run.cfg)
+    human = []
+    for r in rows:
+        mark = "*" if r["active"] else " "
+        arts = "".join("+" if r[k] else "-" for k in ("spec", "plan", "tasks"))
+        human.append(f"{mark} {r['name']:<34} [{arts}]")
+    if rows:
+        human.append("")
+        human.append("* active (Spec Kit will work on it)   [+spec +plan +tasks]")
+    run.emit({"features": rows}, "\n".join(human) or "(no features: run `speckfish specify`)")
+    return EXIT_OK
+
+
+def cmd_config(run: Run) -> int:
+    from dataclasses import asdict
+    args, cfg = run.args, run.cfg
+    if args.set:
+        if "=" not in args.set:
+            run.emit({"error": "expected KEY=VALUE"}, "expected KEY=VALUE")
+            return EXIT_ENV
+        key, value = args.set.split("=", 1)
+        key = key.strip()
+        allowed = {"harness", "model", "profile", "egm_root", "specify", "language"}
+        if key.startswith("timeout."):
+            step = key.split(".", 1)[1]
+            if not value.strip().isdigit():
+                run.emit({"error": "timeout must be a number of seconds"},
+                         "ERROR: timeout must be a number of seconds")
+                return EXIT_ENV
+            cfg.timeouts[step] = int(value.strip())
+            path = cfg.save()
+            run.emit({"saved": norm(path), key: cfg.timeouts[step]},
+                     f"saved timeout.{step}={cfg.timeouts[step]}s → {norm(path)}")
+            return EXIT_OK
+        if key not in allowed:
+            msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
+            run.emit({"error": msg}, f"ERROR: {msg}")
+            return EXIT_ENV
+        setattr(cfg, key, value.strip())
+        path = cfg.save()
+        run.emit({"saved": norm(path), key: value.strip()},
+                 f"saved {key}={value.strip()} → {norm(path)}")
+        return EXIT_OK
+    data = asdict(cfg)
+    data.pop("root", None)
+    run.emit(data, "\n".join(f"{k}: {v}" for k, v in data.items()))
+    return EXIT_OK
+
+
+def cmd_runs(run: Run) -> int:
+    args, cfg = run.args, run.cfg
+    base = cfg.runs_dir
+    runs = sorted([p.name for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
+    if args.clean:
+        out = S.clean_runs(cfg, args.keep)
+        run.emit(out, f"removed {len(out['removed'])} run(s); kept {len(out['kept'])}")
+        return EXIT_OK
+    rows = []
+    for rid in runs:
+        summary = S.run_summary(cfg, rid)
+        rows.append({"run": rid, "steps": list((summary.get("steps") or {}).keys()),
+                     "cost": summary.get("cost"), "cost_unit": summary.get("cost_unit"),
+                     "duration_s": summary.get("duration_s")})
+    human = []
+    for r in rows:
+        cost = f"{r['cost']} {r['cost_unit']}" if r["cost"] else "-"
+        dur = f"{r['duration_s']}s" if r["duration_s"] else "-"
+        human.append(f"{r['run']}  steps={len(r['steps'])}  cost={cost}  "
+                     f"{dur}  [{','.join(r['steps'])}]")
+    run.emit({"runs": rows}, "\n".join(human) or "(no runs)")
+    return EXIT_OK
+
+
+def cmd_report(run: Run) -> int:
+    args, cfg = run.args, run.cfg
+    base = cfg.runs_dir
+    runs = sorted([p for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
+    target = None
+    if args.run_id:
+        cand = base / args.run_id
+        target = cand if cand.is_dir() else None
+    else:
+        for d in runs:
+            if list((d / "artifacts").glob("*/*.md")):
+                target = d
+                break
+    if target is None:
+        print(f"no report found in {_rel(norm(base), run.root)}"
+              + (f" for run {args.run_id}" if args.run_id else " — run a review first"),
+              file=sys.stderr)
+        return EXIT_ERROR
+    mds = sorted((target / "artifacts").glob("*/*.md"))
+    main_reports = [m for m in mds if "consolidated" in m.name.lower()]
+    chosen = (main_reports or mds)[0]
+    text = chosen.read_text(encoding="utf-8", errors="replace")
+    if run.as_json:
+        emit({"run_id": target.name, "report": norm(chosen), "text": text}, True, "")
+        return EXIT_OK
+    body = text.splitlines()
+    shown = body if args.full else body[: args.lines]
+    print("\n".join(shown))
+    if not args.full and len(body) > len(shown):
+        print(f"\n… {len(body) - len(shown)} more line(s): {_rel(norm(chosen), run.root)}")
+        print("  use `speckfish report --full` to print everything")
+    return EXIT_OK
+
+
+def cmd_show(run: Run) -> int:
+    cfg = run.cfg
+    base = cfg.runs_dir
+    rid = run.args.run_id
+    if not rid:
+        cands = sorted([p for p in base.iterdir() if p.is_dir()]) if base.exists() else []
+        rid = cands[-1].name if cands else None
+    if not rid or not (base / rid).exists():
+        run.emit({"error": "run not found"}, "run not found")
+        return EXIT_ERROR
+    data = S.run_summary(cfg, rid)
+    human = [f"run {rid}: {len(data.get('steps') or {})} step(s)"]
+    for step, info in (data.get("steps") or {}).items():
+        cost = f"{info.get('cost')} {info.get('cost_unit')}" if info.get("cost") else "-"
+        human.append(f"  {step:<12} {info.get('status'):<7} {info.get('duration_s')}s  "
+                     f"cost={cost}  model={info.get('model') or '-'}  "
+                     f"blockers={info.get('blockers')}")
+    if data.get("cost"):
+        human.append(f"total: {data['cost']} {data.get('cost_unit')} in {data.get('duration_s')}s")
+    run.emit(data, "\n".join(human))
+    return EXIT_OK
+
+
+# one handler per subcommand: adding a command is adding a row here and a parser above
+HANDLERS = {
+    "editors": cmd_editors, "init": cmd_init, "doctor": cmd_doctor, "specify": cmd_specify,
+    "plan": cmd_plan, "review": cmd_review, "drift": cmd_drift, "pipeline": cmd_pipeline,
+    "features": cmd_features, "config": cmd_config, "runs": cmd_runs, "report": cmd_report,
+    "show": cmd_show, "brainstorm": cmd_explore, "draft": cmd_explore,
+    **{name: cmd_skill for name in SKILL_SPECS},
+}
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
     args = build_parser().parse_args(normalize_argv(raw))
@@ -484,327 +888,16 @@ def main(argv: list[str] | None = None) -> int:
         cfg.harness = args.harness
     if args.model:
         cfg.model = args.model
-    as_json = args.json
     from . import progress as _progress
     _progress.ENABLED = not (getattr(args, "no_progress", False) or args.quiet or args.json)
-    stream = not args.quiet
+    handler = HANDLERS.get(args.cmd)
+    if handler is None:
+        return EXIT_ERROR
     try:
-        if args.cmd == "editors":
-            from .editors import generate
-            targets = [t.strip() for t in args.targets.split(",") if t.strip()]
-            gen = generate(cfg, targets, args.command, args.codex_home,
-                           force=not args.no_force, prefix=args.prefix)
-            human = [f"command: {gen['command']}  prefix: {gen['prefix']}-*",
-                     f"written: {len(gen['written'])}"]
-            human += [f"  {p}" for p in gen["written"]]
-            if gen.get("codex_dir"):
-                human.append(f"codex prompts (user-global): {gen['codex_dir']}")
-            if gen.get("removed"):
-                human.append(f"removed {len(gen['removed'])} stale command(s) from the old prefix")
-            if gen["skipped"]:
-                human += [f"skipped: {s['path']} ({s['reason']})" for s in gen["skipped"]]
-            emit(gen, as_json, "\n".join(human))
-            return EXIT_OK
-
-        if args.cmd == "init":
-            out = S.do_init(cfg, args.integration, skip_egm=args.no_egm,
-                            editors=getattr(args, "editors", True),
-                            editor_prefix=getattr(args, "prefix", "spfish"))
-            ok_int = ", ".join(out.get("installed") or []) or "none"
-            failed = [a["integration"] for a in out["actions"]
-                      if a.get("integration") and not a.get("specify_init")]
-            human = [f"integrations installed: {ok_int}"]
-            if failed:
-                human.append(f"failed: {', '.join(failed)}")
-            human.append(f"egm: {out.get('egm_root')}")
-            emit(out, as_json, "\n".join(human))
-            return EXIT_OK if all(a.get("specify_init", True) for a in out["actions"]) else EXIT_ERROR
-        if args.cmd == "doctor":
-            info = S.do_doctor(cfg)
-            emit(info, as_json, doctor_summary(info))
-            ok = (info.get("harness") or {}).get("installed") and \
-                 (info.get("specify") or {}).get("ok") and (info.get("egm") or {}).get("present")
-            return EXIT_OK if ok else EXIT_ENV
-        # resolved lazily: `config`, `runs`, `show` and `version` must work with no agent installed
-        _harness = {}
-
-        def need_harness():
-            if "h" not in _harness:
-                _harness["h"] = get_harness(cfg, args.harness)
-            return _harness["h"]
-
-        if args.cmd == "specify":
-            if args.split:
-                only = None
-                if args.only:
-                    try:
-                        only = [int(x) for x in str(args.only).replace(" ", "").split(",") if x]
-                    except ValueError:
-                        print("ERROR: --only expects numbers, e.g. 4,5,6,7", file=sys.stderr)
-                        return EXIT_ENV
-                if args.from_feature and only is None:
-                    cut = cfg.root / "specs" / "features.json"
-                    total = 0
-                    if cut.exists():
-                        with contextlib.suppress(Exception):
-                            total = len(json.loads(cut.read_text(encoding="utf-8"))
-                                        .get("features") or [])
-                    if not total:
-                        print("ERROR: --from-feature needs specs/features.json "
-                              "(run --split --inventory-only first)", file=sys.stderr)
-                        return EXIT_ENV
-                    only = list(range(args.from_feature, total + 1))
-                out = S.do_specify_split(cfg, args.description, args.run_id, need_harness(),
-                                         stream, args.dry_run, args.max_features,
-                                         review=args.review,
-                                         inventory_only=getattr(args, "inventory_only", False),
-                                         only=only)
-                emit(out, as_json, split_summary(out, norm(cfg.root)))
-                return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
-            res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
-                               args.dry_run, review=getattr(args, "review", False))
-        elif args.cmd in ("plan", "review") and is_batch(args) and getattr(
-                args, "with_clarify" if args.cmd == "plan" else "with_analyze", False):
-            # chaining runs one feature at a time; silently dropping it would plan/review unchecked
-            flag = "--with-clarify" if args.cmd == "plan" else "--with-analyze"
-            print(f"{flag} works on one feature at a time: drop --all-features/--only/--from-feature "
-                  f"or pass --feature NNN", file=sys.stderr)
-            return EXIT_ENV
-        elif args.cmd == "plan" and getattr(args, "with_clarify", False) and not args.all_features:
-            feature = args.feature or (S.active_feature(cfg).name if S.active_feature(cfg) else None)
-            if not feature:
-                print("--with-clarify needs a feature: pass --feature NNN", file=sys.stderr)
-                return EXIT_ENV
-            clar = S.do_skill(cfg, "clarify", "", args.run_id, need_harness(), stream,
-                              args.dry_run, feature=feature)
-            emit(clar.to_dict(), as_json, summarize(clar.to_dict(), norm(cfg.root)))
-            if not clar.ok:
-                return EXIT_ERROR
-            if clar.verdict and not args.accept_defaults:
-                print("\nclarify left questions above: answer them (or accept the defaults with "
-                      "--accept-defaults) and re-run plan", file=sys.stderr)
-                return EXIT_OK
-            res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
-                            feature=feature)
-        elif args.cmd == "plan" and is_batch(args) and not getattr(args, "with_clarify", False):
-            feats = select_features(cfg, args)
-            if not feats:
-                print("no feature matched: run `speckfish specify` first, or check --only",
-                      file=sys.stderr)
-                return EXIT_ERROR
-            batch = S.do_feature_batch(cfg, "plan", feats, need_harness(), args.run_id,
-                                       stack=args.stack, stream=stream, dry_run=args.dry_run,
-                                       skip_existing="plan.md" if args.skip_existing else None,
-                                       fallback=getattr(args, "fallback", None))
-            emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-            return batch_exit_code(batch)
-        elif args.cmd == "plan":
-            res = S.do_plan(cfg, args.stack, args.run_id, need_harness(), stream, args.dry_run,
-                            feature=args.feature)
-        elif args.cmd == "review" and is_batch(args):
-            feats = select_features(cfg, args)
-            if not feats:
-                print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
-                return EXIT_ERROR
-            batch = S.do_review_batch(cfg, feats, need_harness(), args.run_id, stream,
-                                      args.dry_run, args.profile, args.stage,
-                                      skip_existing=args.skip_existing, fallback=getattr(args, "fallback", None))
-            emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-            if not batch.get("done"):
-                return batch_exit_code(batch)
-            return EXIT_BLOCKERS if any((s.get("blockers") or [])
-                                        for s in batch["steps"].values()) else EXIT_OK
-        elif args.cmd == "review" and getattr(args, "with_analyze", False):
-            # without a target the review defaults to the current feature: analyze that same one
-            doc = Path(args.target) if args.target else S.resolve_target(cfg, None, args.target_file)
-            ana = S.do_skill(cfg, "analyze", "", args.run_id, need_harness(), stream,
-                             args.dry_run, feature=doc.parent.name or None)
-            emit(ana.to_dict(), as_json, summarize(ana.to_dict(), norm(cfg.root)))
-            if not ana.ok:
-                return EXIT_ERROR
-            res = S.do_review(cfg, str(doc), args.run_id, need_harness(), args.profile,
-                              args.stage, stream, args.dry_run, args.target_file,
-                              interactive=getattr(args, "interactive", False))
-        elif args.cmd == "drift" and is_batch(args):
-            feats = select_features(cfg, args)
-            if not feats:
-                print("no feature has a spec.md yet: run `speckfish specify` first", file=sys.stderr)
-                return EXIT_ERROR
-            batch = S.do_drift_batch(cfg, feats, need_harness(), args.run_id, stream,
-                                     args.dry_run, skip_existing=args.skip_existing,
-                                     fallback=getattr(args, "fallback", None))
-            emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-            return batch_exit_code(batch)
-        elif args.cmd == "drift":
-            res = S.do_drift(cfg, args.target, args.run_id, need_harness(), stream, args.dry_run)
-        elif args.cmd in SKILL_SPECS:
-            spec = SKILL_SPECS[args.cmd]
-            if spec.get("dangerous") and not getattr(args, "yes", False) and not args.dry_run:
-                msg = (f"`{args.cmd}` is destructive: {spec['writes']}. "
-                       f"Re-run with --yes to confirm, or --dry-run to see the command first.")
-                emit({"error": msg, "writes": spec["writes"]}, as_json, f"refusing: {msg}")
-                return EXIT_ENV
-            if is_batch(args):
-                feats = select_features(cfg, args)
-                if not feats:
-                    print("no feature matched: run `speckfish specify` first, or check --only",
-                          file=sys.stderr)
-                    return EXIT_ERROR
-                batch = S.do_feature_batch(cfg, args.cmd, feats, need_harness(), args.run_id,
-                                           args=args.args, stream=stream, dry_run=args.dry_run,
-                                           skip_existing=(STEP_ARTIFACT.get(args.cmd)
-                                                          if args.skip_existing else None),
-                                           fallback=getattr(args, "fallback", None))
-                emit(batch, as_json, batch_summary(batch, norm(cfg.root)))
-                return batch_exit_code(batch)
-            res = S.do_skill(cfg, args.cmd, args.args, args.run_id, need_harness(), stream,
-                             args.dry_run, feature=getattr(args, "feature", None))
-        elif args.cmd == "pipeline":
-            out = S.do_pipeline(cfg, args.description, args.stack, args.target,
-                                args.gate, args.with_drift, args.with_tasks, args.with_analyze,
-                                stream, args.dry_run)
-            emit(out, as_json, json.dumps(out, indent=2, ensure_ascii=False))
-            if not out.get("ok"):
-                return EXIT_ERROR
-            if any((s.get("blockers") or []) for s in out["steps"].values()):
-                return EXIT_BLOCKERS
-            return EXIT_OK
-        elif args.cmd == "features":
-            rows = S.list_features(cfg)
-            human = []
-            for r in rows:
-                mark = "*" if r["active"] else " "
-                arts = "".join("+" if r[k] else "-" for k in ("spec", "plan", "tasks"))
-                human.append(f"{mark} {r['name']:<34} [{arts}]")
-            if rows:
-                human.append("")
-                human.append("* active (Spec Kit will work on it)   [+spec +plan +tasks]")
-            emit({"features": rows}, as_json, "\n".join(human) or "(no features: run `speckfish specify`)")
-            return EXIT_OK
-        elif args.cmd == "config":
-            from dataclasses import asdict
-            if args.set:
-                if "=" not in args.set:
-                    emit({"error": "expected KEY=VALUE"}, as_json, "expected KEY=VALUE")
-                    return EXIT_ENV
-                key, value = args.set.split("=", 1)
-                key = key.strip()
-                allowed = {"harness", "model", "profile", "egm_root", "specify", "language"}
-                if key.startswith("timeout."):
-                    step = key.split(".", 1)[1]
-                    if not value.strip().isdigit():
-                        emit({"error": "timeout must be a number of seconds"}, as_json,
-                             "ERROR: timeout must be a number of seconds")
-                        return EXIT_ENV
-                    cfg.timeouts[step] = int(value.strip())
-                    path = cfg.save()
-                    emit({"saved": norm(path), key: cfg.timeouts[step]}, as_json,
-                         f"saved timeout.{step}={cfg.timeouts[step]}s → {norm(path)}")
-                    return EXIT_OK
-                if key not in allowed:
-                    msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
-                    emit({"error": msg}, as_json, f"ERROR: {msg}")
-                    return EXIT_ENV
-                setattr(cfg, key, value.strip())
-                path = cfg.save()
-                emit({"saved": norm(path), key: value.strip()}, as_json,
-                     f"saved {key}={value.strip()} → {norm(path)}")
-                return EXIT_OK
-            data = asdict(cfg)
-            data.pop("root", None)
-            human = [f"{k}: {v}" for k, v in data.items()]
-            emit(data, as_json, "\n".join(human))
-            return EXIT_OK
-        elif args.cmd == "runs":
-            base = cfg.runs_dir
-            runs = sorted([p.name for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
-            if args.clean:
-                out = S.clean_runs(cfg, args.keep)
-                emit(out, as_json, f"removed {len(out['removed'])} run(s); kept "
-                                   f"{len(out['kept'])}")
-                return EXIT_OK
-            rows = []
-            for rid in runs:
-                summary = S.run_summary(cfg, rid)
-                rows.append({"run": rid, "steps": list((summary.get("steps") or {}).keys()),
-                             "cost": summary.get("cost"), "cost_unit": summary.get("cost_unit"),
-                             "duration_s": summary.get("duration_s")})
-            human = []
-            for r in rows:
-                cost = f"{r['cost']} {r['cost_unit']}" if r["cost"] else "-"
-                dur = f"{r['duration_s']}s" if r["duration_s"] else "-"
-                human.append(f"{r['run']}  steps={len(r['steps'])}  cost={cost}  "
-                             f"{dur}  [{','.join(r['steps'])}]")
-            emit({"runs": rows}, as_json, "\n".join(human) or "(no runs)")
-            return EXIT_OK
-        elif args.cmd in ("brainstorm", "draft"):
-            material = (args.material or "").strip()
-            if not material:
-                print(f"{args.cmd} needs something to work on: an idea or @path/to/file.md",
-                      file=sys.stderr)
-                return EXIT_ENV
-            material, _src = S.prompts.expand_input(material, cfg.root)
-            res = S.do_egm_explore(cfg, args.cmd, material, args.run_id, need_harness(),
-                                   stream, args.dry_run)
-        elif args.cmd == "report":
-            base = cfg.runs_dir
-            runs = sorted([p for p in base.iterdir() if p.is_dir()], reverse=True) if base.exists() else []
-            target = None
-            if args.run_id:
-                cand = base / args.run_id
-                target = cand if cand.is_dir() else None
-            else:
-                for d in runs:
-                    if list((d / "artifacts").glob("*/*.md")):
-                        target = d
-                        break
-            if target is None:
-                print(f"no report found in {_rel(norm(base), norm(cfg.root))}"
-                      + (f" for run {args.run_id}" if args.run_id else " — run a review first"),
-                      file=sys.stderr)
-                return EXIT_ERROR
-            mds = sorted((target / "artifacts").glob("*/*.md"))
-            main = [m for m in mds if "consolidated" in m.name.lower()]
-            chosen = (main or mds)[0]
-            text = chosen.read_text(encoding="utf-8", errors="replace")
-            if as_json:
-                emit({"run_id": target.name, "report": norm(chosen), "text": text}, True, "")
-                return EXIT_OK
-            body = text.splitlines()
-            shown = body if args.full else body[: args.lines]
-            print("\n".join(shown))
-            if not args.full and len(body) > len(shown):
-                print(f"\n… {len(body) - len(shown)} more line(s): {_rel(norm(chosen), norm(cfg.root))}")
-                print("  use `speckfish report --full` to print everything")
-            return EXIT_OK
-        elif args.cmd == "show":
-            base = cfg.runs_dir
-            rid = args.run_id
-            if not rid:
-                cands = sorted([p for p in base.iterdir() if p.is_dir()]) if base.exists() else []
-                rid = cands[-1].name if cands else None
-            if not rid or not (base / rid).exists():
-                emit({"error": "run not found"}, as_json, "run not found")
-                return EXIT_ERROR
-            data = S.run_summary(cfg, rid)
-            human = [f"run {rid}: {len(data.get('steps') or {})} step(s)"]
-            for step, info in (data.get("steps") or {}).items():
-                cost = f"{info.get('cost')} {info.get('cost_unit')}" if info.get("cost") else "-"
-                human.append(f"  {step:<12} {info.get('status'):<7} {info.get('duration_s')}s  "
-                             f"cost={cost}  model={info.get('model') or '-'}  "
-                             f"blockers={info.get('blockers')}")
-            if data.get("cost"):
-                human.append(f"total: {data['cost']} {data.get('cost_unit')} in "
-                             f"{data.get('duration_s')}s")
-            emit(data, as_json, "\n".join(human))
-            return EXIT_OK
-        else:
-            return EXIT_ERROR
-        emit(res.to_dict(), as_json, summarize(res.to_dict(), norm(cfg.root)))
-        return exit_for(res.to_dict())
+        return handler(Run(cfg, args))
     except SystemExit as e:
         msg = str(e) or "environment error"
-        emit({"error": msg}, as_json, f"ERROR: {msg}")
+        emit({"error": msg}, args.json, f"ERROR: {msg}")
         return EXIT_ENV
 
 

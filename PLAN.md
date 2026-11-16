@@ -56,6 +56,8 @@ Higiene:
 
 ## Fase 2 — Arquitectura
 
+**Estado: hecha en la rama `refactor/phase2-kind-label`** (apilada sobre la Fase 0; 191 tests en verde). Hecho: `kind`/`label` separados, `registry.py`, `workspace.py`, `run_batch` único, tabla `HANDLERS`, `Harness.slash_commands`. Queda: que el harness genere el prompt completo (`h.render`) y los `.result.json` por etiqueta en todos los caminos (el de `run_interactive` sigue usando el nombre del paso). Hallazgo: `speckfish review` sin flags salía con 2 en silencio desde #28; arreglado y con test.
+
 - **Registro de pasos**: cada paso declara nombre, requisitos, salidas, schema, validador y clave de timeout. `go` y `next` salen del registro y desaparecen los `if step == ...` de `postprocess`.
 - **El harness genera su propio prompt** (`h.render(kind, ...)`): elimina los seis `if h.name == "claude"` de `steps.py`.
 - **Un único ejecutor de batches**: hoy hay tres casi iguales (`do_review_batch`, `do_drift_batch`, `do_feature_batch`).

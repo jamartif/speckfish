@@ -303,6 +303,11 @@ def find_feature(cfg: Config, wanted: str) -> Path:
 
 # ---------------- agent steps ----------------
 
+def _slash(h: Harness) -> bool:
+    """Does this agent CLI resolve `/speckit-*` and `/egm:*` commands inside a prompt?"""
+    return bool(getattr(h, "slash_commands", False))
+
+
 def with_language(prompt: str, cfg: Config) -> str:
     """Append the output-language instruction once, so every artifact uses the same language."""
     line = prompts.language_line(getattr(cfg, "language", "") or "")
@@ -356,33 +361,29 @@ def review_already_done(cfg: Config, feature: str, action: str = "review") -> bo
     return bool(list(cfg.runs_dir.glob(f"*/artifacts/{action}-{feature}/{marker}")))
 
 
-def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
-                    run_id: str | None = None, stream: bool = True, dry_run: bool = False,
-                    profile: str | None = None, stage: str = "uninterrupted",
-                    skip_existing: bool = False, fallback: str | None = None) -> dict:
-    """EGM review per feature: plan.md when it exists, spec.md otherwise."""
-    h = harness or get_harness(cfg)
+def run_batch(cfg: Config, action: str, features: list[Path], h: Harness, rid: str,
+              run_one, fallback: str | None = None, skip=None,
+              detail_file: str = "batch.json", prepare=None) -> dict:
+    """Run one kind of step over many features, in order, stopping at the first failure.
+
+    `run_one(harness, feature)` does the work for one feature and returns its StepResult; `skip(f)`
+    says it is already done; `prepare(f)` runs just before (Spec Kit works on one active feature).
+    On a quota/auth stop the same feature is retried once with the `fallback` harness.
+    Spec Kit itself handles a single feature per invocation, so N features mean N agent runs.
+    """
     alt = _fallback_for(cfg, fallback)
-    rid = ensure_run(cfg, run_id)
-    out: dict = {"run_id": rid, "action": "review", "harness": h.name, "steps": {},
-                 "order": [], "skipped": [], "switched": [], "stopped_at": None,
-                 "total_cost": 0.0}
-    for f in features:
-        target = f / "plan.md" if (f / "plan.md").exists() else f / "spec.md"
-        if not target.exists():
-            continue
-        if skip_existing and review_already_done(cfg, f.name):
-            out["skipped"].append(f.name)
-            continue
-        res = do_review(cfg, str(target), rid, h, profile=profile, stage=stage,
-                        stream=stream, dry_run=dry_run, default_file=target.name,
-                        step_name=f"review-{f.name}")
+    skipped = [f.name for f in features if skip and skip(f)]
+    todo = [f for f in features if f.name not in skipped]
+    out: dict = {"run_id": rid, "action": action, "harness": h.name, "steps": {},
+                 "order": [f.name for f in todo], "skipped": skipped, "switched": [],
+                 "stopped_at": None, "total_cost": 0.0}
+    for f in todo:
+        if prepare:
+            prepare(f)
+        res = run_one(h, f)
         if _needs_fallback(res) and alt is not None:
             out["switched"].append(f"{f.name} -> {alt.name}")
-            res = do_review(cfg, str(target), rid, alt, profile=profile, stage=stage,
-                            stream=stream, dry_run=dry_run, default_file=target.name,
-                            step_name=f"review-{f.name}")
-        out["order"].append(f.name)
+            res = run_one(alt, f)
         out["steps"][f.name] = res.to_dict()
         if res.cost:
             out["total_cost"] += float(res.cost)
@@ -390,10 +391,35 @@ def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None =
             out["stopped_at"] = f.name
             break
     out["done"] = out["stopped_at"] is None
-    out["detail_file"] = "batch-review.json"
-    (cfg.runs_dir / rid / "batch-review.json").write_text(
-        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    # state.json is keyed by label now, but a per-run batch file keeps the per-feature view in one place
+    out["detail_file"] = detail_file
+    (cfg.runs_dir / rid / detail_file).write_text(json.dumps(out, indent=2, ensure_ascii=False),
+                                                  encoding="utf-8")
     return out
+
+
+def _review_target(f: Path) -> Path:
+    return f / "plan.md" if (f / "plan.md").exists() else f / "spec.md"
+
+
+def do_review_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
+                    run_id: str | None = None, stream: bool = True, dry_run: bool = False,
+                    profile: str | None = None, stage: str = "uninterrupted",
+                    skip_existing: bool = False, fallback: str | None = None) -> dict:
+    """EGM review per feature: plan.md when it exists, spec.md otherwise."""
+    h = harness or get_harness(cfg)
+    rid = ensure_run(cfg, run_id)
+    features = [f for f in features if _review_target(f).exists()]
+
+    def run_one(harness_: Harness, f: Path) -> StepResult:
+        target = _review_target(f)
+        return do_review(cfg, str(target), rid, harness_, profile=profile, stage=stage,
+                         stream=stream, dry_run=dry_run, default_file=target.name,
+                         step_name=f"review-{f.name}")
+
+    return run_batch(cfg, "review", features, h, rid, run_one, fallback=fallback,
+                     skip=(lambda f: review_already_done(cfg, f.name)) if skip_existing else None,
+                     detail_file="batch-review.json")
 
 
 def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = None,
@@ -402,87 +428,41 @@ def do_drift_batch(cfg: Config, features: list[Path], harness: Harness | None = 
                    fallback: str | None = None) -> dict:
     """EGM drift per feature, over the feature directory itself."""
     h = harness or get_harness(cfg)
-    alt = _fallback_for(cfg, fallback)
     rid = ensure_run(cfg, run_id)
-    out: dict = {"run_id": rid, "action": "drift", "harness": h.name, "steps": {},
-                 "order": [], "skipped": [], "switched": [], "stopped_at": None,
-                 "total_cost": 0.0}
-    for f in features:
-        if skip_existing and review_already_done(cfg, f.name, action="drift"):
-            out["skipped"].append(f.name)
-            continue
-        res = do_drift(cfg, str(f), rid, h, stream=stream, dry_run=dry_run,
-                       step_name=f"drift-{f.name}")
-        if _needs_fallback(res) and alt is not None:
-            out["switched"].append(f"{f.name} -> {alt.name}")
-            res = do_drift(cfg, str(f), rid, alt, stream=stream, dry_run=dry_run,
-                           step_name=f"drift-{f.name}")
-        out["order"].append(f.name)
-        out["steps"][f.name] = res.to_dict()
-        if res.cost:
-            out["total_cost"] += float(res.cost)
-        if not res.ok:
-            out["stopped_at"] = f.name
-            break
-    out["done"] = out["stopped_at"] is None
-    out["detail_file"] = "batch-drift.json"
-    (cfg.runs_dir / rid / "batch-drift.json").write_text(
-        json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
-    return out
+
+    def run_one(harness_: Harness, f: Path) -> StepResult:
+        return do_drift(cfg, str(f), rid, harness_, stream=stream, dry_run=dry_run,
+                        step_name=f"drift-{f.name}")
+
+    return run_batch(cfg, "drift", features, h, rid, run_one, fallback=fallback,
+                     skip=(lambda f: review_already_done(cfg, f.name, action="drift"))
+                     if skip_existing else None, detail_file="batch-drift.json")
 
 
 def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Harness | None = None,
                      run_id: str | None = None, stack: str = "", args: str = "",
                      stream: bool = True, dry_run: bool = False,
                      skip_existing: str | None = None, fallback: str | None = None) -> dict:
-    """Run one step over every feature, in order, stopping at the first failure.
-
-    Spec Kit itself works on a single active feature, so N features mean N agent runs; this walks
-    them without hiding each result.
-    """
+    """Run a Spec Kit step (plan, tasks, analyze, ...) over every feature, in order."""
     h = harness or get_harness(cfg)
-    alt = _fallback_for(cfg, fallback)
     rid = ensure_run(cfg, run_id)
-    skipped = []
-    if skip_existing:
-        skipped = [f.name for f in features if (f / skip_existing).exists()]
-        features = [f for f in features if not (f / skip_existing).exists()]
-    out: dict = {"run_id": rid, "action": action, "harness": h.name, "steps": {},
-                 "order": [f.name for f in features], "skipped": skipped,
-                 "switched": [], "stopped_at": None, "total_cost": 0.0}
-    for f in features:
-        set_active_feature(cfg, f)
+
+    def run_one(harness_: Harness, f: Path) -> StepResult:
         label = f"{action}-{f.name}"
         if action == "plan":
-            res = do_plan(cfg, stack, rid, h, stream, dry_run, feature=f.name, step_name=label)
-        else:
-            res = do_skill(cfg, action, args, rid, h, stream, dry_run, feature=f.name,
+            return do_plan(cfg, stack, rid, harness_, stream, dry_run, feature=f.name,
                            step_name=label)
-        if _needs_fallback(res) and alt is not None:
-            out["switched"].append(f"{f.name} -> {alt.name}")
-            if action == "plan":
-                res = do_plan(cfg, stack, rid, alt, stream, dry_run, feature=f.name,
-                              step_name=label)
-            else:
-                res = do_skill(cfg, action, args, rid, alt, stream, dry_run, feature=f.name,
-                               step_name=label)
-        out["steps"][f.name] = res.to_dict()
-        if res.cost:
-            out["total_cost"] += float(res.cost)
-        if not res.ok:
-            out["stopped_at"] = f.name
-            break
-    out["done"] = out["stopped_at"] is None
-    # state.json is keyed by step name, so a batch would overwrite itself feature after feature
-    out["detail_file"] = "batch.json"
-    (cfg.runs_dir / rid / "batch.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
-                                                   encoding="utf-8")
-    return out
+        return do_skill(cfg, action, args, rid, harness_, stream, dry_run, feature=f.name,
+                        step_name=label)
+
+    return run_batch(cfg, action, features, h, rid, run_one, fallback=fallback,
+                     skip=(lambda f: (f / skip_existing).exists()) if skip_existing else None,
+                     prepare=lambda f: set_active_feature(cfg, f))
 
 
 def specify_prompt_for(cfg: Config, h: Harness, idea: str) -> str:
     """The specify prompt for any harness: `@file` expanded and the output language applied."""
-    if h.name == "claude":
+    if _slash(h):
         return with_language(prompts.specify_prompt(idea, cfg.root), cfg)
     body, _src = prompts.expand_input(idea, cfg.root)
     return with_language(
@@ -496,7 +476,7 @@ def do_specify(cfg: Config, idea: str, run_id: str | None = None,
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     prompt = specify_prompt_for(cfg, h, idea)
-    res = run_step(cfg, h, "specify", prompt, cfg.root, rid, cfg.egm_path(),
+    res = run_step(cfg, h, "specify", prompt, cfg.root, rid, cfg.egm_path(), kind="specify",
                    schema=prompts.SCHEMAS["specify"], stream=stream, dry_run=dry_run)
     if review and not dry_run and res.ok:
         spec = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
@@ -528,7 +508,7 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     fdir = set_active_feature(cfg, find_feature(cfg, feature)) if feature else active_feature(cfg)
-    if h.name == "claude":
+    if _slash(h):
         prompt = with_language(prompts.plan_prompt(stack, cfg.root, fdir), cfg)
     else:
         body, _src = prompts.expand_input((stack or "").strip(), cfg.root)
@@ -536,7 +516,7 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
             f"Stack and constraints: {body}\n\n{prompts.NO_QUESTIONS}\n\n"
             f"Work on the feature in {norm(fdir) if fdir else 'the current feature'}."
             f"\n\nRun the Spec Kit planning flow (speckit-plan skill).", cfg)
-    return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(),
+    return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(), kind="plan",
                     schema=prompts.SCHEMAS["plan"], stream=stream, dry_run=dry_run,
                     artifact_name=step_name)
 
@@ -571,7 +551,7 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
     doc = resolve_target(cfg, target, default_file)
     artifact = cfg.runs_dir / rid / "artifacts" / step_name
     egm = cfg.egm_path()
-    if h.name == "claude":
+    if _slash(h):
         if not egm:
             raise SystemExit("EGM not found: run `speckfish init` or set egm_root in .speckfish/config.json")
         prompt = with_language(prompts.review_prompt(doc, artifact, profile or cfg.profile, stage,
@@ -583,7 +563,7 @@ def do_review(cfg: Config, target: str | None = None, run_id: str | None = None,
     if interactive:
         # the agent takes over this terminal: it asks, the operator answers
         return run_interactive(cfg, h, step_name, prompt, cfg.root, rid, egm, dry_run=dry_run)
-    return run_step(cfg, h, step_name, prompt, cfg.root, rid, egm,
+    return run_step(cfg, h, step_name, prompt, cfg.root, rid, egm, kind="review",
                     schema=prompts.SCHEMAS["review"], stream=stream, dry_run=dry_run)
 
 
@@ -601,13 +581,13 @@ def do_skill(cfg: Config, skill: str, args: str = "", run_id: str | None = None,
         fdir = set_active_feature(cfg, find_feature(cfg, feature))
     elif skill in ("tasks", "analyze", "checklist", "clarify", "converge", "implement"):
         fdir = active_feature(cfg)
-    if h.name == "claude":
+    if _slash(h):
         prompt = with_language(prompts.skill_prompt(skill, args, artifact, cfg.root, fdir), cfg)
     else:
         prompt = with_language(prompts.skill_prompt_for(
             h.name, skill, args, artifact, cfg.egm_path() or cfg.root, cfg.root,
             feature_dir=fdir), cfg)
-    res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(),
+    res = run_step(cfg, h, skill, prompt, cfg.root, rid, cfg.egm_path(), kind=skill,
                    stream=stream, dry_run=dry_run, artifact_name=step_name)
     res.writes = spec.get("writes", "")  # type: ignore[attr-defined]
     return res
@@ -707,7 +687,7 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
 
     inventory = run_step(cfg, h, "specify-split", with_language(prompts.split_prompt(material, max_features, cfg.root), cfg),
                          cfg.root, rid, cfg.egm_path(), schema=prompts.SPLIT_SCHEMA,
-                         stream=stream, dry_run=dry_run)
+                         stream=stream, dry_run=dry_run, kind="split")
     out["steps"]["split"] = inventory.to_dict()
     payload = inventory_payload(inventory, cfg)
     features = payload.get("features") or []
@@ -739,7 +719,7 @@ def _specify_each(cfg: Config, h: Harness, rid: str, pairs: list[tuple[int, dict
         idea = f"{feat.get('title', '')}. {feat.get('description', '')}".strip()
         res = run_step(cfg, h, f"specify-{i}", specify_prompt_for(cfg, h, idea),
                        cfg.root, rid, cfg.egm_path(), schema=prompts.SCHEMAS["specify"],
-                       stream=stream, dry_run=dry_run)
+                       stream=stream, dry_run=dry_run, kind="specify")
         out["steps"][f"specify-{i}"] = res.to_dict()
         written = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
         if not dry_run and Path(written).exists():
@@ -780,16 +760,17 @@ def do_egm_explore(cfg: Config, kind: str, material: str, run_id: str | None = N
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     egm = cfg.egm_path()
-    if h.name == "claude" and not egm:
+    if _slash(h) and not egm:
         raise SystemExit("EGM not found: run `speckfish init` or set egm_root in .speckfish/config.json")
     artifact = cfg.runs_dir / rid / "artifacts" / kind
     artifact.mkdir(parents=True, exist_ok=True)
-    if h.name == "claude":
+    if _slash(h):
         prompt = with_language(prompts.explore_prompt(kind, material, artifact), cfg)
     else:
         prompt = with_language(prompts.egm_prompt_for(h.name, kind, material, artifact,
                                                       egm or cfg.root), cfg)
-    return run_step(cfg, h, kind, prompt, cfg.root, rid, egm, stream=stream, dry_run=dry_run)
+    return run_step(cfg, h, kind, prompt, cfg.root, rid, egm, kind=kind, stream=stream,
+                    dry_run=dry_run)
 
 
 def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
@@ -809,14 +790,14 @@ def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
     # run_step looks for the report under the step's own label (drift-<feature> in a batch)
     artifact = cfg.runs_dir / rid / "artifacts" / step_name
     egm = cfg.egm_path()
-    if h.name == "claude":
+    if _slash(h):
         if not egm:
             raise SystemExit("EGM not found: run `speckfish init`")
         prompt = with_language(prompts.drift_prompt(str(d), artifact), cfg)
     else:
         prompt = with_language(prompts.egm_prompt_for(h.name, "drift", str(d), artifact,
                                                       egm or cfg.root), cfg)
-    return run_step(cfg, h, step_name, prompt, cfg.root, rid, egm,
+    return run_step(cfg, h, step_name, prompt, cfg.root, rid, egm, kind="drift",
                     schema=prompts.SCHEMAS["drift"], stream=stream, dry_run=dry_run)
 
 

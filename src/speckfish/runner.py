@@ -15,6 +15,8 @@ from pathlib import Path
 
 from .config import Config, is_windows, norm
 from .harnesses import Harness, StepInvocation
+from .registry import missing_output
+from .workspace import _git_dirty, feature_dir, git_snapshot, task_progress  # noqa: F401  (re-exported)
 
 
 @dataclass
@@ -23,6 +25,7 @@ class StepResult:
     ok: bool
     exit_code: int
     duration_s: float
+    kind: str = ""
     cost: float | None = None
     cost_unit: str = "usd"
     reports: list[str] = field(default_factory=list)
@@ -283,84 +286,8 @@ def human_error(out: str, err: str, code: int) -> str:
     return f"exit {code}: " + " / ".join(t[-160:] for t in tail)
 
 
-def task_progress(root: Path) -> tuple[int, int] | None:
-    """(done, total) checkboxes in the active feature's tasks.md — the honest measure of implement."""
-    import json as _json
-    import re
-    try:
-        feat = _json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8"))
-        rel = feat.get("feature_directory") or ""
-    except (OSError, ValueError):
-        rel = ""
-    candidates = [root / rel / "tasks.md"] if rel else []
-    candidates += sorted((root / "specs").glob("*/tasks.md"), reverse=True)
-    for path in candidates:
-        if not path.exists():
-            continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        done = len(re.findall(r"^-\s*\[[xX]\]", text, re.MULTILINE))
-        total = done + len(re.findall(r"^-\s*\[\s\]", text, re.MULTILINE))
-        if total:
-            return done, total
-    return None
-
-
-_GIT_NOISE = (".speckfish/", "/bin/", "/obj/", "bin/Debug", "obj/Debug", ".gitignore", "CLAUDE.md",
-              "AGENTS.md", ".agents/", ".claude/")
-
-
-def _git_porcelain(root: Path) -> list[str] | None:
-    """`git status --porcelain` lines that are real work, not build output or tool state (None: unknown)."""
-    import subprocess as sp
-    try:
-        out = sp.run(["git", "status", "--porcelain", "-uall"], cwd=str(root), capture_output=True,
-                     text=True, timeout=60, encoding="utf-8", errors="replace").stdout
-    except (OSError, sp.SubprocessError):
-        return None
-    return [ln for ln in out.splitlines()
-            if ln.strip() and not any(n in ln.replace("\\", "/") for n in _GIT_NOISE)]
-
-
-def git_snapshot(root: Path) -> dict | None:
-    """What the working tree looks like right now: each changed path with its size and mtime.
-
-    A file that was already modified before the step and is modified again keeps the same porcelain
-    line, so comparing lines alone cannot tell "the agent wrote code" from "the repo was already dirty".
-    """
-    lines = _git_porcelain(root)
-    if lines is None:
-        return None
-    snap: dict = {}
-    for ln in lines:
-        path = ln[3:].strip().strip('"')
-        if " -> " in path:
-            path = path.split(" -> ")[-1]
-        try:
-            st = (Path(root) / path).stat()
-            snap[ln] = (st.st_size, st.st_mtime_ns)
-        except OSError:
-            snap[ln] = None
-    return snap
-
-
-def _git_dirty(root: Path, before: dict | None = None) -> bool:
-    """The step changed real work. With a `before` snapshot only what changed *during* the step counts."""
-    if before is not None:
-        after = git_snapshot(root)
-        if after is None:
-            return True                  # cannot tell: do not fail a step over it
-        return after != before
-    interesting = _git_porcelain(root)
-    if interesting is None:
-        return True                      # cannot tell: do not fail a step over it
-    return bool(interesting)
-
-
 def step_kind(step: str) -> str:
-    """`review-001-foo` -> `review`, `specify-3` -> `specify`: a batch label carries the feature.
-
-    `specify-split` is the inventory call, which writes no spec, so it has no kind to validate.
-    """
+    """Legacy: the kind hidden in a label (`review-001-foo` -> `review`). Callers now pass `kind=`."""
     if step == "specify-split":
         return "split"
     return step.split("-")[0]
@@ -368,112 +295,14 @@ def step_kind(step: str) -> str:
 
 def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None,
                 before: tuple[int, int] | None = None,
-                git_before: dict | None = None) -> None:
-    """Collect reports and verdict counts written by the agent for this step."""
-    from .config import find_report, parse_consolidated
+                git_before: dict | None = None, kind: str | None = None) -> None:
+    """Run the validator the registry declares for this kind of step (reports, verdicts, outputs)."""
+    from .registry import Ctx, spec_for
 
-    base = step_kind(step)
-    step = base                      # every check below is about the kind of step, not its label
-    progress = before
-    # "preparation finished" is not an implementation: this step must change the repository
-    if base == "implement" and root is not None and res.exit_code == 0 and not _git_dirty(root, git_before):
-        res.ok = False
-        res.error = ("the agent answered but wrote no code: nothing changed in the repository. "
-                     "It likely stopped at the skill's preparation phase")
-    if base == "implement" and progress is not None and root is not None:
-        after = task_progress(root)
-        if after:
-            done_before, total = progress
-            done_after = after[0]
-            res.tasks_done, res.tasks_total = done_after, total
-            res.verdict = f"{done_after}/{total} tasks done"
-            if res.exit_code == 0 and done_after <= done_before:
-                res.ok = False
-                res.error = (f"implement finished without ticking a single task in tasks.md "
-                             f"({done_before}/{total} before, {done_after}/{total} after)")
-
-    if step == "review":
-        report = find_report(artifact_dir, "consolidated_review_report.md")
-        if report is None:
-            report = find_report(artifact_dir)
-        parsed = parse_consolidated(report) if report else {}
-        res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
-        if res.structured:
-            res.blockers = res.structured.get("blockers") or parsed.get("blockers", [])
-            res.majors = int(res.structured.get("majors") or parsed.get("majors", 0) or 0)
-            res.nits = int(res.structured.get("nits") or parsed.get("nits", 0) or 0)
-            res.meets_standard = res.structured.get("meets_standard")
-        else:
-            res.blockers = parsed.get("blockers", [])
-            res.majors = parsed.get("majors", 0)
-            res.nits = parsed.get("nits", 0)
-            res.meets_standard = parsed.get("meets_standard")
-        res.verdict = ((res.structured or {}).get("verdict") or parsed.get("verdict") or "").strip()
-        if not res.reports:
-            res.error = res.error or "no reports were written to the artifact directory"
-            res.ok = False
-    elif step == "specify":
-        # a run that writes no spec.md is a failure, not a success with a nice essay
-        root = Path(root) if root else None
-        if res.ok and root is not None and not list((root / "specs").glob("*/spec.md")):
-            res.ok = False
-            res.error = ("the agent answered but wrote no spec.md under specs/ "
-                         "(read-only sandbox, or it only printed the spec)")
-    elif step == "clarify":
-        # headless clarify cannot answer: it leaves the questions (and the defaults it assumed)
-        res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
-        questions = artifact_dir / "questions.md"
-        if questions.exists():
-            text = questions.read_text(encoding="utf-8", errors="replace")
-            asks = [ln for ln in text.splitlines() if ln.strip().startswith(("-", "*"))]
-            res.verdict = (f"{len(asks)} clarification question(s), each with the default it assumed "
-                           f"— the spec was NOT modified. Read them, then either accept the defaults, "
-                           f"edit spec.md, or re-run with --interactive")
-        elif res.ok:
-            res.ok = False
-            res.error = ("clarify finished but wrote no questions.md "
-                         "(nothing was ambiguous, or it answered in the chat)")
-    elif step in ("brainstorm", "draft"):
-        from .prompts import EXPLORE
-        res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
-        expected = artifact_dir / EXPLORE[step]["writes"]
-        if res.ok and not expected.exists():
-            res.ok = False
-            res.error = (f"the agent finished but wrote no {expected.name} "
-                         f"(check the log: these skills expect a human to answer)")
-    elif step == "drift":
-        res.reports = [norm(p) for p in sorted(artifact_dir.glob("*.md"))]
-        if not res.reports:
-            res.error = res.error or "no drift report was written"
-            res.ok = False
-
-
-def _feature_dir(root: Path) -> Path | None:
-    """The feature Spec Kit points at (`.specify/feature.json`), else the newest one."""
-    try:
-        rel = json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8")
-                         ).get("feature_directory") or ""
-    except (OSError, ValueError):
-        rel = ""
-    if rel and (root / rel).is_dir():
-        return root / rel
-    feats = sorted((root / "specs").glob("*/spec.md"), key=lambda p: p.stat().st_mtime)
-    return feats[-1].parent if feats else None
-
-
-def _missing_output(step: str, root: Path, res: StepResult) -> str:
-    """After an idle close: what this kind of step should have written and did not ('' = fine)."""
-    kind = step_kind(step)
-    if kind in ("review", "drift", "brainstorm", "draft", "clarify"):
-        return "" if res.reports else "no report was written"
-    if kind in ("plan", "tasks"):
-        feat = _feature_dir(root)
-        wanted = f"{kind}.md"
-        if feat is None or not (feat / wanted).exists():
-            return f"no {wanted} was written"
-        return ""
-    # specify and implement already validated their own output in postprocess()
-    return "" if res.ok else (res.error or "the step did not finish")
+    spec = spec_for(kind or step_kind(step))
+    if spec is not None and spec.validate is not None:
+        spec.validate(res, Ctx(artifact_dir=artifact_dir, root=root, tasks_before=before,
+                               git_before=git_before))
 
 
 def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
@@ -499,7 +328,7 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
 
 
 def _base_step(cfg: Config, step: str) -> str:
-    """`review-001-foo` -> `review`: a per-feature label must not lose its timeout."""
+    """Legacy: `review-001-foo` -> `review`. New code passes `kind=` to run_step instead."""
     if step in cfg.timeouts:
         return step
     for key in cfg.timeouts:
@@ -512,22 +341,32 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
              run_id: str, egm_root: Path | None, timeout: int | None = None,
              budget: float | None = None, schema: dict | None = None,
              stream: bool = True, dry_run: bool = False,
-             progress: bool = True, artifact_name: str | None = None) -> StepResult:
+             progress: bool = True, artifact_name: str | None = None,
+             kind: str | None = None) -> StepResult:
+    """Run one agent step.
+
+    `kind` is what the step *is* (review, plan, ...): budgets, timeouts and validation follow it.
+    The label (`artifact_name`, else `step`) is *which run of it* (`review-001-foo`): folders, logs
+    and state follow that. Callers that do not pass `kind` get it derived from the label.
+    """
+    from .registry import timeout_key
+
     run_dir = run_dir_for(cfg, run_id)
     # a batch runs the same step once per feature: each one needs its own folder and log or they overwrite
     label = artifact_name or step
+    kind = kind or step_kind(_base_step(cfg, step))
     artifact_dir = run_dir / "artifacts" / label
     artifact_dir.mkdir(parents=True, exist_ok=True)
-    # a batch labels the step "<step>-<feature>"; the timeout belongs to the step, not the label
-    timeout = timeout or int(cfg.timeouts.get(_base_step(cfg, step), 600))
-    inv = harness.build(kind=step, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
+    # the timeout belongs to the kind of step, not to its label
+    timeout = timeout or int(cfg.timeouts.get(timeout_key(kind), 600))
+    inv = harness.build(kind=kind, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
                         egm_root=egm_root, budget=budget, timeout=timeout, schema=schema)
     if dry_run:
-        return StepResult(step=step, ok=True, exit_code=0, duration_s=0.0,
+        return StepResult(step=step, kind=kind, ok=True, exit_code=0, duration_s=0.0,
                           log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
                           error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
-    is_implement = _base_step(cfg, step) == "implement"
+    is_implement = kind == "implement"
     before_tasks = task_progress(Path(cwd)) if is_implement else None
     before_git = git_snapshot(Path(cwd)) if is_implement else None
     code, out, err, duration, timed_out, idle_closed = execute(
@@ -538,7 +377,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         # what the step wrote decides (postprocess below), not the signal that ended the process
         code = 0
     parsed = harness.parse_output(out, err, code) or {}
-    res = StepResult(step=step, ok=(code == 0 and not timed_out), exit_code=code,
+    res = StepResult(step=step, kind=kind, ok=(code == 0 and not timed_out), exit_code=code,
                      duration_s=round(duration, 1), log=norm(run_dir / "logs" / f"{label}.log"),
                      artifact_dir=norm(artifact_dir))
     res.cost = parsed.get("cost_usd") or parsed.get("credits")
@@ -551,7 +390,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
     if timed_out:
         res.error = (f"timed out after {timeout}s — the agent may simply need longer. "
-                     f"Raise it with `speckfish config timeout.{_base_step(cfg, step)}="
+                     f"Raise it with `speckfish config timeout.{timeout_key(kind)}="
                     f"{int(timeout * 2)}` "
                      f"and check the log for how far it got")
         res.ok = False
@@ -559,10 +398,10 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = human_error(out, err, code)
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
-    postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git)
+    postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git, kind=kind)
     if idle_closed:
         # the work landed but the CLI never exited: keep it when the step's own output is there
-        missing = _missing_output(step, Path(cwd), res)
+        missing = missing_output(kind, Path(cwd), res, feature_dir(Path(cwd)))
         if missing:
             res.ok = False
             res.error = (f"the agent wrote nothing for {idle_limit}s and was stopped; "

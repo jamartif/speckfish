@@ -30,6 +30,7 @@ class StepInvocation:
 class Harness:
     name = "base"
     echo_stdout = False        # True only for harnesses whose stdout is human readable
+    slash_commands = False     # True when the CLI resolves `/speckit-*` and `/egm:*` in a prompt
     supports_schema = False
     supports_budget = False
     verified = False
@@ -80,6 +81,7 @@ class Harness:
 
 class ClaudeHarness(Harness):
     name = "claude"
+    slash_commands = True
     supports_schema = True
     supports_budget = True
     verified = True
