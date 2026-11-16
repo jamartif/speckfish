@@ -449,6 +449,12 @@ def build_parser() -> argparse.ArgumentParser:
         if spec.get("dangerous"):
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
+            sp.add_argument("--chunk", type=int, default=15,
+                            help="tasks per agent call (default: 15; 0 = every pending task in one call)")
+            sp.add_argument("--max-chunks", type=int, default=0,
+                            help="stop after this many chunks (default: until every task is ticked)")
+            sp.add_argument("--budget", type=float, default=None,
+                            help="stop before a chunk once this much was spent (usd or credits)")
 
     def add_flow_options(sp, implement: bool = True) -> None:
         sp.add_argument("--max-rounds", type=int, default=2,
@@ -461,6 +467,8 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--yes", action="store_true", help="confirm that --implement writes code")
             sp.add_argument("--no-analyze", action="store_true", help="skip the analyze step")
             sp.add_argument("--no-drift", action="store_true", help="skip drift after implement")
+            sp.add_argument("--chunk", type=int, default=15,
+                            help="tasks per implement call (default: 15; 0 = all in one call)")
 
     sp = sub.add_parser("go", help="idea -> specs -> plans -> tasks -> reviewed design (-> code), resumable")
     sp.add_argument("description", nargs="?", default="",
@@ -751,6 +759,49 @@ def cmd_skill(run: Run) -> int:
                                  args.dry_run, feature=getattr(args, "feature", None)))
 
 
+def cmd_implement(run: Run) -> int:
+    """Write the code of one or more features, a chunk of tasks per agent call."""
+    from . import flow
+    args, cfg = run.args, run.cfg
+    spec = SKILL_SPECS["implement"]
+    if not getattr(args, "yes", False) and not args.dry_run:
+        msg = (f"`implement` is destructive: {spec['writes']}. "
+               f"Re-run with --yes to confirm, or --dry-run to see the command first.")
+        run.emit({"error": msg, "writes": spec["writes"]}, f"refusing: {msg}")
+        return EXIT_ENV
+    if is_batch(args):
+        feats = run.batch_features(NO_FEATURE_HINT)
+        if feats is None:
+            return EXIT_ERROR
+    else:
+        feat = _current_feature_or_error(run)
+        if feat is None:
+            return EXIT_ERROR
+        feats = [feat]
+    rid = S.ensure_run(cfg, args.run_id)
+    meter = flow.Budget(args.budget)
+    out: dict = {"run_id": rid, "ok": True, "blockers": 0, "features": {}, "spent": 0,
+                 "budget": args.budget}
+    for feat in feats:
+        S.set_active_feature(cfg, feat)
+        result = flow.implement_loop(cfg, feat, rid, run.harness(), chunk=args.chunk,
+                                     max_chunks=args.max_chunks,
+                                     fallback=getattr(args, "fallback", None), budget=meter,
+                                     stream=run.stream, dry_run=args.dry_run)
+        st = flow.feature_state(cfg, feat)
+        result["state"] = {k: st[k] for k in ("spec", "plan", "tasks", "tasks_done", "tasks_total",
+                                              "blockers", "review_current")}
+        out["features"][feat.name] = result
+        if result["stopped"]:
+            out["ok"] = False
+            break
+        if args.dry_run:
+            break
+    out["spent"] = round(meter.spent, 3)
+    run.emit(out, flow_summary(out))
+    return flow_exit_code(out)
+
+
 def cmd_explore(run: Run) -> int:
     """brainstorm / draft."""
     args, cfg = run.args, run.cfg
@@ -958,7 +1009,8 @@ def _flow_options(args) -> dict:
     return {"implement": getattr(args, "implement", False),
             "analyze": not getattr(args, "no_analyze", False),
             "drift": not getattr(args, "no_drift", False),
-            "max_rounds": args.max_rounds, "majors": args.majors}
+            "max_rounds": args.max_rounds, "majors": args.majors,
+            "chunk": getattr(args, "chunk", 15)}
 
 
 def _refuse_unconfirmed_implement(run: Run) -> int | None:
@@ -1080,6 +1132,7 @@ HANDLERS = {
     "features": cmd_features, "config": cmd_config, "runs": cmd_runs, "report": cmd_report,
     "show": cmd_show, "brainstorm": cmd_explore, "draft": cmd_explore,
     **{name: cmd_skill for name in SKILL_SPECS},
+    "implement": cmd_implement,
 }
 
 

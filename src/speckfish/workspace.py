@@ -98,3 +98,30 @@ def feature_dir(root: Path) -> Path | None:
         return root / rel
     feats = sorted((root / "specs").glob("*/spec.md"), key=lambda p: p.stat().st_mtime)
     return feats[-1].parent if feats else None
+
+
+TASK_LINE = re.compile(r"^\s*-\s*\[(?P<mark>[ xX])\]\s*(?P<id>T\d+)?\s*(?P<text>.*?)\s*$")
+
+
+def parse_tasks(path: Path) -> list[dict]:
+    """Every task of a tasks.md in order: {id, done, text, phase}."""
+    try:
+        lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    except OSError:
+        return []
+    tasks, phase = [], ""
+    for ln in lines:
+        if ln.startswith("#"):
+            phase = ln.lstrip("#").strip()
+            continue
+        m = TASK_LINE.match(ln)
+        if m:
+            tasks.append({"id": m.group("id") or f"#{len(tasks) + 1}", "done": m.group("mark") != " ",
+                          "text": m.group("text"), "phase": phase})
+    return tasks
+
+
+def next_chunk(tasks: list[dict], size: int) -> list[dict]:
+    """The next `size` pending tasks, in file order (size <= 0: every pending task)."""
+    pending = [t for t in tasks if not t["done"]]
+    return pending if size <= 0 else pending[:size]

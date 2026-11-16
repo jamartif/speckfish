@@ -148,6 +148,8 @@ STEPS: dict[str, StepSpec] = dict([
           reports=True),
     # not a Spec Kit skill: speckfish asks the agent to fix the design after a review
     _spec("revise", requires=("plan.md|spec.md",)),
+    # ticks the tasks an implement chunk finished but did not mark: reads code, writes only tasks.md
+    _spec("reconcile", requires=("tasks.md",)),
     _spec("implement", requires=("tasks.md",), validate=validate_implement, destructive=True),
     _spec("drift", requires=("spec.md",), schema="drift", validate=validate_drift, reports=True),
     _spec("converge", requires=("tasks.md",), optional=True),

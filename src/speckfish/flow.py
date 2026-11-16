@@ -13,9 +13,10 @@ from . import prompts
 from . import steps as S
 from .config import Config, norm
 from .runner import StepResult, run_step
-from .workspace import count_tasks
+from .workspace import count_tasks, next_chunk, parse_tasks
 
 MAX_STEPS_PER_FEATURE = 24      # a guard against a loop that never settles
+CHUNK_DEFAULT = 15              # tasks per implement call: a whole feature (90-170 tasks) is too much
 
 
 # ---------------- what earlier runs recorded ----------------
@@ -203,13 +204,118 @@ def do_revise(cfg: Config, feature: Path, rid: str, harness, majors: bool = Fals
     return res
 
 
+# ---------------- implement, a chunk of tasks at a time ----------------
+# One agent call over a whole tasks.md (90-170 tasks) ends early: it fixes "the critical points",
+# summarises and never ticks. A few tasks per call, named one by one, and a check that they got ticked.
+
+def chunk_args(chunk: list[dict]) -> str:
+    listing = "\n".join(f"- {t['id']} {t['text']}".rstrip() for t in chunk)
+    return (
+        f"Implement ONLY these {len(chunk)} task(s), in order, and nothing else:\n{listing}\n\n"
+        f"Write the real code and tests each one asks for. The moment a task is finished (its code "
+        f"exists and the project builds), change that task's `- [ ]` to `- [x]` in tasks.md: one "
+        f"edit per task, never left for the end. Do not start any other task. When all of them are "
+        f"done, or one is blocked, stop and say which.")
+
+
+def reconcile_prompt(feature: Path, tasks: list[dict]) -> str:
+    listing = "\n".join(f"- {t['id']} {t['text']}".rstrip() for t in tasks)
+    return (
+        f"These tasks of {norm(feature / 'tasks.md')} were attempted but are not ticked:\n{listing}\n\n"
+        f"For each one, check the repository: if the code (and the test, when the task asks for one) "
+        f"exists and is complete, change its `- [ ]` to `- [x]` in tasks.md. If it is missing or "
+        f"incomplete, leave it unticked. Do not write or change any code and do not edit anything "
+        f"except the checkboxes. {prompts.NO_QUESTIONS}\n\n"
+        f"Finish with one line: which tasks you ticked and which you left.")
+
+
+def _unticked(feature: Path, ids: list[str]) -> list[dict]:
+    return [t for t in parse_tasks(feature / "tasks.md") if t["id"] in ids and not t["done"]]
+
+
+def do_implement_chunk(cfg: Config, feature: Path, rid: str, harness, chunk: int = CHUNK_DEFAULT,
+                       stream: bool = True, dry_run: bool = False) -> StepResult:
+    """Implement the next `chunk` pending tasks, then make sure the ones that got done are ticked."""
+    name = feature.name
+    tasks = next_chunk(parse_tasks(feature / "tasks.md"), chunk)
+    label = unique_label(cfg, rid, f"implement-{name}")
+    if not tasks:
+        return StepResult(step=label, kind="implement", ok=True, exit_code=0, duration_s=0.0,
+                          verdict="no pending task")
+    ids = [t["id"] for t in tasks]
+    res = S.do_skill(cfg, "implement", chunk_args(tasks), rid, harness, stream, dry_run,
+                     feature=name, step_name=label)
+    if dry_run:
+        return res
+    left = _unticked(feature, ids)
+    stuck_on_ticks = (res.error or "").startswith("implement finished without ticking")
+    if left and (res.ok or stuck_on_ticks):
+        # the agent wrote code but left the boxes alone: check the work against the code and tick it
+        rec = run_step(cfg, harness, unique_label(cfg, rid, f"reconcile-{name}"),
+                       S.with_language(reconcile_prompt(feature, left), cfg), cfg.root, rid,
+                       cfg.egm_path(), kind="reconcile", stream=stream)
+        if rec.cost:
+            res.cost = float(res.cost or 0) + float(rec.cost)
+        left = _unticked(feature, ids)
+    ticked = len(ids) - len(left)
+    res.tasks_done, res.tasks_total = count_tasks(feature / "tasks.md")
+    res.verdict = f"{ticked}/{len(ids)} of this chunk ticked  ({res.tasks_done}/{res.tasks_total} overall)"
+    if ticked and not res.ok and res.exit_code == 0:
+        res.ok, res.error = True, ""          # the reconcile pass recovered the ticks
+    elif not ticked and res.ok:
+        res.ok = False
+        res.error = (f"none of the {len(ids)} task(s) of this chunk got ticked, "
+                     f"even after checking the code against them")
+    return res
+
+
+def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int = CHUNK_DEFAULT,
+                   max_chunks: int = 0, fallback: str | None = None, budget: Budget | None = None,
+                   stream: bool = True, dry_run: bool = False) -> dict:
+    """Implement a feature chunk by chunk until every task is ticked or it stops making progress."""
+    budget = budget or Budget(None)
+    out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
+    stalled = 0
+    for _ in range(max_chunks or 10_000):
+        done, total = count_tasks(feature / "tasks.md")
+        if not total or done >= total:
+            out["reason"] = f"all {total} task(s) ticked"
+            return out
+        if budget.exhausted:
+            out.update(stopped="budget",
+                       reason=f"budget of {budget.limit:g} reached ({budget.spent:.2f} spent)")
+            return out
+        res, switched = run_with_fallback(cfg, fallback, harness, lambda h: do_implement_chunk(
+            cfg, feature, rid, h, chunk, stream, dry_run))
+        if switched:
+            out["switched"].append(f"implement: {switched}")
+        budget.add(res)
+        out["steps"].append({"kind": "implement", **res.to_dict()})
+        if not res.ok:
+            out.update(stopped="implement", reason=res.error or "the chunk failed",
+                       error_kind=res.error_kind)
+            return out
+        if dry_run:
+            return out
+        stalled = stalled + 1 if count_tasks(feature / "tasks.md")[0] <= done else 0
+        if stalled >= 2:
+            out.update(stopped="implement", reason="two chunks in a row ticked nothing")
+            return out
+    done, total = count_tasks(feature / "tasks.md")
+    out["reason"] = f"{total - done} task(s) pending after {max_chunks} chunk(s): run it again to continue"
+    return out
+
+
 # ---------------- one step of one feature ----------------
 
 def run_kind(cfg: Config, kind: str, feature: Path, rid: str, harness, *, stack: str = "",
-             stream: bool = True, dry_run: bool = False, majors: bool = False) -> StepResult:
+             stream: bool = True, dry_run: bool = False, majors: bool = False,
+             chunk: int = CHUNK_DEFAULT) -> StepResult:
     """Run one step for one feature with a label that stays unique within the run."""
     name = feature.name
     S.set_active_feature(cfg, feature)
+    if kind == "implement":
+        return do_implement_chunk(cfg, feature, rid, harness, chunk, stream, dry_run)
     label = unique_label(cfg, rid, f"{kind}-{name}")
     if kind == "plan":
         return S.do_plan(cfg, stack, rid, harness, stream, dry_run, feature=name, step_name=label)
@@ -253,12 +359,15 @@ class Budget:
 def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = False,
             analyze: bool = True, drift: bool = True, stack: str = "", max_rounds: int = 2,
             majors: bool = False, fallback: str | None = None, budget: Budget | None = None,
-            stream: bool = True, dry_run: bool = False, only_one: bool = False) -> dict:
+            stream: bool = True, dry_run: bool = False, only_one: bool = False,
+            chunk: int = CHUNK_DEFAULT) -> dict:
     """Take a feature as far as the options allow, one step at a time, stopping at the first problem."""
     budget = budget or Budget(None)
     out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
-    revisions = implements = converges = 0
-    for _ in range(MAX_STEPS_PER_FEATURE):
+    revisions = converges = stalled = 0
+    done0, total0 = count_tasks(feature / "tasks.md")
+    chunks = -(-(total0 - done0) // chunk) if chunk > 0 else 1
+    for _ in range(MAX_STEPS_PER_FEATURE + 2 * max(chunks, 1)):
         kind, why = next_step(cfg, feature, implement=implement, analyze=analyze, drift=drift)
         out["reason"] = why
         if kind is None:
@@ -272,18 +381,14 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
                 out["reason"] = f"{why} after {max_rounds} revision round(s): read the report"
                 return out
             revisions += 1
-        if kind == "implement":
-            if implements >= max_rounds + 1:
-                out["stopped"] = "implement"
-                out["reason"] = f"{why} after {implements} implement pass(es)"
-                return out
-            implements += 1
+        done_before = count_tasks(feature / "tasks.md")[0] if kind == "implement" else 0
         if budget.exhausted:
             out["stopped"] = "budget"
             out["reason"] = f"budget of {budget.limit:g} reached ({budget.spent:.2f} spent)"
             return out
         res, switched = run_with_fallback(cfg, fallback, harness, lambda h, k=kind: run_kind(
-            cfg, k, feature, rid, h, stack=stack, stream=stream, dry_run=dry_run, majors=majors))
+            cfg, k, feature, rid, h, stack=stack, stream=stream, dry_run=dry_run, majors=majors,
+            chunk=chunk))
         if switched:
             out["switched"].append(f"{kind}: {switched}")
         budget.add(res)
@@ -293,6 +398,12 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
             out["reason"] = res.error or "the step failed"
             out["error_kind"] = res.error_kind
             return out
+        if kind == "implement":
+            stalled = stalled + 1 if count_tasks(feature / "tasks.md")[0] <= done_before else 0
+            if stalled >= 2:
+                out["stopped"] = "implement"
+                out["reason"] = "two chunks in a row ticked nothing"
+                return out
         if dry_run or only_one:
             return out
         if kind == "drift" and implement and converges < 1 and (res.structured or {}).get("drift_found"):
@@ -336,6 +447,7 @@ def _split_wanted(material: str, cfg: Config, force: bool) -> bool:
 
 def do_go(cfg: Config, idea: str, *, stack: str = "", split: bool | None = None,
           max_features: int = 6, implement: bool = False, analyze: bool = True,
+          chunk: int = CHUNK_DEFAULT,
           drift: bool = True, max_rounds: int = 2, majors: bool = False,
           budget: float | None = None, fallback: str | None = None, harness=None,
           stream: bool = True, dry_run: bool = False, init: bool = True) -> dict:
@@ -377,7 +489,7 @@ def do_go(cfg: Config, idea: str, *, stack: str = "", split: bool | None = None,
     for f in S.features_with_spec(cfg):
         result = advance(cfg, f, rid, h, implement=implement, analyze=analyze, drift=drift,
                          stack=stack, max_rounds=max_rounds, majors=majors, fallback=fallback,
-                         budget=meter, stream=stream, dry_run=dry_run)
+                         chunk=chunk, budget=meter, stream=stream, dry_run=dry_run)
         st = feature_state(cfg, f)
         result["state"] = {k: st[k] for k in ("spec", "plan", "tasks", "tasks_done", "tasks_total",
                                               "blockers", "review_current")}
