@@ -192,7 +192,7 @@ def find_git() -> str:
     if w:
         cands.append(w)
     if is_windows():
-        cands += [r"C:\Program Files\Git\cmd\git.exe", r"C:\Program Files\Gitin\git.exe",
+        cands += [r"C:\Program Files\Git\cmd\git.exe", r"C:\Program Files\Git\bin\git.exe",
                   r"C:\Program Files (x86)\Git\cmd\git.exe"]
     else:
         cands += ["/usr/bin/git", "/usr/local/bin/git", "/opt/homebrew/bin/git"]

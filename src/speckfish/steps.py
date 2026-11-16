@@ -257,6 +257,18 @@ def active_feature(cfg: Config) -> Path | None:
     return p if p.is_dir() else None
 
 
+def current_feature(cfg: Config) -> Path | None:
+    """The feature every step defaults to: the one Spec Kit points at, else the newest spec.
+
+    review/drift used to take the newest by mtime while plan/tasks followed `.specify/feature.json`,
+    so a review could land on a different feature than the one just planned.
+    """
+    active = active_feature(cfg)
+    if active and (active / "spec.md").exists():
+        return active
+    return latest_feature(cfg.root)
+
+
 def set_active_feature(cfg: Config, feature: Path) -> Path:
     """Point Spec Kit at this feature (writes `.specify/feature.json`)."""
     feature = feature.resolve()
@@ -468,18 +480,22 @@ def do_feature_batch(cfg: Config, action: str, features: list[Path], harness: Ha
     return out
 
 
+def specify_prompt_for(cfg: Config, h: Harness, idea: str) -> str:
+    """The specify prompt for any harness: `@file` expanded and the output language applied."""
+    if h.name == "claude":
+        return with_language(prompts.specify_prompt(idea, cfg.root), cfg)
+    body, _src = prompts.expand_input(idea, cfg.root)
+    return with_language(
+        f"{body}\n\n{prompts.NO_QUESTIONS}\n\nRun the Spec Kit specification flow "
+        f"(speckit-specify skill) as defined in this project.", cfg)
+
+
 def do_specify(cfg: Config, idea: str, run_id: str | None = None,
                harness: Harness | None = None, stream: bool = True,
                dry_run: bool = False, review: bool = False) -> StepResult:
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
-    if h.name == "claude":
-        prompt = with_language(prompts.specify_prompt(idea, cfg.root), cfg)
-    else:
-        prompt = (f"/speckit-specify {idea}\n\n{prompts.NO_QUESTIONS}"
-                  if h.name == "claude" else
-                  f"{idea}\n\n{prompts.NO_QUESTIONS}\n\nRun the Spec Kit specification flow "
-                  f"(speckit-specify skill) as defined in this project.")
+    prompt = specify_prompt_for(cfg, h, idea)
     res = run_step(cfg, h, "specify", prompt, cfg.root, rid, cfg.egm_path(),
                    schema=prompts.SCHEMAS["specify"], stream=stream, dry_run=dry_run)
     if review and not dry_run and res.ok:
@@ -512,10 +528,14 @@ def do_plan(cfg: Config, stack: str, run_id: str | None = None,
     h = harness or get_harness(cfg)
     rid = ensure_run(cfg, run_id)
     fdir = set_active_feature(cfg, find_feature(cfg, feature)) if feature else active_feature(cfg)
-    prompt = (with_language(prompts.plan_prompt(stack, cfg.root, fdir), cfg) if h.name == "claude"
-              else f"Stack and constraints: {stack}\n\n{prompts.NO_QUESTIONS}\n\n"
-                   f"Work on the feature in {norm(fdir) if fdir else 'the current feature'}."
-                   f"\n\nRun the Spec Kit planning flow (speckit-plan skill).")
+    if h.name == "claude":
+        prompt = with_language(prompts.plan_prompt(stack, cfg.root, fdir), cfg)
+    else:
+        body, _src = prompts.expand_input((stack or "").strip(), cfg.root)
+        prompt = with_language(
+            f"Stack and constraints: {body}\n\n{prompts.NO_QUESTIONS}\n\n"
+            f"Work on the feature in {norm(fdir) if fdir else 'the current feature'}."
+            f"\n\nRun the Spec Kit planning flow (speckit-plan skill).", cfg)
     return run_step(cfg, h, "plan", prompt, cfg.root, rid, cfg.egm_path(),
                     schema=prompts.SCHEMAS["plan"], stream=stream, dry_run=dry_run,
                     artifact_name=step_name)
@@ -529,7 +549,7 @@ def resolve_target(cfg: Config, target: str | None, default_file: str = "plan.md
         if not p.exists():
             raise SystemExit(f"target document does not exist: {p}")
         return p
-    feat = latest_feature(cfg.root)
+    feat = current_feature(cfg)
     if not feat:
         raise SystemExit("no specs in this project; run `speckfish specify` first")
     p = feat / default_file
@@ -717,7 +737,7 @@ def _specify_each(cfg: Config, h: Harness, rid: str, pairs: list[tuple[int, dict
     out["dry_run"] = bool(dry_run)
     for i, feat in pairs:
         idea = f"{feat.get('title', '')}. {feat.get('description', '')}".strip()
-        res = run_step(cfg, h, f"specify-{i}", prompts.specify_prompt(idea, cfg.root),
+        res = run_step(cfg, h, f"specify-{i}", specify_prompt_for(cfg, h, idea),
                        cfg.root, rid, cfg.egm_path(), schema=prompts.SCHEMAS["specify"],
                        stream=stream, dry_run=dry_run)
         out["steps"][f"specify-{i}"] = res.to_dict()
@@ -730,7 +750,8 @@ def _specify_each(cfg: Config, h: Harness, rid: str, pairs: list[tuple[int, dict
         if review:
             spec = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
             if Path(spec).exists():
-                rev = do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md")
+                rev = do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md",
+                                step_name=f"review-{i}")
                 out["steps"][f"review-{i}"] = rev.to_dict()
     out["ok"] = all(s.get("ok") for k, s in out["steps"].items() if k != "split") and bool(pairs)
     (cfg.runs_dir / rid / "split.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
@@ -781,11 +802,12 @@ def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
         if not d.is_absolute():
             d = cfg.root / d
     else:
-        feat = latest_feature(cfg.root)
+        feat = current_feature(cfg)
         d = feat if feat else cfg.root / "specs"
     if not d.exists():
         raise SystemExit(f"target directory does not exist: {d}")
-    artifact = cfg.runs_dir / rid / "artifacts" / "drift"
+    # run_step looks for the report under the step's own label (drift-<feature> in a batch)
+    artifact = cfg.runs_dir / rid / "artifacts" / step_name
     egm = cfg.egm_path()
     if h.name == "claude":
         if not egm:
@@ -794,7 +816,7 @@ def do_drift(cfg: Config, target: str | None = None, run_id: str | None = None,
     else:
         prompt = with_language(prompts.egm_prompt_for(h.name, "drift", str(d), artifact,
                                                       egm or cfg.root), cfg)
-    return run_step(cfg, h, "drift", prompt, cfg.root, rid, egm,
+    return run_step(cfg, h, step_name, prompt, cfg.root, rid, egm,
                     schema=prompts.SCHEMAS["drift"], stream=stream, dry_run=dry_run)
 
 

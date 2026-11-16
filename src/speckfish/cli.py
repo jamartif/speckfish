@@ -563,6 +563,13 @@ def main(argv: list[str] | None = None) -> int:
                 return EXIT_OK if out.get("ok") or out.get("dry_run") else EXIT_ERROR
             res = S.do_specify(cfg, args.description, args.run_id, need_harness(), stream,
                                args.dry_run, review=getattr(args, "review", False))
+        elif args.cmd in ("plan", "review") and is_batch(args) and getattr(
+                args, "with_clarify" if args.cmd == "plan" else "with_analyze", False):
+            # chaining runs one feature at a time; silently dropping it would plan/review unchecked
+            flag = "--with-clarify" if args.cmd == "plan" else "--with-analyze"
+            print(f"{flag} works on one feature at a time: drop --all-features/--only/--from-feature "
+                  f"or pass --feature NNN", file=sys.stderr)
+            return EXIT_ENV
         elif args.cmd == "plan" and getattr(args, "with_clarify", False) and not args.all_features:
             feature = args.feature or (S.active_feature(cfg).name if S.active_feature(cfg) else None)
             if not feature:
@@ -607,14 +614,15 @@ def main(argv: list[str] | None = None) -> int:
                 return batch_exit_code(batch)
             return EXIT_BLOCKERS if any((s.get("blockers") or [])
                                         for s in batch["steps"].values()) else EXIT_OK
-        elif args.cmd == "review" and getattr(args, "with_analyze", False) and args.target:
-            feat = Path(str(args.target)).parent.name or None
+        elif args.cmd == "review" and getattr(args, "with_analyze", False):
+            # without a target the review defaults to the current feature: analyze that same one
+            doc = Path(args.target) if args.target else S.resolve_target(cfg, None, args.target_file)
             ana = S.do_skill(cfg, "analyze", "", args.run_id, need_harness(), stream,
-                             args.dry_run, feature=feat)
+                             args.dry_run, feature=doc.parent.name or None)
             emit(ana.to_dict(), as_json, summarize(ana.to_dict(), norm(cfg.root)))
             if not ana.ok:
                 return EXIT_ERROR
-            res = S.do_review(cfg, args.target, args.run_id, need_harness(), args.profile,
+            res = S.do_review(cfg, str(doc), args.run_id, need_harness(), args.profile,
                               args.stage, stream, args.dry_run, args.target_file,
                               interactive=getattr(args, "interactive", False))
         elif args.cmd == "drift" and is_batch(args):

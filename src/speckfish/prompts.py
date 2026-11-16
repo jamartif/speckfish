@@ -354,9 +354,10 @@ def skill_prompt_for(harness: str, skill: str, args: str, artifact_dir: Path,
     spec = SKILL_SPECS[skill]
     body, _src = expand_input((args or "").strip(), cfg_root)
     given = body or spec["default_args"]
-    docs = {"copilot": "docs/copilot.md", "codex": "docs/codex.md"}.get(harness, "docs/claude.md")
-    parts = [f"Read {docs} of the Spec Kit project and run the `{spec['skill']}` skill"
-             f"{' with: ' + given if given else ''}.", NO_QUESTIONS]
+    # where `specify init --integration <harness>` installs each skill (the project has no docs/<agent>.md)
+    skills_dir = {"copilot": ".github/skills", "codex": ".agents/skills"}.get(harness, ".claude/skills")
+    parts = [f"Read {skills_dir}/{spec['skill']}/SKILL.md in this project and follow it to run the "
+             f"`{spec['skill']}` skill{' with: ' + given if given else ''}.", NO_QUESTIONS]
     if feature_dir:
         # without this the agent follows .specify/feature.json and implements the wrong feature
         parts.append(f"Work ONLY on the feature in {norm(feature_dir)}. Ignore any other feature "

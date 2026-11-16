@@ -456,7 +456,7 @@ def test_skill_prompt_shapes():
     assert "questions.md" in cl and "do NOT ask questions" in cl
 
     cop = P.skill_prompt_for("copilot", "tasks", "", Path("/tmp/a"), Path("/egm"))
-    assert "speckit-tasks" in cop and "/speckit-tasks" not in cop
+    assert "speckit-tasks" in cop and not cop.startswith("/speckit-tasks")   # no slash command
 
 
 def test_implement_requires_confirmation(tmp_path):
@@ -677,7 +677,8 @@ def test_split_review_runs_egm_per_spec(tmp_path, monkeypatch):
                           structured={"feature_dir": str(feat_dir)})
 
     def fake_review(cfg_, target=None, run_id=None, harness=None, profile=None, stage=None,
-                    stream=True, dry_run=False, default_file="plan.md", interactive=False):
+                    stream=True, dry_run=False, default_file="plan.md", interactive=False,
+                    step_name="review"):
         reviewed.append(target)
         return StepResult(step="review", ok=True, exit_code=0, duration_s=1.0)
 

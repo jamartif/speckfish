@@ -4,6 +4,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
@@ -75,7 +76,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
             run_dir: Path, timeout: int, stream: bool = True,
-            progress: bool = True) -> tuple[int, str, str, float, bool]:
+            progress: bool = True,
+            label: str | None = None) -> tuple[int, str, str, float, bool, bool]:
     """Launch the subprocess, write the log and honour the timeout by killing the tree.
 
     stdout is read on a thread so the timeout does not depend on the child
@@ -83,7 +85,8 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     """
     import threading
 
-    log_path = run_dir / "logs" / f"{step}.log"
+    # a batch runs one step once per feature: the log is named by the label or they overwrite
+    log_path = run_dir / "logs" / f"{label or step}.log"
     from .progress import Progress
 
     echo_lines = getattr(harness, "echo_stdout", False)
@@ -196,6 +199,12 @@ def _json_payloads(text: str) -> list[dict]:
     return found
 
 
+# a bare "429" or "credit" appears in ports, ids and ordinary prose: ask for the HTTP / billing context
+_HTTP_429 = re.compile(r"(http|status|error|code)[^\n]{0,24}\b429\b|\b429\b[^\n]{0,24}too many requests")
+_NO_CREDITS = re.compile(r"(insufficient|no|out of|exhausted|run out of)\s+(ai\s+)?credits?\b"
+                         r"|credits?\s+(exhausted|required|depleted)")
+
+
 def error_kind(out: str, err: str) -> str:
     """Classify a failed run: quota / auth / agent error / unknown."""
     payloads = _json_payloads(out) or _json_payloads(err)
@@ -213,9 +222,9 @@ def error_kind(out: str, err: str) -> str:
         if obj.get("is_error") or obj.get("error") == "rate_limit":
             return "quota" if obj.get("error") == "rate_limit" else "agent"
     low = (err or out or "").lower()
-    if "usage limit" in low or "rate limit" in low or "429" in low:
+    if "usage limit" in low or "rate limit" in low or _HTTP_429.search(low):
         return "quota"
-    if "not logged in" in low or "unauthorized" in low or "credit" in low:
+    if "not logged in" in low or "unauthorized" in low or _NO_CREDITS.search(low):
         return "auth"
     return "unknown"
 
@@ -296,35 +305,78 @@ def task_progress(root: Path) -> tuple[int, int] | None:
     return None
 
 
-def _git_dirty(root: Path) -> bool:
-    """Any tracked change or new file that is real work, not build output or tool state."""
+_GIT_NOISE = (".speckfish/", "/bin/", "/obj/", "bin/Debug", "obj/Debug", ".gitignore", "CLAUDE.md",
+              "AGENTS.md", ".agents/", ".claude/")
+
+
+def _git_porcelain(root: Path) -> list[str] | None:
+    """`git status --porcelain` lines that are real work, not build output or tool state (None: unknown)."""
     import subprocess as sp
     try:
-        out = sp.run(["git", "status", "--porcelain"], cwd=str(root), capture_output=True,
+        out = sp.run(["git", "status", "--porcelain", "-uall"], cwd=str(root), capture_output=True,
                      text=True, timeout=60, encoding="utf-8", errors="replace").stdout
     except (OSError, sp.SubprocessError):
+        return None
+    return [ln for ln in out.splitlines()
+            if ln.strip() and not any(n in ln.replace("\\", "/") for n in _GIT_NOISE)]
+
+
+def git_snapshot(root: Path) -> dict | None:
+    """What the working tree looks like right now: each changed path with its size and mtime.
+
+    A file that was already modified before the step and is modified again keeps the same porcelain
+    line, so comparing lines alone cannot tell "the agent wrote code" from "the repo was already dirty".
+    """
+    lines = _git_porcelain(root)
+    if lines is None:
+        return None
+    snap: dict = {}
+    for ln in lines:
+        path = ln[3:].strip().strip('"')
+        if " -> " in path:
+            path = path.split(" -> ")[-1]
+        try:
+            st = (Path(root) / path).stat()
+            snap[ln] = (st.st_size, st.st_mtime_ns)
+        except OSError:
+            snap[ln] = None
+    return snap
+
+
+def _git_dirty(root: Path, before: dict | None = None) -> bool:
+    """The step changed real work. With a `before` snapshot only what changed *during* the step counts."""
+    if before is not None:
+        after = git_snapshot(root)
+        if after is None:
+            return True                  # cannot tell: do not fail a step over it
+        return after != before
+    interesting = _git_porcelain(root)
+    if interesting is None:
         return True                      # cannot tell: do not fail a step over it
-    noise = (".speckfish/", "/bin/", "/obj/", "bin/Debug", "obj/Debug", ".gitignore", "CLAUDE.md",
-             "AGENTS.md", ".agents/", ".claude/")
-    interesting = [ln for ln in out.splitlines()
-                   if ln.strip() and not any(n in ln.replace("\\", "/") for n in noise)]
-    if interesting:
-        return True
-    # a rebuild alone must not count as implementing the feature
-    sources = [ln for ln in out.splitlines()
-               if ln.strip().endswith((".cs", ".ts", ".py", ".go", ".java", ".rs", ".js"))]
-    return any("/obj/" not in ln.replace("\\", "/") for ln in sources)
+    return bool(interesting)
+
+
+def step_kind(step: str) -> str:
+    """`review-001-foo` -> `review`, `specify-3` -> `specify`: a batch label carries the feature.
+
+    `specify-split` is the inventory call, which writes no spec, so it has no kind to validate.
+    """
+    if step == "specify-split":
+        return "split"
+    return step.split("-")[0]
 
 
 def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None,
-                before: tuple[int, int] | None = None) -> None:
+                before: tuple[int, int] | None = None,
+                git_before: dict | None = None) -> None:
     """Collect reports and verdict counts written by the agent for this step."""
     from .config import find_report, parse_consolidated
 
-    base = step.split("-")[0] if step not in ("implement",) else step
+    base = step_kind(step)
+    step = base                      # every check below is about the kind of step, not its label
     progress = before
     # "preparation finished" is not an implementation: this step must change the repository
-    if base == "implement" and root is not None and res.exit_code == 0 and not _git_dirty(root):
+    if base == "implement" and root is not None and res.exit_code == 0 and not _git_dirty(root, git_before):
         res.ok = False
         res.error = ("the agent answered but wrote no code: nothing changed in the repository. "
                      "It likely stopped at the skill's preparation phase")
@@ -396,6 +448,34 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | Non
             res.ok = False
 
 
+def _feature_dir(root: Path) -> Path | None:
+    """The feature Spec Kit points at (`.specify/feature.json`), else the newest one."""
+    try:
+        rel = json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8")
+                         ).get("feature_directory") or ""
+    except (OSError, ValueError):
+        rel = ""
+    if rel and (root / rel).is_dir():
+        return root / rel
+    feats = sorted((root / "specs").glob("*/spec.md"), key=lambda p: p.stat().st_mtime)
+    return feats[-1].parent if feats else None
+
+
+def _missing_output(step: str, root: Path, res: StepResult) -> str:
+    """After an idle close: what this kind of step should have written and did not ('' = fine)."""
+    kind = step_kind(step)
+    if kind in ("review", "drift", "brainstorm", "draft", "clarify"):
+        return "" if res.reports else "no report was written"
+    if kind in ("plan", "tasks"):
+        feat = _feature_dir(root)
+        wanted = f"{kind}.md"
+        if feat is None or not (feat / wanted).exists():
+            return f"no {wanted} was written"
+        return ""
+    # specify and implement already validated their own output in postprocess()
+    return "" if res.ok else (res.error or "the step did not finish")
+
+
 def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                  step: str, harness: Harness, started_at: str) -> None:
     state_path = run_dir / "state.json"
@@ -447,10 +527,16 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
                           log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
                           error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
-    before_tasks = task_progress(Path(cwd)) if _base_step(cfg, step) == "implement" else None
+    is_implement = _base_step(cfg, step) == "implement"
+    before_tasks = task_progress(Path(cwd)) if is_implement else None
+    before_git = git_snapshot(Path(cwd)) if is_implement else None
     code, out, err, duration, timed_out, idle_closed = execute(
-        harness, inv, step, cwd, run_dir, timeout, stream, progress)
+        harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label)
     idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    if idle_closed and not timed_out:
+        # the agent was stopped by us after going quiet, so the exit code is ours, not its verdict:
+        # what the step wrote decides (postprocess below), not the signal that ended the process
+        code = 0
     parsed = harness.parse_output(out, err, code) or {}
     res = StepResult(step=step, ok=(code == 0 and not timed_out), exit_code=code,
                      duration_s=round(duration, 1), log=norm(run_dir / "logs" / f"{label}.log"),
@@ -473,14 +559,19 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = human_error(out, err, code)
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
-    postprocess(res, step, artifact_dir, cwd, before=before_tasks)
+    postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git)
     if idle_closed:
-        # the work landed but the CLI never exited: keep the result, say how it ended
-        res.error = (f"the agent wrote nothing for {idle_limit}s yet stayed alive; stopped it and "
-                     f"kept what it had already written")
-        if res.reports:
-            res.ok = True
-    record_state(cfg, run_dir, run_id, res, step, harness, started_at)
+        # the work landed but the CLI never exited: keep it when the step's own output is there
+        missing = _missing_output(step, Path(cwd), res)
+        if missing:
+            res.ok = False
+            res.error = (f"the agent wrote nothing for {idle_limit}s and was stopped; "
+                         f"{missing}")
+        else:
+            res.error = (f"the agent wrote nothing for {idle_limit}s yet stayed alive; stopped it and "
+                         f"kept what it had already written")
+    # keyed by label: a batch runs `plan` once per feature and each needs its own entry
+    record_state(cfg, run_dir, run_id, res, label, harness, started_at)
     return res
 
 
