@@ -1,0 +1,462 @@
+"""Step execution: subprocess, timeout with process-tree kill, logging and state."""
+from __future__ import annotations
+
+import contextlib
+import json
+import os
+import re
+import signal
+import subprocess
+import sys
+import time
+from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+
+from .config import Config, is_windows, norm
+from .harnesses import Harness, StepInvocation
+from .registry import missing_output
+from .workspace import _git_dirty, feature_dir, git_snapshot, task_progress  # noqa: F401  (re-exported)
+
+
+@dataclass
+class StepResult:
+    step: str
+    ok: bool
+    exit_code: int
+    duration_s: float
+    kind: str = ""
+    cost: float | None = None
+    cost_unit: str = "usd"
+    reports: list[str] = field(default_factory=list)
+    blockers: list[str] = field(default_factory=list)
+    majors: int = 0
+    nits: int = 0
+    meets_standard: bool | None = None
+    structured: dict | None = None
+    error: str = ""
+    log: str = ""
+    artifact_dir: str = ""
+    subagents: int = 0
+    premium_requests: int | None = None
+    model: str | None = None
+    denials: list = field(default_factory=list)
+    verdict: str = ""
+    tasks_done: int | None = None
+    tasks_total: int | None = None
+    error_kind: str = ""
+    run_id: str = ""
+    writes: str = ""
+    interactive: bool = False
+    raw_tail: str = ""
+
+    def to_dict(self) -> dict:
+        return {k: v for k, v in self.__dict__.items() if k not in ("raw_tail",)}
+
+
+def new_run_id() -> str:
+    return datetime.now().strftime("%Y%m%d-%H%M%S")
+
+
+def run_dir_for(cfg: Config, run_id: str) -> Path:
+    d = cfg.runs_dir / run_id
+    (d / "artifacts").mkdir(parents=True, exist_ok=True)
+    (d / "logs").mkdir(parents=True, exist_ok=True)
+    return d
+
+
+def _kill_tree(proc: subprocess.Popen) -> None:
+    try:
+        if is_windows():
+            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
+                           capture_output=True)
+        else:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        with contextlib.suppress(Exception):
+            proc.kill()
+
+
+def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
+            run_dir: Path, timeout: int, stream: bool = True,
+            progress: bool = True,
+            label: str | None = None) -> tuple[int, str, str, float, bool, bool]:
+    """Launch the subprocess, write the log and honour the timeout by killing the tree.
+
+    stdout is read on a thread so the timeout does not depend on the child
+    printing anything (a blocking readline ignores deadlines).
+    """
+    import threading
+
+    # a batch runs one step once per feature: the log is named by the label or they overwrite
+    log_path = run_dir / "logs" / f"{label or step}.log"
+    from .progress import Progress
+
+    echo_lines = getattr(harness, "echo_stdout", False)
+    # always show it: a harness that echoes prose still leaves you without a clock or a stage
+    meter = Progress(step, enabled=progress, plain_only=echo_lines, root=str(cwd))
+    started = time.time()
+    meter.start()
+    popen_kwargs = dict(cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                        stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
+                        errors="replace", env={**os.environ, **(inv.env or {})})
+    if is_windows():
+        popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
+    else:
+        popen_kwargs["start_new_session"] = True
+    proc = subprocess.Popen(inv.argv, **popen_kwargs)
+    out_chunks: list[str] = []
+    err_chunks: list[str] = []
+    log = log_path.open("w", encoding="utf-8")
+    log.write("$ " + " ".join(inv.argv) + "\n\n")
+
+    activity = {"t": time.time()}
+
+    def pump(pipe, chunks, echo=False):
+        try:
+            for line in pipe:
+                activity["t"] = time.time()
+                chunks.append(line)
+                log.write(line)
+                log.flush()
+                meter.feed(line)
+                if echo and stream and not is_noise_line(line):
+                    sys.stderr.write(line if line.endswith("\n") else line + "\n")
+                    sys.stderr.flush()
+        except Exception:
+            pass
+
+    t_out = threading.Thread(target=pump, args=(proc.stdout, out_chunks, echo_lines), daemon=True)
+    t_err = threading.Thread(target=pump, args=(proc.stderr, err_chunks, False), daemon=True)
+    t_out.start()
+    t_err.start()
+    timed_out = False
+    idle_closed = False
+    # an agent can finish its work and never exit (EGM's final pass does this): a long silence with
+    # the process still alive is a finished run, not a hang worth burning the whole timeout on
+    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    while True:
+        try:
+            proc.wait(timeout=5)
+            break
+        except subprocess.TimeoutExpired:
+            now = time.time()
+            if idle_limit and now - activity["t"] >= idle_limit:
+                idle_closed = True
+            elif now - started >= timeout:
+                timed_out = True
+            else:
+                continue
+            _kill_tree(proc)
+            with contextlib.suppress(subprocess.TimeoutExpired):
+                proc.wait(timeout=30)
+            break
+    t_out.join(timeout=15)
+    t_err.join(timeout=5)
+    with contextlib.suppress(Exception):
+        log.close()
+    meter.stop()
+    code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
+    if idle_closed:
+        code = 0 if code is None else code
+    return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
+            idle_closed)
+
+
+def is_noise_line(line: str) -> bool:
+    """JSON payloads and very long lines are log material, not console output."""
+    text = (line or "").strip()
+    if len(text) > 1200:
+        return True
+    if text.startswith("{") and text.endswith("}"):
+        try:
+            json.loads(text)
+            return True
+        except ValueError:
+            return False
+    return False
+
+
+def _json_payloads(text: str) -> list[dict]:
+    """Every JSON object the agent CLI printed, newest last (it emits NDJSON or one big object)."""
+    found = []
+    for raw in (text or "").splitlines():
+        line = raw.strip()
+        if not (line.startswith("{") and line.endswith("}")):
+            continue
+        try:
+            obj = json.loads(line)
+        except ValueError:
+            continue
+        if isinstance(obj, dict):
+            found.append(obj)
+    if not found:
+        start = (text or "").find("{")
+        if start >= 0:
+            try:
+                obj = json.loads(text[start:])
+                if isinstance(obj, dict):
+                    found.append(obj)
+            except ValueError:
+                pass
+    return found
+
+
+# a bare "429" or "credit" appears in ports, ids and ordinary prose: ask for the HTTP / billing context
+_HTTP_429 = re.compile(r"(http|status|error|code)[^\n]{0,24}\b429\b|\b429\b[^\n]{0,24}too many requests")
+_NO_CREDITS = re.compile(r"(insufficient|no|out of|exhausted|run out of)\s+(ai\s+)?credits?\b"
+                         r"|credits?\s+(exhausted|required|depleted)")
+
+
+def error_kind(out: str, err: str) -> str:
+    """Classify a failed run: quota / auth / agent error / unknown."""
+    payloads = _json_payloads(out) or _json_payloads(err)
+    for obj in reversed(payloads):
+        api = str(obj.get("api_error") or "").lower()
+        status = obj.get("api_error_status")
+        if obj.get("type") == "rate_limit_event":
+            info = obj.get("rate_limit_info") or {}
+            if str(info.get("status") or "") == "rejected":
+                return "quota"
+        if "usage_limit" in api or "rate_limit" in api or status == 429:
+            return "quota"
+        if status in (401, 403) or "auth" in api or "credit" in api:
+            return "auth"
+        if obj.get("is_error") or obj.get("error") == "rate_limit":
+            return "quota" if obj.get("error") == "rate_limit" else "agent"
+    low = (err or out or "").lower()
+    if "usage limit" in low or "rate limit" in low or _HTTP_429.search(low):
+        return "quota"
+    if "not logged in" in low or "unauthorized" in low or _NO_CREDITS.search(low):
+        return "auth"
+    return "unknown"
+
+
+def _reset_hint(payloads: list[dict]) -> str:
+    """`resets 20:00` when the agent tells us when the window reopens."""
+    for obj in reversed(payloads):
+        info = {}
+        if obj.get("type") == "rate_limit_event":
+            info = obj.get("rate_limit_info") or {}
+        info = info or ((obj.get("api_error_params") or {}).get("rate_limit_info") or {})
+        stamp = info.get("resetsAt")
+        if isinstance(stamp, (int, float)) and stamp > 0:
+            try:
+                when = datetime.fromtimestamp(stamp).strftime("%H:%M")
+            except (OverflowError, OSError, ValueError):
+                return ""
+            window = "weekly" if "seven_day" in str(info.get("rateLimitType") or "") else ""
+            return f" · {window} window reopens at {when}".replace("  ", " ")
+    return ""
+
+
+def _best_payload(payloads: list[dict]) -> dict:
+    """The payload that carries the human message, not just the last event."""
+    for obj in reversed(payloads):
+        if obj.get("result") or obj.get("error") or obj.get("api_error"):
+            return obj
+    return payloads[-1] if payloads else {}
+
+
+def human_error(out: str, err: str, code: int) -> str:
+    """A message a human can act on — never the agent's JSON payload."""
+    payloads = _json_payloads(out) or _json_payloads(err)
+    obj = _best_payload(payloads)
+    message = str(obj.get("result") or obj.get("error") or "").strip()
+    if message in ("rate_limit", "error"):
+        message = ""
+    api = str(obj.get("api_error") or "").strip()
+    status = obj.get("api_error_status")
+    hint = _reset_hint(payloads)
+
+    kind = error_kind(out, err)
+    if kind == "quota":
+        detail = message or api or "rate limit reached"
+        return f"the agent ran out of quota (HTTP {status or 429}): {detail}{hint}"
+    if kind == "auth":
+        return f"the agent rejected the credentials: {message or api or 'not authenticated'}{hint}"
+    if kind == "agent" and message:
+        return message[:300]
+    if message:
+        return f"exit {code}: {message[:300]}"
+
+    tail = [ln.strip() for ln in (err or out or "").splitlines() if ln.strip()][-2:]
+    if not tail:
+        return f"exit {code} with no output"
+    return f"exit {code}: " + " / ".join(t[-160:] for t in tail)
+
+
+def step_kind(step: str) -> str:
+    """Legacy: the kind hidden in a label (`review-001-foo` -> `review`). Callers now pass `kind=`."""
+    if step == "specify-split":
+        return "split"
+    return step.split("-")[0]
+
+
+def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | None = None,
+                before: tuple[int, int] | None = None,
+                git_before: dict | None = None, kind: str | None = None) -> None:
+    """Run the validator the registry declares for this kind of step (reports, verdicts, outputs)."""
+    from .registry import Ctx, spec_for
+
+    spec = spec_for(kind or step_kind(step))
+    if spec is not None and spec.validate is not None:
+        spec.validate(res, Ctx(artifact_dir=artifact_dir, root=root, tasks_before=before,
+                               git_before=git_before))
+
+
+def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
+                 step: str, harness: Harness, started_at: str) -> None:
+    state_path = run_dir / "state.json"
+    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    state.setdefault("run_id", run_id)
+    state.setdefault("steps", {})
+    entry = state["steps"].get(step, {})
+    entry.update({"status": "ok" if res.ok else "failed", "started_at": started_at,
+                  "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
+                  "blockers": len(res.blockers), "reports": res.reports,
+                  "exit_code": res.exit_code, "harness": harness.name,
+                  "model": res.model, "interactive": res.interactive,
+                  "majors": res.majors, "nits": res.nits,
+                  "meets_standard": res.meets_standard, "verdict": res.verdict,
+                  "denials": res.denials, "artifact_dir": res.artifact_dir,
+                  "log": res.log, "tasks_done": res.tasks_done, "tasks_total": res.tasks_total})
+    state["steps"][step] = entry
+    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
+    (run_dir / f"{step}.result.json").write_text(
+        json.dumps(res.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+
+
+def _base_step(cfg: Config, step: str) -> str:
+    """Legacy: `review-001-foo` -> `review`. New code passes `kind=` to run_step instead."""
+    if step in cfg.timeouts:
+        return step
+    for key in cfg.timeouts:
+        if step.startswith(f"{key}-"):
+            return key
+    return step
+
+
+def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
+             run_id: str, egm_root: Path | None, timeout: int | None = None,
+             budget: float | None = None, schema: dict | None = None,
+             stream: bool = True, dry_run: bool = False,
+             progress: bool = True, artifact_name: str | None = None,
+             kind: str | None = None) -> StepResult:
+    """Run one agent step.
+
+    `kind` is what the step *is* (review, plan, ...): budgets, timeouts and validation follow it.
+    The label (`artifact_name`, else `step`) is *which run of it* (`review-001-foo`): folders, logs
+    and state follow that. Callers that do not pass `kind` get it derived from the label.
+    """
+    from .registry import timeout_key
+
+    run_dir = run_dir_for(cfg, run_id)
+    # a batch runs the same step once per feature: each one needs its own folder and log or they overwrite
+    label = artifact_name or step
+    kind = kind or step_kind(_base_step(cfg, step))
+    artifact_dir = run_dir / "artifacts" / label
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    # the timeout belongs to the kind of step, not to its label
+    timeout = timeout or int(cfg.timeouts.get(timeout_key(kind), 600))
+    inv = harness.build(kind=kind, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
+                        egm_root=egm_root, budget=budget, timeout=timeout, schema=schema)
+    if dry_run:
+        return StepResult(step=step, kind=kind, ok=True, exit_code=0, duration_s=0.0,
+                          log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
+                          error="dry-run")
+    started_at = datetime.now().isoformat(timespec="seconds")
+    is_implement = kind == "implement"
+    before_tasks = task_progress(Path(cwd)) if is_implement else None
+    before_git = git_snapshot(Path(cwd)) if is_implement else None
+    code, out, err, duration, timed_out, idle_closed = execute(
+        harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label)
+    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    if idle_closed and not timed_out:
+        # the agent was stopped by us after going quiet, so the exit code is ours, not its verdict:
+        # what the step wrote decides (postprocess below), not the signal that ended the process
+        code = 0
+    parsed = harness.parse_output(out, err, code) or {}
+    res = StepResult(step=step, kind=kind, ok=(code == 0 and not timed_out), exit_code=code,
+                     duration_s=round(duration, 1), log=norm(run_dir / "logs" / f"{label}.log"),
+                     artifact_dir=norm(artifact_dir))
+    res.cost = parsed.get("cost_usd") or parsed.get("credits")
+    res.cost_unit = "credits" if parsed.get("credits") is not None else "usd"
+    res.structured = parsed.get("structured")
+    res.subagents = int(parsed.get("subagents") or 0)
+    res.premium_requests = parsed.get("premium_requests")
+    res.model = parsed.get("model") or (cfg.model or None)
+    res.denials = parsed.get("denials") or []
+    res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
+    if timed_out:
+        res.error = (f"timed out after {timeout}s — the agent may simply need longer. "
+                     f"Raise it with `speckfish config timeout.{timeout_key(kind)}="
+                    f"{int(timeout * 2)}` "
+                     f"and check the log for how far it got")
+        res.ok = False
+    elif code != 0:
+        res.error = human_error(out, err, code)
+        res.error_kind = error_kind(out, err)
+    res.run_id = run_id
+    postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git, kind=kind)
+    if idle_closed:
+        # the work landed but the CLI never exited: keep it when the step's own output is there
+        missing = missing_output(kind, Path(cwd), res, feature_dir(Path(cwd)))
+        if missing:
+            res.ok = False
+            res.error = (f"the agent wrote nothing for {idle_limit}s and was stopped; "
+                         f"{missing}")
+        else:
+            res.error = (f"the agent wrote nothing for {idle_limit}s yet stayed alive; stopped it and "
+                         f"kept what it had already written")
+    # keyed by label: a batch runs `plan` once per feature and each needs its own entry
+    record_state(cfg, run_dir, run_id, res, label, harness, started_at)
+    return res
+
+
+def run_interactive(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
+                    run_id: str, egm_root: Path | None = None,
+                    dry_run: bool = False) -> StepResult:
+    """Run the agent in the operator's terminal: it asks, the human answers.
+
+    stdio is inherited (no capture, no timeout). The prompt tells the agent it is an
+    interactive session and that it must ask every open question.
+    """
+    run_dir = run_dir_for(cfg, run_id)
+    artifact_dir = run_dir / "artifacts" / step
+    artifact_dir.mkdir(parents=True, exist_ok=True)
+    inv = harness.build_interactive(kind=step, prompt=prompt, cwd=cwd,
+                                    artifact_dir=artifact_dir, egm_root=egm_root)
+    if dry_run:
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=0.0, interactive=True,
+                          log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
+                          error="dry-run")
+    started_at = datetime.now().isoformat(timespec="seconds")
+    log_path = run_dir / "logs" / f"{step}.log"
+    log_path.write_text("$ " + " ".join(inv.argv) + "\n\n"
+                        "(interactive: the transcript lives in the operator terminal)\n",
+                        encoding="utf-8")
+    started = time.time()
+    try:
+        proc = subprocess.Popen(inv.argv, cwd=str(cwd),
+                                env={**os.environ, **(inv.env or {})})
+    except OSError as e:
+        res = StepResult(step=step, ok=False, exit_code=126, duration_s=0.0, interactive=True,
+                         error=f"cannot launch {inv.argv[0]}: {e}",
+                         artifact_dir=norm(artifact_dir), log=norm(log_path))
+        record_state(cfg, run_dir, run_id, res, step, harness, started_at)
+        return res
+    try:
+        code = proc.wait()
+    except KeyboardInterrupt:
+        _kill_tree(proc)
+        code = 130
+    res = StepResult(step=step, ok=(code == 0), exit_code=code,
+                     duration_s=round(time.time() - started, 1), interactive=True,
+                     artifact_dir=norm(artifact_dir), log=norm(log_path))
+    if code != 0:
+        res.error = f"exit {code}"
+    res.run_id = run_id
+    postprocess(res, step, artifact_dir, cwd)
+    record_state(cfg, run_dir, run_id, res, step, harness, started_at)
+    return res

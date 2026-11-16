@@ -1,0 +1,105 @@
+name: pr review
+
+# Posts (and keeps updating) a single review checklist comment on every pull request.
+# It does not approve anything: with one maintainer GitHub cannot review its own PR, so this is the
+# machine-generated part of the review. Human reviewers come from CODEOWNERS and the optional
+# REVIEWERS repository variable (see CONTRIBUTING.md).
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-review-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checklist:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Build the checklist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          REVIEWERS: ${{ vars.REVIEWERS }}
+        run: |
+          set -eu
+          files=$(git diff --name-only "$BASE" "$HEAD")
+          count() { printf '%s\n' "$files" | grep -Ec "$1" || true; }
+
+          touched_src=$(count '^src/')
+          touched_tests=$(count '^tests/')
+          touched_ci=$(count '^\.github/')
+          touched_docs=$(count '\.md$')
+          touched_version=$(count '^pyproject\.toml$|^src/speckfish/__init__\.py$')
+          total=$(printf '%s\n' "$files" | grep -c . || true)
+
+          box() { if [ "$1" -gt 0 ]; then echo "x"; else echo " "; fi; }
+
+          {
+            echo "<!-- speckfish-review-checklist -->"
+            echo "## Review checklist (generated)"
+            echo ""
+            echo "| Area | Files |"
+            echo "|---|---|"
+            echo "| source | $touched_src |"
+            echo "| tests | $touched_tests |"
+            echo "| CI / workflows | $touched_ci |"
+            echo "| docs | $touched_docs |"
+            echo "| version files | $touched_version |"
+            echo "| total | $total |"
+            echo ""
+            echo "### What to check"
+            echo ""
+            if [ "$touched_src" -gt 0 ]; then
+              echo "- [$(box "$touched_tests")] source changed → tests updated in the same PR?"
+              echo "- [$(box 1)] new/changed command documented in README and CHANGELOG?"
+            else
+              echo "- [x] no source changes"
+            fi
+            if [ "$touched_ci" -gt 0 ]; then
+              echo "- [ ] workflows changed → verified on this very PR (check the runs below)"
+            fi
+            if [ "$touched_version" -gt 0 ]; then
+              echo "- [ ] version bumped in **both** \`pyproject.toml\` and \`src/speckfish/__init__.py\`"
+              echo "- [ ] CHANGELOG entry written"
+            fi
+            if echo "$files" | grep -q '^src/speckfish/harnesses\.py$'; then
+              echo "- [ ] harness change → run \`--dry-run\` for claude **and** copilot, paste the argv in the PR"
+            fi
+            if echo "$files" | grep -q '^src/speckfish/prompts\.py$'; then
+              echo "- [ ] prompt change → note which measured cost/verdict it affects"
+            fi
+            echo ""
+            if [ -n "${REVIEWERS:-}" ]; then
+              echo "_Reviewers requested from the \`REVIEWERS\` variable._ They were skipped automatically if they are the author (\`$AUTHOR\`)."
+            else
+              echo "_No \`REVIEWERS\` variable set: reviews come from \`.github/CODEOWNERS\`. With a single maintainer GitHub cannot request a self-review, so the merge gate is the required checks (lint, metadata, tests)._"
+            fi
+            echo ""
+            echo "_Updated automatically on every push to this PR._"
+          } > body.md
+
+          existing=$(gh api "repos/${{ github.repository }}/issues/$PR/comments" \
+            --jq '.[] | select(.body | contains("<!-- speckfish-review-checklist -->")) | .id' | head -1 || true)
+          if [ -n "${existing:-}" ]; then
+            gh api -X PATCH "repos/${{ github.repository }}/issues/comments/$existing" \
+              -F body=@body.md >/dev/null
+            echo "updated checklist comment $existing"
+          else
+            gh api -X POST "repos/${{ github.repository }}/issues/$PR/comments" \
+              -F body=@body.md >/dev/null
+            echo "created checklist comment"
+          fi

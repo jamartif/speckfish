@@ -1,0 +1,3 @@
+# Default owner for everything in the repo.
+# GitHub requests a review from these accounts automatically on every pull request.
+*       @jamartif

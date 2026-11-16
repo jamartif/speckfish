@@ -1,0 +1,115 @@
+name: pr
+
+on:
+  pull_request:
+    types: [opened, edited, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+concurrency:
+  group: pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install
+        run: pip install ruff
+      - name: ruff
+        run: ruff check src tests
+
+  metadata:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate the PR title (Conventional Commits)
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+        run: |
+          echo "title: $TITLE"
+          if ! printf '%s' "$TITLE" | grep -Eq '^(feat|fix|docs|chore|refactor|test|ci|build|perf|revert)(\([a-z0-9._/-]+\))?!?: .+'; then
+            echo "::error::PR title must look like 'feat: add X' / 'fix(cli): Y' (Conventional Commits)"
+            exit 1
+          fi
+
+      - name: Label the PR by type and size
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          TITLE: ${{ github.event.pull_request.title }}
+          ADDITIONS: ${{ github.event.pull_request.additions }}
+          DELETIONS: ${{ github.event.pull_request.deletions }}
+        run: |
+          set -eu
+          type=$(printf '%s' "$TITLE" | sed -E 's/^([a-z]+).*/\1/')
+          case "$type" in
+            feat) label=feature ;;
+            fix) label=bug ;;
+            docs) label=documentation ;;
+            ci|build) label=ci ;;
+            test) label=testing ;;
+            chore|refactor|perf|revert) label=maintenance ;;
+            *) label=maintenance ;;
+          esac
+          total=$(( ${ADDITIONS:-0} + ${DELETIONS:-0} ))
+          if   [ "$total" -lt 100 ];  then size=size/xs
+          elif [ "$total" -lt 400 ];  then size=size/s
+          elif [ "$total" -lt 1200 ]; then size=size/m
+          else                             size=size/l
+          fi
+          for l in "$label" "$size" "feature" "bug" "documentation" "ci" "testing" "maintenance"; do
+            gh label create "$l" --force >/dev/null 2>&1 || true
+          done
+          gh pr edit "$PR" --add-label "$label,$size" >/dev/null
+          echo "labelled: $label + $size (${total} changed lines)"
+
+      - name: Request reviewers
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR: ${{ github.event.pull_request.number }}
+          AUTHOR: ${{ github.event.pull_request.user.login }}
+          REVIEWERS: ${{ vars.REVIEWERS }}
+        run: |
+          set -eu
+          # CODEOWNERS already requests reviews on its own. This covers the case where the reviewers
+          # are not the owners: set the repository variable REVIEWERS to "alice,bob".
+          if [ -z "${REVIEWERS:-}" ]; then
+            echo "REVIEWERS variable not set: relying on .github/CODEOWNERS"
+            exit 0
+          fi
+          wanted=""
+          IFS=',' read -ra list <<< "$REVIEWERS"
+          for r in "${list[@]}"; do
+            r=$(printf '%s' "$r" | tr -d ' ')
+            [ -z "$r" ] && continue
+            [ "$r" = "$AUTHOR" ] && continue      # you cannot review your own PR
+            wanted="$wanted,$r"
+          done
+          wanted=${wanted#,}
+          if [ -z "$wanted" ]; then
+            echo "every configured reviewer is the PR author: nothing to request"
+            exit 0
+          fi
+          echo "requesting review from: $wanted"
+          gh pr edit "$PR" --add-reviewer "$wanted" >/dev/null
+
+      - name: Summary
+        run: |
+          {
+            echo "### PR checks"
+            echo ""
+            echo "- title format: Conventional Commits"
+            echo "- labels: type + size"
+            echo "- tests: see the **tests** workflow (required to merge)"
+            echo "- lint: see the **pr / lint** job (required to merge)"
+          } >> "$GITHUB_STEP_SUMMARY"

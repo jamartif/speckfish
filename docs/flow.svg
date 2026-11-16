@@ -1,0 +1,164 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1240" height="740" viewBox="0 0 1240 740" role="img" aria-labelledby="t d">
+  <title id="t">speckfish flow, in order</title>
+  <desc id="d">Numbered flow: setup (init, constitution), then specify, optional clarify, plan, tasks; then review, implement, drift and report. Brainstorm and draft are optional and come before specify. Clarify runs before the plan, when ambiguities are not yet hidden by technical decisions. Drift runs after implement, because it compares the design with code that exists.</desc>
+
+  <defs>
+    <marker id="arw" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#475569"/>
+    </marker>
+    <marker id="arwo" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7.5" markerHeight="7.5" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#d97706"/>
+    </marker>
+    <style>
+      .t  { font-family: ui-sans-serif, -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+      .m  { font-family: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace; }
+      .h1 { font-size: 24px; font-weight: 700; fill: #0f172a; }
+      .lbl{ font-size: 12.5px; font-weight: 700; fill: #0f172a; }
+      .sm { font-size: 10.5px; fill: #475569; }
+      .xs { font-size: 10px; fill: #64748b; }
+      .num{ font-size: 11px; font-weight: 700; fill: #ffffff; }
+      .box       { fill: #f8fafc; stroke: #cbd5e1; stroke-width: 1.4; }
+      .box-blue  { fill: #eff6ff; stroke: #1b6ef3; stroke-width: 1.4; }
+      .box-green { fill: #f0fdf4; stroke: #16a34a; stroke-width: 1.4; }
+      .box-amber { fill: #fffbeb; stroke: #d97706; stroke-width: 1.4; stroke-dasharray: 5 4; }
+      .box-gray  { fill: #f1f5f9; stroke: #94a3b8; stroke-width: 1.2; stroke-dasharray: 5 4; }
+      .dot-blue  { fill: #1b6ef3; }
+      .dot-green { fill: #16a34a; }
+      .dot-gray  { fill: #64748b; }
+      .dot-amber { fill: #d97706; }
+      .edge      { stroke: #475569; stroke-width: 2; fill: none; }
+      .edgeo     { stroke: #d97706; stroke-width: 1.6; fill: none; stroke-dasharray: 5 4; }
+      .panel     { fill: #ffffff; stroke: #e2e8f0; stroke-width: 1.2; }
+    </style>
+  </defs>
+
+  <rect x="0" y="0" width="1240" height="740" fill="#ffffff"/>
+  <rect x="0.75" y="0.75" width="1238.5" height="738.5" fill="none" stroke="#e2e8f0" rx="18"/>
+
+  <text class="t h1" x="40" y="48">🐟 speckfish — el orden de los pasos</text>
+  <text class="t sm" x="40" y="70">Sigue los números. Cada paso es un subproceso distinto: el agente no arrastra contexto del anterior.</text>
+
+  <!-- optional discovery -->
+  <text class="t xs" x="40" y="102">OPCIONAL — solo si el input es una idea, no un documento</text>
+  <rect class="box-amber" x="40" y="112" width="170" height="50" rx="9"/>
+  <text class="t lbl" x="52" y="132">brainstorm</text>
+  <text class="t xs" x="52" y="148">concepts_brief.md · hipótesis</text>
+
+  <rect class="box-amber" x="232" y="112" width="170" height="50" rx="9"/>
+  <text class="t lbl" x="244" y="132">draft</text>
+  <text class="t xs" x="244" y="148">design_draft.md · hipótesis</text>
+
+  <path class="edgeo" d="M210 137 H232" marker-end="url(#arwo)"/>
+  <path class="edgeo" d="M402 162 V182 H475 V218" marker-end="url(#arwo)"/>
+  <text class="t xs" x="414" y="178">de ahí sale el brief que entra en ③</text>
+
+  <!-- row 1: five boxes -->
+  <text class="t xs" x="40" y="212">① SETUP Y ESPECIFICACIÓN</text>
+
+  <rect class="box" x="40" y="222" width="170" height="74" rx="10"/>
+  <circle class="dot-blue" cx="56" cy="240" r="8"/>
+  <text class="num" x="53" y="244">1</text>
+  <text class="m lbl" x="70" y="244">init</text>
+  <text class="t sm" x="52" y="264">git · .specify/ · skills</text>
+  <text class="t xs" x="52" y="280">EGM en vendor/</text>
+
+  <rect class="box" x="230" y="222" width="170" height="74" rx="10"/>
+  <circle class="dot-blue" cx="246" cy="240" r="8"/>
+  <text class="num" x="243" y="244">2</text>
+  <text class="m lbl" x="260" y="244">constitution</text>
+  <text class="t sm" x="242" y="264">.specify/memory/</text>
+  <text class="t xs" x="242" y="280">acepta @plantilla.md</text>
+
+  <rect class="box-blue" x="420" y="222" width="170" height="74" rx="10"/>
+  <circle class="dot-blue" cx="436" cy="240" r="8"/>
+  <text class="num" x="433" y="244">3</text>
+  <text class="m lbl" x="450" y="244">specify</text>
+  <text class="t sm" x="432" y="264">specs/NNN-slug/spec.md</text>
+  <text class="t xs" x="432" y="280">--split · --only</text>
+
+  <rect class="box-amber" x="610" y="222" width="170" height="74" rx="10"/>
+  <circle class="dot-amber" cx="626" cy="240" r="8"/>
+  <text class="num" x="621" y="244">4</text>
+  <text class="m lbl" x="640" y="244">clarify</text>
+  <text class="t sm" x="622" y="264">questions.md + supuestos</text>
+  <text class="t xs" x="622" y="280">NO toca spec.md</text>
+
+  <rect class="box-blue" x="800" y="222" width="170" height="74" rx="10"/>
+  <circle class="dot-blue" cx="816" cy="240" r="8"/>
+  <text class="num" x="813" y="244">5</text>
+  <text class="m lbl" x="830" y="244">plan</text>
+  <text class="t sm" x="812" y="264">plan.md · research.md</text>
+  <text class="t xs" x="812" y="280">--feature · --all-features</text>
+
+  <path class="edge" d="M210 259 H230" marker-end="url(#arw)"/>
+  <path class="edge" d="M400 259 H420" marker-end="url(#arw)"/>
+  <path class="edge" d="M590 259 H610" marker-end="url(#arw)"/>
+  <path class="edge" d="M780 259 H800" marker-end="url(#arw)"/>
+
+  <!-- row turn -->
+  <path class="edge" d="M885 296 V330 H164 V362" marker-end="url(#arw)"/>
+
+  <!-- row 2: right to left -->
+  <rect class="box-blue" x="64" y="362" width="200" height="74" rx="10"/>
+  <circle class="dot-blue" cx="80" cy="380" r="8"/>
+  <text class="num" x="77" y="384">6</text>
+  <text class="m lbl" x="94" y="384">tasks</text>
+  <text class="t sm" x="76" y="404">tasks.md</text>
+  <text class="t xs" x="76" y="420">--all-features si son varias</text>
+
+  <rect class="box-blue" x="302" y="362" width="200" height="74" rx="10"/>
+  <circle class="dot-blue" cx="318" cy="380" r="8"/>
+  <text class="num" x="315" y="384">7</text>
+  <text class="m lbl" x="332" y="384">analyze</text>
+  <text class="t sm" x="314" y="404">spec ↔ plan ↔ tasks</text>
+  <text class="t xs" x="314" y="420">también checklist · converge</text>
+
+  <rect class="box-green" x="540" y="362" width="210" height="74" rx="10"/>
+  <circle class="dot-green" cx="556" cy="380" r="8"/>
+  <text class="num" x="553" y="384">8</text>
+  <text class="m lbl" x="570" y="384">review</text>
+  <text class="t sm" x="552" y="404">consolidated_review_report.md</text>
+  <text class="t xs" x="552" y="420">sobre plan.md (o tasks.md)</text>
+
+  <rect class="box" x="788" y="362" width="180" height="74" rx="10"/>
+  <circle class="dot-gray" cx="804" cy="380" r="8"/>
+  <text class="num" x="801" y="384">9</text>
+  <text class="m lbl" x="818" y="384">implement</text>
+  <text class="t sm" x="800" y="404">código + tests</text>
+  <text class="t xs" x="800" y="420">una feature, con --yes</text>
+
+  <path class="edge" d="M264 399 H302" marker-end="url(#arw)"/>
+  <path class="edge" d="M502 399 H540" marker-end="url(#arw)"/>
+  <path class="edge" d="M750 399 H788" marker-end="url(#arw)"/>
+
+  <!-- row 3: drift and report -->
+  <path class="edge" d="M878 436 V470 H164 V502" marker-end="url(#arw)"/>
+
+  <rect class="box-green" x="64" y="502" width="200" height="70" rx="10"/>
+  <circle class="dot-green" cx="80" cy="520" r="8"/>
+  <text class="num" x="77" y="524">10</text>
+  <text class="m lbl" x="94" y="524">drift</text>
+  <text class="t sm" x="76" y="544">DRIFT_REPORT.md</text>
+  <text class="t xs" x="76" y="560">necesita código real</text>
+
+  <rect class="box-gray" x="302" y="502" width="200" height="70" rx="10"/>
+  <circle class="dot-gray" cx="318" cy="520" r="8"/>
+  <text class="num" x="315" y="524">11</text>
+  <text class="m lbl" x="332" y="524">report</text>
+  <text class="t sm" x="314" y="544">el informe, en la terminal</text>
+  <text class="t xs" x="314" y="560">--full · --lines N</text>
+
+  <path class="edge" d="M264 537 H302" marker-end="url(#arw)"/>
+
+  <text class="t xs" x="540" y="524">4 clarify es opcional y va ANTES del plan: las ambigüedades se ven mejor antes de</text>
+  <text class="t xs" x="540" y="540">que las decisiones técnicas las tapen. En headless no pregunta: deja questions.md</text>
+  <text class="t xs" x="540" y="556">con cada pregunta y el supuesto que asumió, y no modifica spec.md.</text>
+
+  <!-- notes panel -->
+  <rect class="panel" x="40" y="608" width="1160" height="110" rx="12"/>
+  <text class="t lbl" x="60" y="632">Por qué este orden</text>
+  <text class="t xs" x="60" y="652">3 specify → 4 clarify → 5 plan: clarificar antes del plan evita que el diseño consolide una ambigüedad. 6 tasks antes de 8 review: así el revisor puede juzgar cobertura («el plan promete X y ninguna tarea construye X»).</text>
+  <text class="t xs" x="60" y="670">10 drift va después de 9 implement: compara lo que prometen los documentos con el código que existe. Antes de implementar su respuesta honesta es «no hay nada», un run barato e inútil.</text>
+  <text class="t xs" x="60" y="688">Si 8 encuentra blockers, se arregla el plan y se repite 8; el resto no avanza (--gate en pipeline). Los pasos 4, 7 y 11 son opcionales.</text>
+  <text class="t xs" x="60" y="706">Puedes saltarte cualquiera de ellos, pero no cambiar el orden: cada uno consume el artefacto del anterior, no su contexto.</text>
+</svg>

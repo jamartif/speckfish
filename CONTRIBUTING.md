@@ -1,0 +1,89 @@
+# Contributing
+
+## Everything goes through a pull request
+
+`main` is protected: no direct pushes. The flow is always the same.
+
+```bash
+git switch -c feat/short-description        # or fix/, docs/, chore/, ci/
+# ... changes ...
+uv run --with pytest python -m pytest -q    # or: .venv/Scripts/python -m pytest -q
+ruff check src tests
+git add -A && git commit -m "feat: short description"
+git push -u origin HEAD
+gh pr create --fill                          # or write the body yourself
+```
+
+Then wait for the checks, and merge with **squash** so `main` keeps one commit per change:
+
+```bash
+gh pr checks --watch
+gh pr merge --squash --delete-branch
+```
+
+## What CI enforces on every PR
+
+| Check | Workflow | Failing means |
+|---|---|---|
+| `lint` (`ruff check src tests`) | `pr.yml` | fix the findings, do not silence the rule |
+| tests on Ubuntu + Windows (3.10, 3.12) | `tests.yml` | a real regression; the suite needs no network and no agent CLI |
+| PR title format | `pr.yml` | the title is not `type: description` (Conventional Commits) |
+
+The PR also gets `type` and `size/*` labels automatically and a generated **review checklist** comment
+(`pr-review.yml`) that is rewritten on every push and lists what a reviewer must confirm for the files
+this PR touches.
+
+### Reviewers
+
+- `.github/CODEOWNERS` requests a review from `@jamartif` on every PR — GitHub skips the request when
+  the owner *is* the author, which is the normal case with a single maintainer.
+- To bring in more people, set the repository variable `REVIEWERS` to a comma-separated list
+  (`alice,bob`): `pr.yml` requests reviews from everyone in it except the PR author.
+- Adding a collaborator is the only way to get a human *approval*; with a single maintainer the merge
+  gate is the required checks (`lint`, `metadata`, the four `pytest` jobs), enforced for admins too.
+macOS runs separately (`tests-macos.yml`, weekly + tags + manual) because shared macOS runners are
+scarce.
+
+## Commit and PR titles
+
+Conventional Commits, one intent per PR:
+
+```
+feat: add the constitution subcommand
+fix(cli): do not require an agent for `config`
+docs: explain the Devide Guard workaround
+ci: split macOS into its own workflow
+```
+
+Allowed types: `feat`, `fix`, `docs`, `chore`, `refactor`, `test`, `ci`, `build`, `perf`, `revert`.
+
+## Adding a command to the CLI
+
+1. Add the step to `src/speckfish/prompts.py` (or `SKILL_SPECS`) and `src/speckfish/steps.py`.
+2. Register it in `build_parser()` in `cli.py`.
+3. If it is a shippable step, add it to `STEPS` in `editors.py` so VS Code and the agents get it too.
+4. Tests in `tests/test_smoke.py` must stay hermetic: no network, no agent CLI (use `--dry-run` and
+   monkeypatch `get_harness`).
+5. Update `README.md` and `CHANGELOG.md`.
+
+## Releasing
+
+**Not on every change.** While the flow is still being validated the CLI is installed editable from the
+working copy, so fixes reach the machine that runs it without publishing anything:
+
+```bash
+pip install --user -e /path/to/speckfish     # once; later edits are live
+speckfish --version
+```
+
+A release is cut only when someone asks for one (a stable point worth pinning):
+
+```bash
+# bump the version in pyproject.toml and src/speckfish/__init__.py, update CHANGELOG.md, merge the PR
+git switch main && git pull
+git tag v0.1.30 && git push origin v0.1.30
+```
+
+`release.yml` then runs the tests, builds the wheel and the sdist, checks that the tag matches the
+package version, installs the wheel in a throwaway venv, and attaches the artifacts plus
+`SHA256SUMS.txt` to the GitHub release.

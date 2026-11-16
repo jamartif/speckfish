@@ -1,0 +1,2096 @@
+"""Smoke tests: no network, no agent CLI is executed."""
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+from speckfish import prompts
+from speckfish.cli import build_parser, exit_for, normalize_argv
+from speckfish.config import DEFAULTS, Config, find_report, parse_consolidated
+from speckfish.harnesses import ClaudeHarness, CodexHarness, CopilotHarness
+from speckfish.runner import run_interactive, run_step
+
+FIX = Path(__file__).parent / "fixtures" / "consolidated_review_report.md"
+
+
+# ---------- CLI ----------
+def test_normalize_moves_global_flags_to_the_front():
+    assert normalize_argv(["review", "--root", "../demo", "--json"]) == \
+        ["--root", "../demo", "--json", "review"]
+    assert normalize_argv(["--root", "x", "doctor"]) == ["--root", "x", "doctor"]
+
+
+def test_root_accepted_before_and_after_the_subcommand():
+    for argv in (["--root", "../demo", "review"], ["review", "--root", "../demo"]):
+        args = build_parser().parse_args(normalize_argv(argv))
+        assert args.root == "../demo"
+        assert args.cmd == "review"
+
+
+def test_exit_codes():
+    assert exit_for({"ok": True, "step": "plan"}) == 0
+    assert exit_for({"ok": True, "step": "review", "blockers": ["x"]}) == 1
+    assert exit_for({"ok": True, "step": "review", "meets_standard": False}) == 0  # no blockers
+    assert exit_for({"ok": False, "step": "review"}) == 2
+
+
+# ---------- prompts ----------
+def test_review_prompt_includes_stage_profile_and_artifact():
+    p = prompts.review_prompt("specs/001-x/plan.md", Path("C:/tmp/run/artifacts/review"),
+                              profile="speckit")
+    assert "Step=uninterrupted" in p
+    assert "EGM artifact directory:" in p
+    assert "Alternatives Considered" in p  # the profile removes the Spec Kit format noise
+    assert "do not ask" in p.lower()
+
+
+def test_review_prompt_profile_none_has_no_criteria():
+    p = prompts.review_prompt("doc.md", Path("/tmp"), profile="none")
+    assert "REVIEW CRITERIA" not in p
+
+
+def test_copilot_prompt_does_not_use_slash_command():
+    p = prompts.egm_prompt_for("copilot", "review", "specs/x/plan.md",
+                               Path("/tmp/art"), Path("/egm"))
+    assert "/egm:egm-review" not in p
+    assert "EGM package root:" in p and "docs/copilot.md" in p
+
+
+# ---------- report parsing ----------
+def test_parse_real_consolidated_report():
+    # Deliberately a REAL Spanish EGM report: the parser has to cope with both languages.
+    out = parse_consolidated(FIX)
+    assert out["meets_standard"] is False
+    assert len(out["blockers"]) == 2
+    assert "alternatives" in out["blockers"][0].lower()
+    assert out["majors"] >= 5
+    assert out["nits"] >= 3
+
+
+def test_find_report_by_pattern(tmp_path):
+    (tmp_path / "consolidated_review_report.md").write_text("# x", encoding="utf-8")
+    assert find_report(tmp_path).name == "consolidated_review_report.md"
+    assert find_report(tmp_path, "*DRIFT_REPORT.md") is None
+
+
+# ---------- harnesses ----------
+def _cfg(tmp_path: Path) -> Config:
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path / "egm")
+    return cfg
+
+
+def test_claude_argv(tmp_path):
+    cfg = _cfg(tmp_path)
+    h = ClaudeHarness(cfg)
+    inv = h.build("review", "prompt", tmp_path, tmp_path / "art", tmp_path / "egm",
+                  budget=None, timeout=60, schema=prompts.REVIEW_SCHEMA)
+    a = inv.argv
+    assert "-p" in a and "--json-schema" in a and "--plugin-dir" in a
+    assert "--max-budget-usd" in a          # per-step budget
+    assert "acceptEdits" in a
+    assert "Agent" in a                      # without Agent there are no Goldfish subagents
+
+
+def test_copilot_argv(tmp_path):
+    cfg = _cfg(tmp_path)
+    h = CopilotHarness(cfg)
+    inv = h.build("review", "prompt", tmp_path, tmp_path / "art", tmp_path / "egm",
+                  budget=None, timeout=60, schema=None)
+    a = inv.argv
+    assert "-p" in a and "--agent" in a and "--allow-all-tools" in a
+    assert "--max-ai-credits" in a and "--output-format" in a
+    assert not inv.schema_supported
+
+
+def test_codex_argv(tmp_path):
+    cfg = _cfg(tmp_path)
+    inv = CodexHarness(cfg).build("review", "p", tmp_path, tmp_path, None,
+                                  None, 60, None)
+    assert "exec" in inv.argv
+    assert "--json" in inv.argv                       # live NDJSON events, not one silent stream
+    assert inv.argv[inv.argv.index("exec") + 1] == "--json"
+    # 0.169 ignores --sandbox workspace-write in exec: only the bypass actually writes files
+    assert "--dangerously-bypass-approvals-and-sandbox" in inv.argv
+
+
+def test_dry_run_does_not_execute(tmp_path):
+    cfg = _cfg(tmp_path)
+    res = run_step(cfg, ClaudeHarness(cfg), "review", "prompt", tmp_path, "run1",
+                   tmp_path / "egm", dry_run=True)
+    assert res.ok and res.error == "dry-run"
+    assert "-p" in res.log
+    assert (tmp_path / ".speckfish" / "runs" / "run1" / "artifacts" / "review").is_dir()
+
+
+def test_agent_prefix_avoids_windows_shims():
+    from speckfish.config import agent_prefix, is_windows
+    if not is_windows():
+        pytest.skip("Windows only")
+    pre = agent_prefix("copilot")
+    if not pre:
+        pytest.skip("copilot not installed")
+    assert pre[0].lower().endswith("node.exe") or pre[0].lower().endswith("node")
+    assert pre[1].endswith(".js")
+    assert ".cmd" not in pre[1]
+
+
+# ---------- interactive mode ----------
+def test_claude_interactive_argv_has_no_print_flag(tmp_path):
+    cfg = _cfg(tmp_path)
+    inv = ClaudeHarness(cfg).build_interactive("review", "/egm:egm-review doc.md", tmp_path,
+                                               tmp_path / "art", tmp_path / "egm")
+    assert inv.interactive is True
+    assert "-p" not in inv.argv                      # no print mode: the dialogue stays alive
+    assert "--json-schema" not in inv.argv
+    assert "--plugin-dir" in inv.argv
+    assert inv.argv[1].startswith("/egm:egm-review")
+
+
+def test_copilot_interactive_argv_has_no_prompt_flag(tmp_path):
+    cfg = _cfg(tmp_path)
+    inv = CopilotHarness(cfg).build_interactive("review", "EGM package root: /egm", tmp_path,
+                                                tmp_path / "art", tmp_path / "egm")
+    assert "-p" not in inv.argv
+    assert "--agent" in inv.argv and "egm:egm" in inv.argv
+    assert "--allow-all-tools" in inv.argv
+
+
+def test_interactive_review_prompt_asks_questions():
+    p = prompts.review_prompt("doc.md", Path("/tmp/art"), interactive=True)
+    assert "ask every open question" in p.lower()
+    assert "Step=" not in p                          # let EGM show its preset menu
+    assert "nobody can answer questions" not in p.lower()
+
+
+def test_headless_review_prompt_forbids_questions():
+    p = prompts.review_prompt("doc.md", Path("/tmp/art"))
+    assert "nobody can answer questions" in p.lower()
+    assert "Step=uninterrupted" in p
+
+
+def test_interactive_dry_run_shows_command(tmp_path):
+    cfg = _cfg(tmp_path)
+    res = run_interactive(cfg, ClaudeHarness(cfg), "review", "/egm:egm-review x.md", tmp_path,
+                          "run-int", tmp_path / "egm", dry_run=True)
+    assert res.interactive is True
+    assert "/egm:egm-review x.md" in res.log
+
+
+def test_module_entrypoint_is_importable():
+    """`python -m speckfish` is the fallback when the console-script .exe is blocked."""
+    import importlib
+    m = importlib.import_module("speckfish.__main__")
+    assert hasattr(m, "main")
+
+
+# ---------- doctor output hygiene ----------
+BANNER = """
+               ███████╗██████╗ ███████╗ ██████╗██╗███████╗██╗   ██╗
+               ██╔════╝██╔══██╗██╔════╝██╔════╝██║██╔════╝╚██╗ ██╔╝
+               ╚════██║██╔═══╝ ██╔══╝  ██║     ██║██╔══╝    ╚██╔╝
+     CLI Version    1.3.2
+          Python    3.12.0
+        Platform    Windows
+"""
+
+
+def test_parse_specify_version_extracts_numbers():
+    from speckfish.steps import parse_specify_version
+    got = parse_specify_version(BANNER)
+    assert "1.3.2" in got and "3.12.0" in got
+    assert "█" not in got
+
+
+def test_banner_free_tail_drops_ascii_art():
+    from speckfish.steps import banner_free_tail
+    lines = banner_free_tail(BANNER, keep=2)
+    assert all("█" not in line and "╗" not in line for line in lines)
+    assert lines[-1].startswith("Platform") or "3.12.0" in lines[-1]
+
+
+def test_doctor_summary_is_readable():
+    from speckfish.cli import doctor_summary
+    info = {
+        "root": "C:/x",
+        "harness": {"harness": "claude", "version": "2.1.323", "verified": True,
+                    "installed": True},
+        "specify": {"ok": True, "version": "specify-cli 1.3.2 · Python 3.12.0",
+                    "argv": ["C:/bin/specify.EXE"], "detail": []},
+        "egm": {"present": False, "path": None},
+        "project": {"has_git": True, "has_specify": True, "has_claude_skills": False,
+                    "feature": None},
+        "tools": {"git": {"installed": True}, "uv": {"installed": True}},
+    }
+    out = doctor_summary(info)
+    assert "cli.Version" not in out
+    assert "specify-cli 1.3.2" in out
+    assert "not found" in out
+    assert "{" not in out                       # no JSON dumps
+
+
+# ---------- multi-integration init ----------
+def test_resolve_integrations_modes():
+    from speckfish.steps import resolve_integrations
+    assert resolve_integrations("all") == ["claude", "copilot", "codex"]
+    assert resolve_integrations("copilot,claude") == ["copilot", "claude"]
+    auto = resolve_integrations(None)          # only what is installed here
+    assert auto and all(x in ("claude", "copilot", "codex") for x in auto)
+
+
+def test_resolve_integrations_rejects_unknown():
+    from speckfish.steps import resolve_integrations
+    with pytest.raises(SystemExit):
+        resolve_integrations("claude,gemini")
+
+
+# ---------- agent / model reporting ----------
+def test_claude_reports_dominant_model():
+    import json as _json
+    cfg = Config(root=Path("."))
+    payload = _json.dumps({
+        "result": "ok", "total_cost_usd": 0.97, "num_turns": 4,
+        "modelUsage": {
+            "claude-haiku-4": {"inputTokens": 10, "outputTokens": 100},
+            "claude-sonnet-5-5": {"inputTokens": 10, "outputTokens": 9000},
+        },
+    })
+    out = ClaudeHarness(cfg).parse_output(payload, "", 0)
+    assert out["model"] == "claude-sonnet-5-5"          # the one that did the work
+
+
+def test_copilot_reports_dominant_model():
+    cfg = Config(root=Path("."))
+    lines = [
+        '{"type":"model.call_final_result","data":{"model":"gpt-6-luna"}}',
+        '{"type":"model.call_final_result","data":{"model":"gpt-6-luna"}}',
+        '{"type":"model.call_final_result","data":{"model":"mai-code-1.1-flash"}}',
+        '{"type":"subagent.started","data":{}}',
+        '{"type":"session.usage_checkpoint","data":{"totalNanoAiu":630000000}}',
+    ]
+    out = CopilotHarness(cfg).parse_output("\n".join(lines), "", 0)
+    assert out["model"] == "gpt-6-luna"
+    assert out["credits"] == 0.63
+    assert out["subagents"] == 1
+
+
+def test_model_flag_reaches_every_harness(tmp_path):
+    cfg = _cfg(tmp_path)
+    cfg.model = "claude-sonnet-5-5"
+    for H in (ClaudeHarness, CopilotHarness):
+        inv = H(cfg).build("review", "p", tmp_path, tmp_path / "a", tmp_path / "e",
+                           budget=None, timeout=60, schema=None)
+        assert "--model" in inv.argv and "claude-sonnet-5-5" in inv.argv
+    inv = CodexHarness(cfg).build("review", "p", tmp_path, tmp_path / "a", tmp_path / "e",
+                                  None, 60, None)
+    assert "--model" in inv.argv
+
+
+def test_summary_shows_model():
+    from speckfish.cli import summarize
+    out = summarize({"step": "review", "ok": True, "exit_code": 0, "duration_s": 1.0,
+                     "model": "gpt-6-luna"})
+    assert "gpt-6-luna" in out and "OK" in out
+
+
+def test_summary_is_readable(tmp_path):
+    """The console must show what was found, not a wall of paths."""
+    from speckfish.cli import summarize
+    from speckfish.config import norm
+    root = tmp_path
+    art = root / ".speckfish" / "runs" / "20260101-1" / "artifacts" / "review"
+    out = summarize({
+        "step": "review", "ok": True, "exit_code": 0, "duration_s": 202.0,
+        "cost": 1.2886208000000001, "cost_unit": "usd", "model": "claude-sonnet-5-5",
+        "verdict": "Apto con cambios. No hay Blockers. Hay 9 acciones Major consolidadas.",
+        "meets_standard": False, "blockers": [], "majors": 9, "nits": 7,
+        "reports": [art / "consolidated_review_report.md", art / "zoom_out_report.md"],
+        "artifact_dir": art, "log": root / ".speckfish" / "logs" / "review.log",
+    }, norm(root))
+
+    assert "$1.29" in out                      # rounded, not 1.2886208000000001
+    assert "3m22s" in out                      # 202 s in human form
+    assert "does NOT meet the standard" in out and "9 majors" in out
+    assert "Apto con cambios" in out           # the verdict is the headline
+    assert str(root) not in out                # paths are relative to the project
+    assert "consolidated_review_report.md   <- start here" in out
+    assert '"verdict"' not in out              # never a JSON blob
+
+
+# ---------- pipeline composition ----------
+def test_pipeline_dry_run_lists_all_steps(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    # hermetic: CI has no agent CLI installed, so inject the adapter instead of detecting one
+    monkeypatch.setattr(S, "get_harness", lambda cfg=None, name=None: ClaudeHarness(cfg))
+    egm = tmp_path / "egm"
+    (egm / "skills" / "egm-review").mkdir(parents=True)
+    (egm / "plugin.json").write_text('{"version": "0.0.0"}', encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(egm)
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    (tmp_path / "specs" / "001-x" / "plan.md").write_text("# p", encoding="utf-8")
+    out = S.do_pipeline(cfg, "idea", "stack", None, gate=False, with_drift=True,
+                        stream=False, dry_run=True)
+    assert list(out["steps"]) == ["specify", "plan", "review", "drift"]
+    assert out["steps"]["drift"]["error"] == "dry-run"
+
+
+def test_pipeline_gate_skips_drift_when_stopped(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+
+    class Boom:
+        name = "claude"
+
+    def failing(*a, **k):
+        from speckfish.runner import StepResult
+        return StepResult(step="plan", ok=False, exit_code=2, duration_s=0.0, error="boom")
+
+    monkeypatch.setattr(S, "do_specify", failing)
+    monkeypatch.setattr(S, "get_harness", lambda cfg=None, name=None: Boom())
+    out = S.do_pipeline(cfg, "idea", "stack", None, gate=True, with_drift=True,
+                        stream=False, dry_run=True)
+    assert out.get("stopped_at") == "specify"
+    assert "drift" not in out["steps"]
+    assert "gate stopped at" in out.get("drift_skipped", "")
+
+
+# ---------- editor entry points ----------
+def test_tasks_json_structure():
+    from speckfish.editors import STEPS, tasks_json
+    data = tasks_json("python -m speckfish")
+    assert data["version"] == "2.0.0"
+    assert len(data["tasks"]) == len(STEPS)
+    labels = [t["label"] for t in data["tasks"]]
+    assert "spfish: review" in labels and "spfish: review-interactive" in labels
+    assert {i["id"] for i in data["inputs"]} >= {"idea", "stack", "principles"}
+    for t in data["tasks"]:
+        assert t["command"] == "python -m speckfish"
+        assert t["type"] == "shell" and t["problemMatcher"] == []
+
+
+def test_copilot_prompt_frontmatter():
+    from speckfish.editors import STEPS, copilot_prompt
+    txt = copilot_prompt("review", STEPS["review"], "speckfish")
+    assert txt.startswith("---\n")
+    assert "name: 'spfish-review'" in txt          # short prefix, does not blur into /speckit-*
+    assert "agent: 'agent'" in txt
+    assert "speckfish review" in txt
+
+
+def test_claude_command_only_takes_arguments_when_useful():
+    from speckfish.editors import STEPS, claude_command
+    with_args = claude_command("review", STEPS["review"], "speckfish")
+    no_args = claude_command("doctor", STEPS["doctor"], "speckfish")
+    assert "$ARGUMENTS" in with_args
+    assert "$ARGUMENTS" not in no_args
+    assert "allowed-tools" in with_args
+
+
+def test_generate_writes_every_target(tmp_path):
+    from speckfish.editors import generate
+    codex_home = tmp_path / "codexhome"
+    cfg = Config(root=tmp_path)
+    out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish",
+                   str(codex_home), force=True)
+    assert (tmp_path / ".vscode" / "tasks.json").exists()
+    assert (tmp_path / ".github" / "prompts" / "spfish-review.prompt.md").exists()
+    assert (tmp_path / ".claude" / "commands" / "spfish-review.md").exists()
+    assert (codex_home / "prompts" / "spfish-review.md").exists()
+    from speckfish.editors import STEPS as EDITOR_STEPS
+    assert len(out["written"]) == 1 + 3 * len(EDITOR_STEPS)
+    assert out["command"] == "speckfish"
+
+    # --no-force keeps user edits
+    (tmp_path / ".vscode" / "tasks.json").write_text("{}", encoding="utf-8")
+    out2 = generate(cfg, ["vscode"], "speckfish", None, force=False)
+    assert out2["written"] == [] and out2["skipped"]
+    assert (tmp_path / ".vscode" / "tasks.json").read_text(encoding="utf-8") == "{}"
+
+
+def test_custom_prefix_renames_every_command(tmp_path):
+    from speckfish.editors import generate, tasks_json
+    cfg = Config(root=tmp_path)
+    out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish", None,
+                   force=True, prefix="xyz")
+    assert out["prefix"] == "xyz"
+    assert (tmp_path / ".github" / "prompts" / "xyz-review.prompt.md").exists()
+    assert (tmp_path / ".claude" / "commands" / "xyz-drift.md").exists()
+    assert not list((tmp_path / ".claude" / "commands").glob("spfish-*"))
+    assert tasks_json("speckfish", prefix="xyz")["tasks"][0]["label"].startswith("xyz: ")
+
+
+def test_generate_subset_of_targets(tmp_path):
+    from speckfish.editors import generate
+    cfg = Config(root=tmp_path)
+    out = generate(cfg, ["claude"], "speckfish", None, force=True)
+    assert all(".claude/commands" in p.replace("\\", "/") for p in out["written"])
+    assert not (tmp_path / ".vscode").exists()
+
+
+# ---------- remaining Spec Kit skills ----------
+def test_every_speckit_skill_has_a_command():
+    from speckfish.prompts import SKILL_SPECS
+    assert set(SKILL_SPECS) == {"constitution", "tasks", "analyze", "checklist",
+                                "clarify", "implement", "converge"}
+    parser = build_parser()
+    for skill in SKILL_SPECS:
+        ns = parser.parse_args([skill])
+        assert ns.cmd == skill
+
+
+def test_skill_prompt_shapes():
+    from speckfish import prompts as P
+    con = P.skill_prompt("constitution", "quality first", Path("/tmp/a"))
+    assert con.startswith("/speckit-constitution quality first")
+    assert "nobody can answer questions" in con.lower()
+
+    auto = P.skill_prompt("constitution", "", Path("/tmp/a"))
+    assert "propose a short, concrete constitution" in auto   # no principles given
+
+    cl = P.skill_prompt("clarify", "", Path("/tmp/a"))
+    assert "questions.md" in cl and "do NOT ask questions" in cl
+
+    cop = P.skill_prompt_for("copilot", "tasks", "", Path("/tmp/a"), Path("/egm"))
+    assert "speckit-tasks" in cop and not cop.startswith("/speckit-tasks")   # no slash command
+
+
+def test_implement_requires_confirmation(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir()
+    (tmp_path / ".speckfish" / "config.json").write_text("{}", encoding="utf-8")
+    code = C.main(["--root", str(tmp_path), "--json", "implement"])
+    assert code == 3                                   # refused, nothing written
+    assert not (tmp_path / ".speckfish" / "runs").exists()
+
+
+# ---------- markdown input files ----------
+def test_read_input_inlines_small_files(tmp_path):
+    from speckfish.prompts import read_input
+    f = tmp_path / "plantilla.md"
+    f.write_text("# Principios\n1. tests primero\n", encoding="utf-8")
+    text, src = read_input("@plantilla.md", tmp_path)
+    assert "tests primero" in text and "source material" in text
+    assert src == f
+    assert str(f).replace("\\", "/") in text
+
+
+def test_read_input_accepts_bare_relative_path(tmp_path):
+    from speckfish.prompts import read_input
+    (tmp_path / "docs").mkdir()
+    f = tmp_path / "docs" / "constitucion.md"
+    f.write_text("calidad\n", encoding="utf-8")
+    text, src = read_input("docs/constitucion.md", tmp_path)
+    assert "calidad" in text and src is not None
+
+
+def test_read_input_leaves_normal_text_alone():
+    from speckfish.prompts import read_input
+    text, src = read_input("a JSON task CLI", None)
+    assert text == "a JSON task CLI" and src is None
+
+
+def test_read_input_references_big_files(tmp_path):
+    from speckfish.prompts import INLINE_LIMIT, read_input
+    f = tmp_path / "grande.md"
+    f.write_text("x" * (INLINE_LIMIT + 100), encoding="utf-8")
+    text, src = read_input("@grande.md", tmp_path)
+    assert "read that file" in text and "x" * 50 not in text
+
+
+def test_missing_input_file_fails_loudly(tmp_path):
+    from speckfish.prompts import read_input
+    with pytest.raises(SystemExit):
+        read_input("@no-existe.md", tmp_path)
+
+
+def test_constitution_uses_markdown_template(tmp_path):
+    from speckfish.prompts import skill_prompt
+    f = tmp_path / "constitution-template.md"
+    f.write_text("# Constitution\n- No external dependencies\n", encoding="utf-8")
+    p = skill_prompt("constitution", "@constitution-template.md", tmp_path / "art", tmp_path)
+    assert "No external dependencies" in p
+    assert p.startswith("/speckit-constitution")
+
+
+# ---------- CLI surface: version, config, runs ----------
+def test_version_flag(capsys):
+    with pytest.raises(SystemExit) as exc:
+        build_parser().parse_args(["--version"])
+    assert exc.value.code == 0
+    assert "speckfish" in capsys.readouterr().out
+
+
+def test_config_roundtrip(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    assert C.main(["--root", str(tmp_path), "config", "profile=none"]) == 0
+    stored = (tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8")
+    assert '"profile": "none"' in stored
+    assert C.main(["--root", str(tmp_path), "config", "nope=1"]) == 3      # unknown key
+    assert C.main(["--root", str(tmp_path), "config", "no-equals"]) == 3
+
+
+def test_run_totals_sums_cost_and_flags_mixed_units():
+    from speckfish.steps import run_totals
+    steps = {"a": {"cost": 0.5, "cost_unit": "usd", "duration_s": 10.0},
+             "b": {"cost": 1.25, "cost_unit": "usd", "duration_s": 5.5}}
+    out = run_totals(steps)
+    assert out["cost"] == 1.75 and out["duration_s"] == 15.5 and "cost_note" not in out
+
+    mixed = run_totals({"a": {"cost": 0.5, "cost_unit": "usd", "duration_s": 1.0},
+                        "b": {"cost": 2.0, "cost_unit": "credits", "duration_s": 1.0}})
+    assert "mixed units" in mixed["cost_note"]
+
+
+def test_clean_runs_keeps_newest(tmp_path):
+    from speckfish.steps import clean_runs
+    cfg = Config(root=tmp_path)
+    for name in ("20260101-000001", "20260102-000001", "20260103-000001"):
+        (cfg.runs_dir / name).mkdir(parents=True)
+        (cfg.runs_dir / name / "state.json").write_text("{}", encoding="utf-8")
+    out = clean_runs(cfg, keep=2)
+    assert out["removed"] == ["20260101-000001"]
+    assert sorted(p.name for p in cfg.runs_dir.iterdir()) == ["20260102-000001", "20260103-000001"]
+
+
+def test_pipeline_with_tasks_and_analyze(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    monkeypatch.setattr(S, "get_harness", lambda cfg=None, name=None: ClaudeHarness(cfg))
+    egm = tmp_path / "egm"
+    (egm / "skills" / "x").mkdir(parents=True)
+    (egm / "plugin.json").write_text('{"version": "0"}', encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(egm)
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    for f in ("spec.md", "plan.md"):
+        (tmp_path / "specs" / "001-x" / f).write_text("# x", encoding="utf-8")
+    out = S.do_pipeline(cfg, "idea", "stack", None, gate=False, with_drift=False,
+                        with_tasks=True, with_analyze=True, stream=False, dry_run=True)
+    assert list(out["steps"]) == ["specify", "plan", "tasks", "analyze", "review"]
+
+
+def test_generate_removes_commands_from_the_old_prefix(tmp_path):
+    from speckfish.editors import generate
+    cfg = Config(root=tmp_path)
+    prompts = tmp_path / ".github" / "prompts"
+    cmds = tmp_path / ".claude" / "commands"
+    prompts.mkdir(parents=True)
+    cmds.mkdir(parents=True)
+    (prompts / "speckfish-review.prompt.md").write_text("old", encoding="utf-8")
+    (cmds / "speckfish-review.md").write_text("old", encoding="utf-8")
+    (cmds / "mine.md").write_text("user file", encoding="utf-8")   # not ours: never touched
+
+    out = generate(cfg, ["copilot", "claude"], "speckfish", None, force=True)
+    assert len(out["removed"]) == 2
+    assert not (prompts / "speckfish-review.prompt.md").exists()
+    assert (cmds / "mine.md").exists()
+    assert (cmds / "spfish-review.md").exists()
+
+
+# ---------- specify --split (a big brief into independent features) ----------
+def test_split_prompt_asks_for_json_and_expands_files(tmp_path):
+    from speckfish.prompts import split_prompt
+    f = tmp_path / "brief.md"
+    f.write_text("# Brief\n- exportar CSV\n- etiquetas\n", encoding="utf-8")
+    p = split_prompt("@brief.md", 4, tmp_path)
+    assert "exportar CSV" in p
+    assert "Answer ONLY with JSON" in p
+    assert "at most 4 features" in p
+
+
+def test_extract_features_from_structured_and_from_raw_text():
+    from speckfish.runner import StepResult
+    from speckfish.steps import extract_features
+
+    structured = StepResult(step="split", ok=True, exit_code=0, duration_s=1.0,
+                            structured={"features": [{"title": "A", "description": "aa"},
+                                                     {"title": "B", "description": "bb"}]})
+    assert [f["title"] for f in extract_features(structured)] == ["A", "B"]
+
+    # Copilot/Codex: no --json-schema, the JSON arrives as prose
+    raw = StepResult(step="split", ok=True, exit_code=0, duration_s=1.0,
+                     raw_tail='Here you go:\n{"features":[{"title":"X","description":"xx"}]}\nDone')
+    assert [f["title"] for f in extract_features(raw)] == ["X"]
+
+    empty = StepResult(step="split", ok=True, exit_code=0, duration_s=1.0, raw_tail="no json here")
+    assert extract_features(empty) == []
+
+
+def test_split_creates_one_spec_per_feature(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    calls = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        calls.append(step)
+        if step == "specify-split":
+            return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                              structured={"features": [{"title": "one", "description": "d1"},
+                                                       {"title": "two", "description": "d2"},
+                                                       {"title": "three", "description": "d3"}]})
+        assert "/speckit-specify" in prompt
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0)
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    out = S.do_specify_split(cfg, "brief", None, harness=ClaudeHarness(cfg))
+    assert out["features"] == ["one", "two", "three"]
+    assert calls == ["specify-split", "specify-1", "specify-2", "specify-3"]
+    assert (tmp_path / ".speckfish" / "runs" / out["run_id"] / "split.json").exists()
+
+
+def test_split_dry_run_calls_the_agent_once(tmp_path, monkeypatch):
+    from speckfish import steps as S
+
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    out = S.do_specify_split(cfg, "brief", "rid", harness=ClaudeHarness(cfg), dry_run=True)
+    assert out["dry_run"] is True
+    assert list(out["steps"]) == ["split"]
+    assert out["steps"]["split"]["error"] == "dry-run"
+
+
+# ---------- EGM right after specifying ----------
+def test_split_review_runs_egm_per_spec(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    feat_dir = tmp_path / "specs" / "001-x"
+    feat_dir.mkdir(parents=True)
+    (feat_dir / "spec.md").write_text("# spec", encoding="utf-8")
+    reviewed = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        if step == "specify-split":
+            return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                              structured={"features": [{"title": "one", "description": "d"}]})
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                          structured={"feature_dir": str(feat_dir)})
+
+    def fake_review(cfg_, target=None, run_id=None, harness=None, profile=None, stage=None,
+                    stream=True, dry_run=False, default_file="plan.md", interactive=False,
+                    step_name="review"):
+        reviewed.append(target)
+        return StepResult(step="review", ok=True, exit_code=0, duration_s=1.0)
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    monkeypatch.setattr(S, "do_review", fake_review)
+
+    out = S.do_specify_split(cfg, "brief", None, harness=ClaudeHarness(cfg), review=True)
+    assert reviewed == [str(feat_dir / "spec.md")]      # EGM reviewed the spec it just wrote
+    assert "review-1" in out["steps"]
+
+
+def test_permission_denials_are_reported_in_the_summary():
+    from speckfish.cli import summarize
+    out = summarize({"step": "specify", "ok": True, "exit_code": 0, "duration_s": 1.0,
+                     "denials": [{"tool_name": "PowerShell"}]})
+    assert "permission denial" in out and "PowerShell" in out
+
+
+# ---------- feature selection ----------
+def _project(tmp_path, names=("002-open-remember-repos", "003-safe-staging-commit")):
+    specs = tmp_path / "specs"
+    for n in names:
+        d = specs / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    return tmp_path
+
+
+def test_list_and_active_feature(tmp_path):
+    from speckfish.steps import active_feature, list_features, set_active_feature
+    _project(tmp_path)
+    cfg = Config(root=tmp_path)
+    assert active_feature(cfg) is None
+    rows = list_features(cfg)
+    assert [r["name"] for r in rows] == ["002-open-remember-repos", "003-safe-staging-commit"]
+    assert rows[0]["spec"] and not rows[0]["plan"]
+
+    set_active_feature(cfg, tmp_path / "specs" / "003-safe-staging-commit")
+    assert active_feature(cfg).name == "003-safe-staging-commit"
+    assert json.loads((tmp_path / ".specify" / "feature.json").read_text(encoding="utf-8"))[
+        "feature_directory"] == "specs/003-safe-staging-commit"
+    assert [r["name"] for r in list_features(cfg) if r["active"]] == ["003-safe-staging-commit"]
+
+
+def test_find_feature_by_number_name_and_path(tmp_path):
+    from speckfish.steps import find_feature
+    _project(tmp_path)
+    cfg = Config(root=tmp_path)
+    assert find_feature(cfg, "002").name == "002-open-remember-repos"
+    assert find_feature(cfg, "002-open").name == "002-open-remember-repos"
+    assert find_feature(cfg, "specs/003-safe-staging-commit").name == "003-safe-staging-commit"
+    with pytest.raises(SystemExit):
+        find_feature(cfg, "099")
+
+
+def test_plan_feature_flag_sets_active_and_names_it_in_the_prompt(tmp_path):
+    from speckfish import steps as S
+    _project(tmp_path)
+    (tmp_path / "vendor").mkdir()
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    res = S.do_plan(cfg, "Swift 6", None, harness=ClaudeHarness(cfg), dry_run=True,
+                    feature="002")
+    assert "002-open-remember-repos" in res.log
+    assert json.loads((tmp_path / ".specify" / "feature.json").read_text(encoding="utf-8"))[
+        "feature_directory"] == "specs/002-open-remember-repos"
+
+
+def test_msys_style_root_is_understood_on_windows():
+    from speckfish.config import _native, is_windows
+    if not is_windows():
+        pytest.skip("Windows only")
+    assert _native("/c/Users/x/repo") == Path("C:/Users/x/repo")
+
+
+# ---------- output language ----------
+def test_language_line_defaults_to_english():
+    from speckfish.prompts import language_line
+    assert "in English" in language_line("en")
+    assert "in Spanish" in language_line("es")
+    assert language_line("") == ""
+    assert "in Klingon" in language_line("klingon")     # unknown code still works
+
+
+def test_prompts_carry_the_language_instruction(tmp_path):
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+    assert cfg.language == "en"                          # English by default
+    out = S.with_language("do the thing", cfg)
+    assert out.startswith("do the thing") and "in English" in out
+    assert S.with_language(out, cfg).count("in English") == 1   # never twice
+
+    cfg.language = "es"
+    assert "in Spanish" in S.with_language("do the thing", cfg)
+    cfg.language = ""
+    assert S.with_language("do the thing", cfg) == "do the thing"
+
+
+def test_language_is_a_config_key(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    assert C.main(["--root", str(tmp_path), "config", "language=es"]) == 0
+    stored = (tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8")
+    assert '"language": "es"' in stored
+
+
+# ---------- reading the report in the terminal ----------
+def _fake_review_run(tmp_path, body=None, run_id="20260101-120000"):
+    art = tmp_path / ".speckfish" / "runs" / run_id / "artifacts" / "review"
+    art.mkdir(parents=True)
+    (art / "consolidated_review_report.md").write_text(body or "# Report\n" + "line\n" * 60,
+                                                      encoding="utf-8")
+    return tmp_path
+
+
+def test_report_prints_the_consolidated_report(tmp_path, capsys):
+    from speckfish import cli as C
+    _fake_review_run(tmp_path)
+    assert C.main(["--root", str(tmp_path), "report", "--lines", "5"]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith("# Report")
+    assert "use `speckfish report --full`" in out        # tells you how to see the rest
+
+
+def test_report_full_prints_everything(tmp_path, capsys):
+    from speckfish import cli as C
+    _fake_review_run(tmp_path)
+    assert C.main(["--root", str(tmp_path), "report", "--full"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("line") == 60 and "more line(s)" not in out
+
+
+def test_report_without_runs_fails_clearly(tmp_path, capsys):
+    from speckfish import cli as C
+    assert C.main(["--root", str(tmp_path), "report"]) == 2
+    assert "no report found" in capsys.readouterr().err
+
+
+# ---------- failures must be readable too ----------
+QUOTA_JSON = (
+    '{"duration_api_ms":792,"session_id":"x","permission_denials":[],"is_error":true,'
+    '"num_turns":1,"api_error_status":429,"api_error_origin":"first_party",'
+    '"api_error":"usage_limit_reached","result":"You\'ve hit your weekly limit \u00b7 resets 8pm '
+    '(Europe/Madrid)","type":"result","subagent_stats":{"spawned":0}}'
+)
+
+
+def test_quota_failure_is_reported_as_a_sentence():
+    from speckfish.runner import error_kind, human_error
+    assert error_kind(QUOTA_JSON, "") == "quota"
+    msg = human_error(QUOTA_JSON, "", 1)
+    assert "ran out of quota" in msg and "weekly limit" in msg
+    assert "{" not in msg and "subagent_stats" not in msg
+
+
+def test_quota_failure_exits_as_environment():
+    from speckfish.cli import summarize
+    res = {"step": "review", "ok": False, "exit_code": 1, "duration_s": 6.0,
+           "error": "the agent ran out of quota (HTTP 429): weekly limit",
+           "error_kind": "quota"}
+    out = summarize(res, "C:/repo")
+    assert "ERROR" in out and "--harness copilot" in out     # tells you what to do
+    assert "{" not in out
+
+
+def test_auth_failure_is_classified():
+    from speckfish.runner import error_kind, human_error
+    raw = '{"is_error":true,"api_error_status":401,"api_error":"authentication_error"}'
+    assert error_kind(raw, "") == "auth"
+    assert "credentials" in human_error(raw, "", 1)
+
+
+def test_plain_text_failure_keeps_a_short_tail():
+    from speckfish.runner import human_error
+    err = "l1\nl2\nl3\ncache miss is old\nboom: cannot start\nsecond line"
+    msg = human_error("", err, 7)
+    assert msg.startswith("exit 7:") and "boom: cannot start" in msg
+    assert "cache miss" not in msg            # only the last useful lines
+
+
+def test_error_without_output_says_so():
+    from speckfish.runner import human_error
+    assert human_error("", "", 1) == "exit 1 with no output"
+
+
+# ---------- live progress while the agent works ----------
+def _stream_events():
+    """Real shape of claude --output-format stream-json events."""
+    return [
+        '{"type":"system","subtype":"init","tools":["Agent","Read"]}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",'
+        '"input":{"file_path":"specs/002/spec.md"}}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent",'
+        '"input":{"subagent_type":"egm:egm-zoom-out"}}]}}',
+        '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent",'
+        '"input":{"subagent_type":"egm:egm-comprehension"}}]}}',
+        '{"type":"result","subtype":"success","total_cost_usd":0.5,"num_turns":4,'
+        '"structured_output":{"verdict":"ok","meets_standard":true,"blockers":[],"majors":0,'
+        '"nits":0,"reports":[]},"usage":{"input_tokens":10,"output_tokens":5}}',
+    ]
+
+
+def test_progress_shows_subagents_and_elapsed_time():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("review", enabled=True, stream=buf, plain_every=0)
+    for line in _stream_events():
+        p.feed(line)
+    status = p.status()
+    assert status.startswith("[review] ")
+    assert "subagents 2" in status
+    assert "egm:egm-comprehension" in status          # tells you where it is
+    assert "tools 3" in status
+    p.stop()
+
+
+def test_progress_never_breaks_a_run_on_garbage():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("plan", enabled=True, stream=buf, plain_every=0)
+    for junk in ("", "not json", "{broken", "[]", '{"type":"weird"}', None):
+        p.feed(junk)
+    assert p.status().startswith("[plan]")
+    p.stop()
+
+
+def test_progress_prints_a_line_without_a_tty():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("review", enabled=True, stream=buf, plain_every=0)
+    p.feed(_stream_events()[3])
+    p._draw()
+    assert "[review] 00:0" in buf.getvalue()
+
+
+def test_progress_can_be_switched_off_globally():
+    import io
+
+    from speckfish import progress as P
+    buf = io.StringIO()
+    old, P.ENABLED = P.ENABLED, False
+    try:
+        p = P.Progress("review", enabled=True, stream=buf, plain_every=0)
+        assert p.enabled is False
+        p.feed(_stream_events()[3])
+        p.start()
+        p.stop()
+        assert buf.getvalue() == ""
+    finally:
+        P.ENABLED = old
+
+
+def test_claude_parses_stream_json_events():
+    from speckfish.harnesses import ClaudeHarness
+    out = "\n".join(_stream_events()) + "\n"
+    parsed = ClaudeHarness.parse_output(None, out, "", 0)
+    assert parsed["cost_usd"] == 0.5
+    assert parsed["structured"]["verdict"] == "ok"
+    assert parsed["model"] is None or isinstance(parsed["model"], str)
+
+
+def test_real_claude_stream_quota_fixture(tmp_path):
+    """A captured stream-json run that hit the weekly limit (fixture, not invented)."""
+    from speckfish.runner import error_kind, human_error
+    raw = (Path(__file__).parent / "fixtures" / "claude_quota_stream.jsonl").read_text(encoding="utf-8")
+    assert error_kind(raw, "") == "quota"
+    msg = human_error(raw, "", 1)
+    assert "ran out of quota" in msg and "429" in msg
+    assert "reopens at" in msg                      # tells you when to retry
+    assert "rate_limit_event" not in msg and '"type"' not in msg
+
+
+def test_progress_notices_a_rate_limit():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("review", enabled=True, stream=buf, plain_every=0)
+    raw = (Path(__file__).parent / "fixtures" / "claude_quota_stream.jsonl").read_text(encoding="utf-8")
+    for line in raw.splitlines():
+        p.feed(line)
+    assert p.status().startswith("[review]")
+    p.stop()
+
+
+# ---------- codex adapter: what a real run taught us ----------
+def test_codex_bypasses_sandbox_or_it_cannot_write(tmp_path):
+    cfg = _cfg(tmp_path)
+    argv = CodexHarness(cfg).build("specify", "p", tmp_path, tmp_path, None,
+                                   None, 60, None).argv
+    assert "--dangerously-bypass-approvals-and-sandbox" in argv
+
+
+def test_designated_spec_is_verified_not_assumed(tmp_path):
+    """A step that says ok but writes no spec.md is a failure (codex read-only sandbox did this)."""
+    from speckfish.runner import StepResult, postprocess
+    res = StepResult(step="specify", ok=True, exit_code=0, duration_s=70.0)
+    postprocess(res, "specify", tmp_path / "art", tmp_path)
+    assert res.ok is False
+    assert "wrote no spec.md" in res.error
+
+
+def test_specification_that_exists_passes_the_check(tmp_path):
+    from speckfish.runner import StepResult, postprocess
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    res = StepResult(step="specify", ok=True, exit_code=0, duration_s=10.0)
+    postprocess(res, "specify", tmp_path / "art", tmp_path)
+    assert res.ok is True and res.error == ""
+
+
+def test_node_entry_finds_a_bin_js_package(tmp_path, monkeypatch):
+    """codex ships bin/codex.js, not index.js: the shim prefix must still resolve."""
+    from speckfish import config as C
+    binjs = tmp_path / "node_modules" / "@openai" / "codex" / "bin" / "codex.js"
+    binjs.parent.mkdir(parents=True)
+    binjs.write_text("// entry", encoding="utf-8")
+    shim = tmp_path / "codex"
+    shim.write_text("", encoding="utf-8")
+    monkeypatch.setattr(C.shutil, "which", lambda n: str(shim) if n == "codex" else None)
+    assert C.node_entry("codex") == str(binjs)
+
+
+def test_doctor_never_raises_when_the_binary_is_broken(tmp_path, monkeypatch):
+    from speckfish import harnesses as H
+    cfg = _cfg(tmp_path)
+
+    def boom(*_a, **_k):
+        raise OSError(193, "not a valid Win32 application")
+
+    monkeypatch.setattr(H, "run_cmd", boom)
+    monkeypatch.setattr(H.CodexHarness, "binary", lambda self: "C:/fake/codex")
+    info = H.CodexHarness(cfg).doctor()
+    assert info["installed"] is True
+    assert info["version_exit"] == 1          # reported, not raised
+
+
+# ---------- split inventory on harnesses without --json-schema ----------
+def test_inventory_json_is_recovered_from_prose_log(tmp_path):
+    """codex/copilot answer in prose; the log also carries a schema that must not win."""
+    from speckfish.steps import json_object_with
+    log = ('noise\n'
+           '{"type":"object","properties":{"features":{"type":"array"}}}\n'
+           '{"features":[{"title":"short name"}]}\n'
+           'the plan:\n{"features":[{"title":"A","description":"da","why":"wa"},'
+           '{"title":"B","description":"db","why":"wb"}],"notes":"two"}')
+    found = json_object_with(log, "features")
+    assert [f["title"] for f in found["features"]] == ["A", "B"]
+    assert found["notes"] == "two"
+
+
+def test_inventory_payload_reads_the_struct_log(tmp_path):
+    from speckfish.config import Config
+    from speckfish.runner import StepResult
+    from speckfish.steps import inventory_payload
+    log = tmp_path / "split.log"
+    log.write_text('{"features":[{"title":"X","description":"d"}]}', encoding="utf-8")
+    res = StepResult(step="specify-split", ok=True, exit_code=0, duration_s=1.0,
+                     log=str(log), structured=None)
+    payload = inventory_payload(res, Config(root=tmp_path))
+    assert payload["features"][0]["title"] == "X"
+
+
+# ---------- one step over every feature ----------
+def test_feature_batch_stops_at_the_first_failure(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b", "003-c"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    seen = []
+
+    def fake_plan(cfg_, stack, run_id=None, harness=None, stream=True, dry_run=False, feature=None,
+                  step_name=None):
+        seen.append(feature)
+        ok = feature != "002-b"                      # the middle one breaks
+        return StepResult(step="plan", ok=ok, exit_code=0 if ok else 2, duration_s=1.0,
+                          error="" if ok else "boom", cost=0.5, cost_unit="usd")
+
+    monkeypatch.setattr(S, "do_plan", fake_plan)
+    feats = S.features_with_spec(cfg)
+    batch = S.do_feature_batch(cfg, "plan", feats, harness=SimpleNamespace(name="fake"))
+    assert seen == ["001-a", "002-b"]                # 003 never ran
+    assert batch["stopped_at"] == "002-b"
+    assert batch["done"] is False
+    assert batch["total_cost"] == 1.0
+
+
+def test_batch_summary_says_where_it_stopped():
+    from speckfish.cli import batch_summary
+    text = batch_summary({"action": "tasks", "run_id": "r1", "order": ["001-a", "002-b"],
+                          "steps": {"001-a": {"ok": True, "duration_s": 61.0},
+                                    "002-b": {"ok": False, "duration_s": 12.0, "error": "boom"}},
+                          "stopped_at": "002-b", "total_cost": 0.0})
+    assert "OK     001-a" in text and "FAILED 002-b" in text
+    assert "stopped at 002-b" in text and "boom" in text
+
+
+def test_all_features_reaches_every_feature(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(S, "do_plan", lambda cfg, stack, rid=None, h=None, stream=True,
+                        dry_run=False, feature=None, step_name=None: (calls.append(feature),
+                                                      StepResult(step="plan", ok=True,
+                                                                 exit_code=0, duration_s=1.0))[1])
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    monkeypatch.setattr(S, "get_harness", lambda cfg: SimpleNamespace(name="fake"))
+    assert C.main(["--root", str(tmp_path), "plan", "x", "--all-features"]) == 0
+    assert calls == ["001-a", "002-b"]
+
+
+def test_progress_still_shows_when_the_agent_echoes_prose():
+    """codex prints prose to the same terminal: the clock and stage must still appear."""
+    import io
+
+    from speckfish.progress import Progress
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    buf = TTY()
+    p = Progress("constitution", enabled=True, stream=buf, plain_only=True, plain_every=0)
+    p.start()
+    p.feed(_stream_events()[2])
+    p._draw()
+    p.stop()
+    out = buf.getvalue()
+    assert "[constitution]" in out
+    assert "subagents 1" in out       # the stage, not just a clock
+    assert "\r" not in out            # standalone lines, never a carriage-return redraw
+
+
+def test_split_generates_one_spec_per_recovered_feature(tmp_path, monkeypatch):
+    """A harness without --json-schema must still produce N specs (regression: it aborted)."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    log = tmp_path / "split.log"
+    log.write_text('{"features":[{"title":"A","description":"da"},'
+                   '{"title":"B","description":"db"}],"notes":"n"}', encoding="utf-8")
+    specs_made = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        if step == "specify-split":
+            return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                              log=str(log), structured=None)
+        specs_made.append(step)
+        d = tmp_path / "specs" / f"00{len(specs_made)}-x"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                          structured={"feature_dir": str(d)})
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    out = S.do_specify_split(cfg, "brief", None, harness=SimpleNamespace(name="codex"))
+    assert out["features"] == ["A", "B"]
+    assert specs_made == ["specify-1", "specify-2"]        # both features were specified
+    assert "error" not in out
+
+
+# ---------- the console says the outcome, not the transcript ----------
+def test_json_lines_are_never_echoed_to_the_console():
+    """codex prints the inventory JSON on stdout; that belongs in the log, not the terminal."""
+    from speckfish.runner import is_noise_line
+    assert is_noise_line('{"features":[{"title":"A","description":"' + "x" * 300 + '"}]}')
+    assert is_noise_line("y" * 2000)
+    assert not is_noise_line("Reading the specification now")
+    assert not is_noise_line("{")
+
+
+def test_split_summary_states_what_was_created_and_where(tmp_path):
+    from speckfish.cli import split_summary
+    specs = []
+    for n in ("001-a", "002-b", "003-c"):
+        p = tmp_path / "specs" / n / "spec.md"
+        p.parent.mkdir(parents=True)
+        p.write_text("# s", encoding="utf-8")
+        specs.append({"path": str(p)})
+    out = {"run_id": "20261114-125940", "features": ["a", "b", "c"], "specs": specs,
+           "steps": {"split": {"duration_s": 80.0}, "specify-1": {"duration_s": 250.0}}}
+    text = split_summary(out, str(tmp_path))
+    assert text.startswith("3 spec(s) generated")
+    assert "specs/001-a/spec.md" in text
+    assert str(tmp_path) not in text                  # relative paths only
+    assert "{" not in text and "description" not in text
+    assert "2m05s" in text or "5m30s" in text
+
+
+def test_split_summary_for_inventory_only_points_at_features_json():
+    from speckfish.cli import split_summary
+    text = split_summary({"run_id": "r", "features": ["a", "b"], "inventory_only": True,
+                          "steps": {"split": {"duration_s": 75.0}}}, "C:/repo")
+    assert "2 feature(s) proposed" in text
+    assert "specs/features.json" in text
+    assert "nothing generated yet" in text
+
+
+def test_split_summary_warns_when_a_feature_wrote_nothing():
+    from speckfish.cli import split_summary
+    text = split_summary({"run_id": "r", "features": ["a", "b", "c"],
+                          "specs": [{"path": "specs/001-a/spec.md"}], "steps": {}}, "C:/repo")
+    assert "WARNING: 2 feature(s) produced no spec.md" in text
+
+
+# ---------- activity: what the agent is actually doing ----------
+def _codex_events():
+    """Real shape of `codex exec --json`, built with json.dumps so the escapes are right."""
+    shell = ('"C:\\WINDOWS\\System32\\WindowsPowerShell\v1.0\\powershell.exe" '
+             '-Command "Get-Content -Raw .agents/skills/speckit-specify/SKILL.md"')
+    return [json.dumps(e) for e in [
+        {"type": "thread.started", "thread_id": "t1"},
+        {"type": "turn.started"},
+        {"type": "item.completed",
+         "item": {"id": "i1", "type": "agent_message", "text": "I will read the skill."}},
+        {"type": "item.completed",
+         "item": {"id": "i2", "type": "command_execution", "command": shell}},
+        {"type": "item.completed",
+         "item": {"id": "i3", "type": "file_change",
+                  "changes": [{"path": "specs/001-api/spec.md", "kind": "add"}]}},
+        {"type": "turn.completed", "usage": {"input_tokens": 10, "output_tokens": 5}},
+    ]]
+
+
+CODEX_EVENTS = _codex_events()
+
+
+def test_codex_events_become_activity_lines():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("specify-1", enabled=True, stream=buf, plain_every=999, plain_only=True)
+    for line in CODEX_EVENTS:
+        p.feed(line)
+    out = buf.getvalue()
+    assert "$ Get-Content -Raw .agents/skills/speckit-specify/SKILL.md" in out
+    assert "wrote specs/001-api/spec.md" in out
+    assert "powershell.exe" not in out.split("\n")[0] or "Get-Content" in out
+    assert p.tokens == 5
+    p.stop()
+
+
+def test_claude_tool_use_becomes_activity():
+    import io
+
+    from speckfish.progress import Progress
+    buf = io.StringIO()
+    p = Progress("plan", enabled=True, stream=buf, plain_every=999, plain_only=True)
+    p.feed('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Read",'
+           '"input":{"file_path":"specs/002/spec.md"}}]}}')
+    p.feed('{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Agent",'
+           '"input":{"subagent_type":"egm:egm-zoom-out"}}]}}')
+    out = buf.getvalue()
+    assert "read specs/002/spec.md" in out
+    assert "subagent egm:egm-zoom-out" in out
+    p.stop()
+
+
+def test_codex_parse_output_reads_the_last_message():
+    from speckfish.harnesses import CodexHarness
+    parsed = CodexHarness.parse_output(None, "\n".join(CODEX_EVENTS), "", 0)
+    assert parsed["text_tail"] == "I will read the skill."
+    assert parsed["tokens"] == 5
+
+
+def test_shell_wrappers_are_stripped_from_activity():
+    from speckfish.progress import _short
+    assert _short(r'"C:\WINDOWS\System32\WindowsPowerShell\v1.0\powershell.exe" -NoProfile '
+                  r'-Command "Get-Content -Raw x.md"') == "Get-Content -Raw x.md"
+    assert _short('/bin/bash -lc "npm test"') == "npm test"
+    assert _short("Get-ChildItem specs") == "Get-ChildItem specs"
+    assert _short("x" * 300).endswith("…") and len(_short("x" * 300)) == 100
+
+
+# ---------- continuing an interrupted split ----------
+def test_split_only_reuses_the_saved_cut(tmp_path, monkeypatch):
+    """--only 3,4 must not pay for the inventory again, and must skip 1-2."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "features.json").write_text(json.dumps({"features": [
+        {"title": "A", "description": "da"}, {"title": "B", "description": "db"},
+        {"title": "C", "description": "dc"}, {"title": "D", "description": "dd"}]}),
+        encoding="utf-8")
+    ran = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        ran.append(step)
+        d = tmp_path / "specs" / f"00{step[-1]}-x"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=1.0,
+                          structured={"feature_dir": str(d)})
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    out = S.do_specify_split(cfg, "", None, harness=SimpleNamespace(name="codex"),
+                             only=[3, 4])
+    assert "specify-split" not in ran                     # no second inventory
+    assert ran == ["specify-3", "specify-4"]
+    assert out["features"] == ["C", "D"]
+    assert out["inventory_reused"].endswith("features.json")
+
+
+def test_split_only_without_a_saved_cut_says_what_to_do(tmp_path):
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+    out = S.do_specify_split(cfg, "", None, harness=SimpleNamespace(name="codex"), only=[3])
+    assert "not found" in out["error"] and "--inventory-only" in out["error"]
+
+
+def test_timeout_message_tells_you_how_to_raise_it():
+    from speckfish.runner import StepResult
+    res = StepResult(step="specify-3", ok=False, exit_code=124, duration_s=600.3,
+                     error=("timed out after 600s — the agent may simply need longer. Raise it with "
+                            "`speckfish config timeout.specify-3=1200`"))
+    assert "timed out after 600s" in res.error
+    assert "config timeout.specify-3" in res.error
+
+
+def test_split_dry_run_never_runs_the_agent(tmp_path, monkeypatch):
+    """Regression: `--split --only N --dry-run` executed the agent for real and wrote files."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    (tmp_path / "specs").mkdir()
+    (tmp_path / "specs" / "features.json").write_text(
+        json.dumps({"features": [{"title": "A", "description": "d"}]}), encoding="utf-8")
+    big = tmp_path / "brief.md"
+    big.write_text("x" * 5000, encoding="utf-8")
+    seen = []
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, dry_run=False, **kw):
+        seen.append((step, dry_run))
+        return StepResult(step=step, ok=True, exit_code=0, duration_s=0.0, error="dry-run")
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    S.do_specify_split(cfg, "@" + str(big), None, harness=SimpleNamespace(name="codex"),
+                       dry_run=True, only=[1])
+    assert seen == [("specify-1", True)]      # dry_run reached the step
+
+
+def test_activity_does_not_deadlock_the_reader_on_a_tty():
+    """Regression: activity() took the lock then called _clear()/_write(), which re-took it.
+
+    A plain Lock deadlocked the thread reading the agent's output, so the clock froze at the same
+    second and nothing else was ever read.
+    """
+    import io
+    import threading
+    import time
+
+    from speckfish.progress import Progress
+
+    class TTY(io.StringIO):
+        def isatty(self):
+            return True
+
+    buf = TTY()
+    p = Progress("specify-4", enabled=True, stream=buf, every=0.01)
+    p.start()
+    time.sleep(0.05)          # the status line must be on screen (_printed > 0) for the bug to bite
+    done = threading.Event()
+
+    def reader():
+        for i in range(20):
+            p.activity(f"$ command {i}")
+            time.sleep(0.005)
+        done.set()
+
+    thread = threading.Thread(target=reader, daemon=True)
+    thread.start()
+    assert done.wait(5), "activity() deadlocked the reader thread"
+    p.stop()
+    assert "command 19" in buf.getvalue()
+
+
+# ---------- EGM exploration (brainstorm / draft) ----------
+def test_brainstorm_prompt_names_the_skill_and_marks_hypotheses():
+    from speckfish.prompts import explore_prompt
+    text = explore_prompt("brainstorm", "an incident manager", Path("/tmp/a"))
+    assert text.startswith("/egm:egm-brainstorm an incident manager")
+    assert "hypothesis" in text and "do not ask questions" in text
+    assert "artifact directory" in text
+
+
+def test_brainstorm_requires_its_artifact(tmp_path, monkeypatch):
+    from speckfish.runner import StepResult, postprocess
+    res = StepResult(step="brainstorm", ok=True, exit_code=0, duration_s=1.0)
+    postprocess(res, "brainstorm", tmp_path, tmp_path)
+    assert res.ok is False and "concepts_brief.md" in res.error
+
+
+def test_brainstorm_reports_the_brief(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    cfg = Config(root=tmp_path)
+    cfg.egm_root = str(tmp_path)
+
+    def fake_run_step(cfg_, h, step, prompt, cwd, rid, egm, **kw):
+        art = cfg_.runs_dir / rid / "artifacts" / step
+        art.mkdir(parents=True, exist_ok=True)
+        (art / "concepts_brief.md").write_text("# Concepts", encoding="utf-8")
+        res = StepResult(step=step, ok=True, exit_code=0, duration_s=2.0,
+                         artifact_dir=str(art))
+        from speckfish.runner import postprocess as pp
+        pp(res, step, art, cwd)
+        return res
+
+    monkeypatch.setattr(S, "run_step", fake_run_step)
+    res = S.do_egm_explore(cfg, "brainstorm", "an idea", None,
+                           harness=SimpleNamespace(name="codex"))
+    assert res.ok is True
+    assert any(r.endswith("concepts_brief.md") for r in res.reports)
+
+
+def test_stored_defaults_do_not_pin_old_timeouts(tmp_path):
+    """An old config.json stored every default, so a better timeout never reached the project."""
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    (tmp_path / ".speckfish" / "config.json").write_text(json.dumps({
+        "language": "es", "timeouts": {"plan": 600, "specify": 600}}), encoding="utf-8")
+    cfg = Config.load(tmp_path)
+    assert cfg.language == "es"                      # real settings survive
+    assert cfg.timeouts["plan"] == DEFAULTS["timeouts"]["plan"]     # the stale 600 does not
+    assert cfg.timeouts["plan"] != 600
+
+
+def test_every_agent_step_has_its_own_timeout_default():
+    """clarify silently fell back to the generic 600s and timed out on a real 7-feature project.
+
+    A step with no default gets `timeouts.get(step, 600)` in run_step, so the steps that read the
+    whole spec and write a report ended up with the tightest budget of all (init uses 300).
+    """
+    agent_steps = {"specify", "plan", "tasks", "analyze", "review", "drift", "implement",
+                   "clarify", "checklist", "converge", "brainstorm", "draft"}
+    missing = sorted(agent_steps - set(DEFAULTS["timeouts"]))
+    assert not missing, f"no default timeout for {missing}: they would fall back to 600s"
+    assert DEFAULTS["timeouts"]["clarify"] >= 1200   # same order of work as analyze
+
+
+def test_clarify_timeout_default_reaches_a_project_that_never_set_it(tmp_path):
+    """The timeout block a project already stores must not hide a new default key."""
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    (tmp_path / ".speckfish" / "config.json").write_text(json.dumps({
+        "language": "es", "schema": Config.SCHEMA,
+        "timeouts": {"plan": 600, "review": 1200}}), encoding="utf-8")
+    cfg = Config.load(tmp_path)
+    assert cfg.timeouts["plan"] == 600                              # explicit stays explicit
+    assert cfg.timeouts["clarify"] == DEFAULTS["timeouts"]["clarify"]  # new key gets its default
+
+
+def test_explicit_timeout_is_kept_and_persisted(tmp_path):
+    from speckfish import cli as C
+    (tmp_path / ".speckfish").mkdir(parents=True)
+    assert C.main(["--root", str(tmp_path), "config", "timeout.plan=2400"]) == 0
+    stored = json.loads((tmp_path / ".speckfish" / "config.json").read_text(encoding="utf-8"))
+    assert stored["timeouts"]["plan"] == 2400 and stored["schema"] == Config.SCHEMA
+    assert Config.load(tmp_path).timeouts["plan"] == 2400
+
+
+def test_save_does_not_write_default_timeouts(tmp_path):
+    cfg = Config(root=tmp_path)
+    cfg.language = "es"
+    stored = json.loads(cfg.save().read_text(encoding="utf-8"))
+    assert "timeouts" not in stored                  # defaults stay in code, not in the file
+
+
+def test_codex_is_told_not_to_use_apply_patch(tmp_path):
+    """A real run spent 6 of its 10 minutes retrying a non-existent apply_patch."""
+    from speckfish.harnesses import CODEX_FILE_HINT, CodexHarness
+    cfg = _cfg(tmp_path)
+    argv = CodexHarness(cfg).build("plan", "do the thing", tmp_path, tmp_path, None,
+                                   None, 60, None).argv
+    prompt = argv[-1]
+    assert "do the thing" in prompt and CODEX_FILE_HINT in prompt
+    assert "no apply_patch" in prompt and "UTF8Encoding" in prompt
+
+
+def test_batch_keeps_its_own_detail_file(tmp_path, monkeypatch):
+    """state.json is keyed by step name: seven features would overwrite each other."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: StepResult(step="plan", ok=True,
+                                                                exit_code=0, duration_s=2.0))
+    feats = S.features_with_spec(cfg)
+    batch = S.do_feature_batch(cfg, "plan", feats, harness=SimpleNamespace(name="fake"))
+    written = cfg.runs_dir / batch["run_id"] / "batch.json"
+    assert written.exists()
+    saved = json.loads(written.read_text(encoding="utf-8"))
+    assert list(saved["steps"]) == ["001-a", "002-b"]      # one entry per feature
+
+
+def test_codex_is_told_not_to_install_packages():
+    from speckfish.harnesses import CODEX_FILE_HINT
+    assert "Do not install packages" in CODEX_FILE_HINT
+    assert "Get-Content -Raw" in CODEX_FILE_HINT
+
+
+def test_codex_hint_explains_the_mojibake_trap():
+    """PowerShell 5.1 on this machine reports ibm850: UTF-8 files look corrupt and a run spent
+    4 of its 15 minutes grepping for mojibake that was never on disk."""
+    from speckfish.harnesses import CODEX_FILE_HINT
+    assert "ibm850" in CODEX_FILE_HINT
+    assert "UTF8Encoding" in CODEX_FILE_HINT        # how to write accents safely
+    assert "never rewrite a file to fix it" in CODEX_FILE_HINT
+    assert "Do not install packages" in CODEX_FILE_HINT
+
+
+def test_clarify_reports_its_questions_and_does_not_touch_the_spec(tmp_path):
+    """Headless clarify cannot answer: it must say how many questions it left and where."""
+    from speckfish.runner import StepResult, postprocess
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "questions.md").write_text(
+        "- ¿A o B? — Importa porque X. — Supuesto: A.\n- ¿C o D? — Importa porque Y. — Supuesto: C.\n",
+        encoding="utf-8")
+    res = StepResult(step="clarify", ok=True, exit_code=0, duration_s=3.0)
+    postprocess(res, "clarify", art, tmp_path)
+    assert res.ok is True
+    assert "2 clarification question(s)" in res.verdict
+    assert "NOT modified" in res.verdict
+    assert any(r.endswith("questions.md") for r in res.reports)
+
+
+def test_clarify_without_questions_file_is_a_failure(tmp_path):
+    from speckfish.runner import StepResult, postprocess
+    art = tmp_path / "art"
+    art.mkdir()
+    res = StepResult(step="clarify", ok=True, exit_code=0, duration_s=3.0)
+    postprocess(res, "clarify", art, tmp_path)
+    assert res.ok is False and "questions.md" in res.error
+
+
+# ---------- composite steps: chain, do not fuse ----------
+def test_plan_with_clarify_stops_when_questions_are_left(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    (tmp_path / ".specify").mkdir()
+    (tmp_path / ".specify" / "feature.json").write_text('{"feature_directory": "specs/001-x"}',
+                                                       encoding="utf-8")
+    planned = []
+    monkeypatch.setattr(S, "do_skill", lambda *a, **k: StepResult(
+        step="clarify", ok=True, exit_code=0, duration_s=1.0,
+        verdict="3 clarification question(s), each with the default it assumed"))
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: planned.append(1) or StepResult(
+        step="plan", ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    code = C.main(["--root", str(tmp_path), "plan", "stack", "--feature", "001", "--with-clarify"])
+    assert code == 0 and planned == []          # stopped: a human must read the questions
+
+
+def test_plan_with_clarify_and_accept_defaults_continues(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    (tmp_path / "specs" / "001-x").mkdir(parents=True)
+    (tmp_path / "specs" / "001-x" / "spec.md").write_text("# s", encoding="utf-8")
+    planned = []
+    monkeypatch.setattr(S, "do_skill", lambda *a, **k: StepResult(
+        step="clarify", ok=True, exit_code=0, duration_s=1.0, verdict="2 questions"))
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: planned.append(1) or StepResult(
+        step="plan", ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    code = C.main(["--root", str(tmp_path), "plan", "stack", "--feature", "001",
+                   "--with-clarify", "--accept-defaults"])
+    assert code == 0 and planned == [1]         # the user chose the defaults
+
+
+def test_review_with_analyze_runs_analyze_first(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    order = []
+    monkeypatch.setattr(S, "do_skill", lambda cfg, name, *a, **k: order.append(name) or StepResult(
+        step=name, ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(S, "do_review", lambda *a, **k: order.append("review") or StepResult(
+        step="review", ok=True, exit_code=0, duration_s=1.0))
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    C.main(["--root", str(tmp_path), "review", "specs/001-x/plan.md", "--with-analyze"])
+    assert order == ["analyze", "review"]
+
+
+def test_all_features_can_skip_what_is_already_done(tmp_path, monkeypatch):
+    """Re-running a batch after a stop must not redo (and re-pay) finished features."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b", "003-c"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    (tmp_path / "specs" / "001-a" / "plan.md").write_text("# plan", encoding="utf-8")
+    (tmp_path / "specs" / "002-b" / "plan.md").write_text("# plan", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    ran = []
+    monkeypatch.setattr(S, "do_plan", lambda *a, **k: ran.append(k.get("feature")) or StepResult(
+        step="plan", ok=True, exit_code=0, duration_s=1.0))
+    batch = S.do_feature_batch(cfg, "plan", S.features_with_spec(cfg),
+                               harness=SimpleNamespace(name="fake"), skip_existing="plan.md")
+    assert ran == ["003-c"]                       # only the missing one
+    assert batch["skipped"] == ["001-a", "002-b"]
+
+
+def test_review_batch_walks_every_feature(tmp_path, monkeypatch):
+    """`review --all-features` exists so nobody has to write a PowerShell loop."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+        (d / "plan.md").write_text("# p", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    seen = []
+
+    def fake_review(cfg_, target, run_id=None, harness=None, profile=None, stage="uninterrupted",
+                    stream=True, dry_run=False, default_file="plan.md", interactive=False,
+                    step_name="review"):
+        seen.append((Path(target).parent.name, default_file, step_name))
+        return StepResult(step=step_name, ok=True, exit_code=0, duration_s=5.0, majors=2, nits=3)
+
+    monkeypatch.setattr(S, "do_review", fake_review)
+    batch = S.do_review_batch(cfg, S.features_with_spec(cfg), harness=SimpleNamespace(name="copilot"))
+    assert seen == [("001-a", "plan.md", "review-001-a"), ("002-b", "plan.md", "review-002-b")]
+    assert batch["done"] is True
+    assert (cfg.runs_dir / batch["run_id"] / "batch-review.json").exists()
+
+
+def test_review_batch_uses_spec_when_there_is_no_plan(tmp_path, monkeypatch):
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    used = []
+    monkeypatch.setattr(S, "do_review", lambda *a, **k: used.append(k.get("default_file"))
+                        or StepResult(step="review", ok=True, exit_code=0, duration_s=1.0))
+    S.do_review_batch(Config(root=tmp_path), S.features_with_spec(Config(root=tmp_path)),
+                      harness=SimpleNamespace(name="copilot"))
+    assert used == ["spec.md"]
+
+
+# ---------- uniform resume: --feature / --only / --from-feature everywhere ----------
+def _proj(tmp_path, n=4):
+    for i in range(1, n + 1):
+        d = tmp_path / "specs" / f"00{i}-f{i}"
+        d.mkdir(parents=True, exist_ok=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    return Config(root=tmp_path)
+
+
+def test_only_selects_features_by_position(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    cfg = _proj(tmp_path)
+    got = select_features(cfg, NS(feature=None, only="2,4", from_feature=None))
+    assert [f.name for f in got] == ["002-f2", "004-f4"]
+
+
+def test_from_feature_selects_the_rest(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    cfg = _proj(tmp_path)
+    got = select_features(cfg, NS(feature=None, only=None, from_feature=3))
+    assert [f.name for f in got] == ["003-f3", "004-f4"]
+
+
+def test_feature_wins_over_only(tmp_path):
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    cfg = _proj(tmp_path)
+    got = select_features(cfg, NS(feature="002", only="4", from_feature=1))
+    assert [f.name for f in got] == ["002-f2"]
+
+
+def test_only_rejects_junk():
+    from types import SimpleNamespace as NS
+
+    from speckfish.cli import select_features
+    with pytest.raises(SystemExit):
+        select_features(Config(root=Path(".")), NS(feature=None, only="2,x", from_feature=None))
+
+
+def test_review_respects_only(tmp_path, monkeypatch):
+    from speckfish import cli as C
+    from speckfish import steps as S
+    _proj(tmp_path)
+    seen = []
+
+    def fake_review_batch(cfg_, feats, *a, **k):
+        seen.extend(f.name for f in feats)
+        return {"run_id": "r", "action": "review", "steps": {}, "order": seen, "done": True}
+
+    monkeypatch.setattr(S, "do_review_batch", fake_review_batch)
+    monkeypatch.setattr(C, "get_harness", lambda *a, **k: SimpleNamespace(name="fake"))
+    assert C.main(["--root", str(tmp_path), "review", "--only", "1,3"]) == 0
+    assert seen == ["001-f1", "003-f3"]
+
+
+def test_every_feature_step_exposes_the_same_flags():
+    from speckfish.cli import build_parser
+    p = build_parser()
+    for cmd, subs in p._subparsers._group_actions[0].choices.items():
+        # not feature-oriented: setup, inspection, exploration over a material, or split by task
+        if cmd in ("init", "doctor", "config", "features", "runs", "show", "report",
+                   "editors", "pipeline", "specify", "constitution", "brainstorm", "draft",
+                   "go", "next", "revise", "status"):
+            continue
+        opts = {a.dest for a in subs._actions}
+        assert {"all_features", "only", "from_feature", "skip_existing"} <= opts, cmd
+
+
+def test_tasks_being_done_does_not_skip_analyze(tmp_path, monkeypatch):
+    """analyze owns no file: using tasks.md as its marker made it skip every feature."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    (d / "tasks.md").write_text("# t", encoding="utf-8")     # tasks already ran
+    cfg = Config(root=tmp_path)
+    ran = []
+    monkeypatch.setattr(S, "do_skill", lambda cfg_, name, *a, **k: ran.append(name) or StepResult(
+        step=name, ok=True, exit_code=0, duration_s=1.0))
+    from speckfish.cli import STEP_ARTIFACT
+    assert STEP_ARTIFACT["analyze"] is None
+    S.do_feature_batch(cfg, "analyze", S.features_with_spec(cfg),
+                       harness=SimpleNamespace(name="fake"),
+                       skip_existing=STEP_ARTIFACT["analyze"])
+    assert ran == ["analyze"]                                # it ran despite tasks.md
+
+
+def test_batch_gives_each_feature_its_own_artifact_folder(tmp_path, monkeypatch):
+    """clarify --all-features wrote one questions.md for 7 features: the last one won."""
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    dirs = []
+
+    def fake_skill(cfg_, skill, args="", run_id=None, harness=None, stream=True, dry_run=False,
+                   feature=None, step_name=None):
+        dirs.append(step_name)
+        return StepResult(step=skill, ok=True, exit_code=0, duration_s=1.0,
+                          artifact_dir=str(cfg_.runs_dir / str(run_id) / "artifacts" / str(step_name)))
+
+    monkeypatch.setattr(S, "do_skill", fake_skill)
+    batch = S.do_feature_batch(cfg, "clarify", S.features_with_spec(cfg),
+                               harness=SimpleNamespace(name="fake"))
+    assert dirs == ["clarify-001-a", "clarify-002-b"]
+    a = batch["steps"]["001-a"]["artifact_dir"]
+    b = batch["steps"]["002-b"]["artifact_dir"]
+    assert a != b and a.endswith("clarify-001-a") and b.endswith("clarify-002-b")
+
+
+def test_step_log_is_named_after_the_feature(tmp_path):
+    """A batch kept one log for all features, so there was nothing to watch while it ran."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import runner as R
+    from speckfish.config import Config as Cfg
+
+    cfg = Cfg(root=tmp_path)
+    rid = "20260101-000000"
+    (tmp_path / ".speckfish" / "runs" / rid).mkdir(parents=True)
+    inv = NS(argv=["cmd", "/c", "echo ok"], env={})
+    h = NS(name="fake", build=lambda **k: inv)
+    monkeypatch_h = None  # noqa: F841  (kept for readability of the stub above)
+    res = R.run_step(cfg, h, "clarify", "p", tmp_path, rid, None, dry_run=True,
+                     artifact_name="clarify-001-a")
+    # dry-run reports the argv, but the artifact folder already proves the label reached run_step
+    assert Path(res.artifact_dir).name == "clarify-001-a"
+
+
+def test_a_feature_label_keeps_the_step_timeout(tmp_path):
+    """`review-001-foo` fell through to the generic 600 s instead of review's own budget."""
+    from speckfish.config import Config as Cfg
+    from speckfish.runner import _base_step
+
+    cfg = Cfg(root=tmp_path)
+    assert cfg.timeouts["review"] >= 1800
+    assert _base_step(cfg, "review-001-api-base-v1-security") == "review"
+    assert _base_step(cfg, "tasks-007-whatever") == "tasks"
+    assert _base_step(cfg, "plan") == "plan"
+    assert _base_step(cfg, "unknown-step") == "unknown-step"
+
+
+def test_review_skip_existing_does_not_rebuy_finished_features(tmp_path):
+    """After a quota stop, re-running the batch must not pay again for reviews already done."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    d2 = tmp_path / "specs" / "002-b"
+    d2.mkdir(parents=True)
+    (d2 / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    old = cfg.runs_dir / "20260101-000000"
+    old.mkdir(parents=True)
+    (old / "batch-review.json").write_text(json.dumps({
+        "steps": {"001-a": {"ok": True}}}), encoding="utf-8")
+    assert S.review_already_done(cfg, "001-a") is True
+    assert S.review_already_done(cfg, "002-b") is False
+
+    ran = []
+    monkeypatch_target = S.do_review
+    S.do_review = lambda cfg_, target, *a, **k: ran.append(Path(target).parent.name) or StepResult(
+        step="review", ok=True, exit_code=0, duration_s=1.0)
+    try:
+        batch = S.do_review_batch(cfg, S.features_with_spec(cfg),
+                                  harness=NS(name="fake"), skip_existing=True)
+    finally:
+        S.do_review = monkeypatch_target
+    assert ran == ["002-b"]              # 001 already paid for
+    assert batch["skipped"] == ["001-a"]
+
+
+def test_a_quota_failure_switches_to_the_fallback_harness(tmp_path):
+    """The user's rule: if Copilot runs out, finish the night with codex."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    (d / "plan.md").write_text("# p", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    used = []
+
+    def fake_review(cfg_, target, run_id=None, harness=None, **k):
+        used.append(harness.name)
+        if harness.name == "copilot":
+            return StepResult(step="review", ok=False, exit_code=3, duration_s=5.0,
+                              error_kind="quota", error="ran out of quota")
+        return StepResult(step="review", ok=True, exit_code=0, duration_s=5.0, majors=1)
+
+    # CI has no agent installed, so the fallback harness must be stubbed too
+    orig_review, orig_h = S.do_review, S.get_harness
+    S.do_review = fake_review
+    S.get_harness = lambda cfg_, name=None: NS(name=name or "copilot")
+    try:
+        batch = S.do_review_batch(cfg, S.features_with_spec(cfg),
+                                  harness=NS(name="copilot"), fallback="codex")
+    finally:
+        S.do_review, S.get_harness = orig_review, orig_h
+    assert used == ["copilot", "codex"]
+    assert batch["done"] is True
+    assert batch["switched"] == ["001-a -> codex"]
+
+
+def test_a_real_error_does_not_switch_harness(tmp_path):
+    """Only quota/auth switches: a broken spec would fail on the other harness too."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    d = tmp_path / "specs" / "001-a"
+    d.mkdir(parents=True)
+    (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    used = []
+    orig, orig_h = S.do_review, S.get_harness
+    S.do_review = lambda cfg_, t, run_id=None, harness=None, **k: (
+        used.append(harness.name) or StepResult(step="review", ok=False, exit_code=2,
+                                                duration_s=1.0, error_kind="agent"))
+    S.get_harness = lambda cfg_, name=None: NS(name=name or "copilot")
+    try:
+        batch = S.do_review_batch(cfg, S.features_with_spec(cfg),
+                                  harness=NS(name="copilot"), fallback="codex")
+    finally:
+        S.do_review, S.get_harness = orig, orig_h
+    assert used == ["copilot"]          # no retry
+    assert batch["switched"] == []
+    assert batch["done"] is False
+
+
+def test_fallback_flag_works_after_the_subcommand():
+    """Global flags may come after the verb; --fallback has to be moved there like --harness."""
+    from speckfish.cli import build_parser, normalize_argv
+    argv = normalize_argv(["review", "--all-features", "--fallback", "codex"])
+    assert argv[:2] == ["--fallback", "codex"]
+    args = build_parser().parse_args(argv)
+    assert args.fallback == "codex"
+
+
+def test_a_dry_run_batch_does_not_count_as_done(tmp_path):
+    """--dry-run batches wrote ok=True, so --skip-existing skipped reviews that never ran."""
+    from speckfish import steps as S
+    cfg = Config(root=tmp_path)
+    old = cfg.runs_dir / "20260101-000000"
+    old.mkdir(parents=True)
+    (old / "batch-review.json").write_text(json.dumps({"steps": {
+        "001-a": {"ok": True, "error": "dry-run"},
+        "002-b": {"ok": True, "error": ""},
+    }}), encoding="utf-8")
+    assert S.review_already_done(cfg, "001-a") is False     # dry-run, not really reviewed
+    assert S.review_already_done(cfg, "002-b") is True      # real run
+
+
+def test_a_quota_stop_exits_3_not_2():
+    """429 is an environment problem: CI must be able to tell it from a failed step."""
+    from speckfish.cli import batch_exit_code
+    assert batch_exit_code({"stopped_at": "003-x",
+                            "steps": {"003-x": {"error_kind": "quota"}}}) == 3
+    assert batch_exit_code({"stopped_at": "003-x",
+                            "steps": {"003-x": {"error_kind": "agent"}}}) == 2
+    assert batch_exit_code({"stopped_at": None, "steps": {}}) == 0
+
+
+def test_batch_sums_credits_too(tmp_path, monkeypatch):
+    """Copilot bills in credits; total_cost was only summing dollars, so it always read 0.0."""
+    from types import SimpleNamespace as NS
+
+    from speckfish import steps as S
+    from speckfish.runner import StepResult
+    for n in ("001-a", "002-b"):
+        d = tmp_path / "specs" / n
+        d.mkdir(parents=True)
+        (d / "spec.md").write_text("# s", encoding="utf-8")
+    cfg = Config(root=tmp_path)
+    orig = S.do_skill
+    S.do_skill = lambda *a, **k: StepResult(step="tasks", ok=True, exit_code=0, duration_s=1.0,
+                                            cost=17.1, cost_unit="credits")
+    try:
+        batch = S.do_feature_batch(cfg, "tasks", S.features_with_spec(cfg),
+                                   harness=NS(name="fake"))
+    finally:
+        S.do_skill = orig
+    assert round(batch["total_cost"], 1) == 34.2
+
+
+def test_an_agent_that_finishes_but_never_exits_is_closed_by_inactivity(tmp_path, monkeypatch):
+    """EGM's last pass writes its reports and then keeps the process alive forever."""
+    import sys
+    from types import SimpleNamespace as NS
+
+    from speckfish import runner as R
+    from speckfish.config import Config as Cfg
+
+    monkeypatch.setenv("SPECKFISH_IDLE_SECONDS", "2")
+    cfg = Cfg(root=tmp_path)
+    rid = "20260101-000000"
+    art = tmp_path / ".speckfish" / "runs" / rid / "artifacts" / "review-001-a"
+    art.mkdir(parents=True)
+    (art / "consolidated_review_report.md").write_text("# ok", encoding="utf-8")
+    # writes nothing, then sleeps far longer than the idle limit
+    script = "import time; time.sleep(40)"
+    h = NS(name="fake", parse_output=lambda out, err, code: {},
+           build=lambda **k: NS(argv=[sys.executable, "-c", script], env={}))
+    res = R.run_step(cfg, h, "review", "p", tmp_path, rid, None, progress=False,
+                     artifact_name="review-001-a")
+    assert res.ok is True                       # the report exists: the work is done
+    assert res.duration_s < 30                  # not waiting for the 600 s default
+    assert "stayed alive" in res.error          # and it says why
+
+
+def test_implement_that_writes_nothing_is_not_ok(tmp_path, monkeypatch):
+    """The agent answered "preparation finished" and wrote no code: that is a failure."""
+    import subprocess as sp
+
+    from speckfish import runner as R
+    art = tmp_path / "art"
+    art.mkdir()
+
+    class _Out:
+        stdout = ""            # clean tree: nothing changed
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=120.0)
+    R.postprocess(res, "implement", art, tmp_path)
+    assert res.ok is False
+    assert "wrote no code" in res.error
+
+
+def test_implement_that_changes_files_is_ok(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    from speckfish import runner as R
+    art = tmp_path / "art"
+    art.mkdir()
+
+    class _Out:
+        stdout = " M src/Program.cs\n?? tests/Unit.cs\n"
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=120.0)
+    R.postprocess(res, "implement", art, tmp_path)
+    assert res.ok is True
+
+
+def test_the_feature_is_named_in_prompts_for_copilot(tmp_path):
+    """Without the feature dir the agent follows .specify/feature.json and does the wrong one."""
+    from speckfish import prompts as P
+    fdir = tmp_path / "specs" / "001-api-base-v1-security"
+    fdir.mkdir(parents=True)
+    text = P.skill_prompt_for("copilot", "implement", "", tmp_path / "art", tmp_path,
+                              tmp_path, feature_dir=fdir)
+    assert "001-api-base-v1-security" in text
+    assert "Work ONLY on the feature" in text
+    assert "write the code" in text.lower()
+
+
+def test_build_output_does_not_count_as_implementing(tmp_path, monkeypatch):
+    """dotnet build only touches obj/: that is not the feature being implemented."""
+    import subprocess as sp
+
+    from speckfish import runner as R
+
+    class _Out:
+        stdout = (" M src/Api/obj/Debug/net10.0/Api.AssemblyInfo.cs\n"
+                  " M src/Api/bin/Debug/net10.0/Api.dll\n")
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    assert R._git_dirty(tmp_path) is False
+
+    class _Real:
+        stdout = " M src/Api/Program.cs\n"
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Real())
+    assert R._git_dirty(tmp_path) is True
+
+
+def _feat_with_tasks(root, done=0, pending=5):
+    d = root / "specs" / "001-a"
+    d.mkdir(parents=True, exist_ok=True)
+    lines = ["# Tasks"] + [f"- [x] T{i:03d}" for i in range(done)]
+    lines += [f"- [ ] T{i:03d}" for i in range(done, done + pending)]
+    (d / "tasks.md").write_text("\n".join(lines), encoding="utf-8")
+    (root / ".specify").mkdir(exist_ok=True)
+    (root / ".specify" / "feature.json").write_text(
+        json.dumps({"feature_directory": "specs/001-a"}), encoding="utf-8")
+    return d
+
+
+def test_task_progress_reads_the_active_feature(tmp_path):
+    from speckfish.runner import task_progress
+    _feat_with_tasks(tmp_path, done=3, pending=7)
+    assert task_progress(tmp_path) == (3, 10)
+
+
+def test_implement_that_ticks_no_task_is_not_ok(tmp_path, monkeypatch):
+    """871 tasks were pending after four implements that all reported OK."""
+    import subprocess as sp
+
+    from speckfish import runner as R
+    _feat_with_tasks(tmp_path, done=0, pending=5)
+    art = tmp_path / "art"
+
+    class _Out:
+        stdout = " M src/Program.cs\n"          # something changed, so _git_dirty passes
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=600.0)
+    R.postprocess(res, "implement", art, tmp_path, before=(0, 5))
+    assert res.ok is False
+    assert "without ticking a single task" in res.error
+    assert (res.tasks_done, res.tasks_total) == (0, 5)
+
+
+def test_implement_that_ticks_tasks_reports_progress(tmp_path, monkeypatch):
+    import subprocess as sp
+
+    from speckfish import runner as R
+    d = _feat_with_tasks(tmp_path, done=0, pending=5)
+    art = tmp_path / "art"
+
+    class _Out:
+        stdout = " M src/Program.cs\n"
+
+    monkeypatch.setattr(sp, "run", lambda *a, **k: _Out())
+    (d / "tasks.md").write_text("\n".join(["# Tasks"] + [f"- [x] T{i:03d}" for i in range(5)]),
+                                encoding="utf-8")
+    res = R.StepResult(step="implement", ok=True, exit_code=0, duration_s=600.0)
+    R.postprocess(res, "implement", art, tmp_path, before=(0, 5))
+    assert res.ok is True
+    assert res.verdict == "5/5 tasks done"
+
+
+def test_implement_prompt_demands_ticking_the_checkbox(tmp_path):
+    """Ten tasks were done in the repo and none ticked, so the next run would redo them."""
+    from speckfish import prompts as P
+    text = P.SKILL_SPECS["implement"]["headless_note"].lower()
+    assert "checkbox" in text and "- [x]" in text
