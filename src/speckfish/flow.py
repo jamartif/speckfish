@@ -95,7 +95,8 @@ def next_step(cfg: Config, feature: Path, implement: bool = False, analyze: bool
         return "plan", "spec.md has no plan.md"
     if not st["tasks"]:
         return "tasks", "plan.md has no tasks.md"
-    if analyze and not st["analyzed"]:
+    # analyze is the cheap check *before* a review: once the design was reviewed it has nothing to add
+    if analyze and not st["analyzed"] and not st["review"]:
         return "analyze", "spec, plan and tasks were never cross-checked"
     if not st["review_current"]:
         return "review", ("never reviewed" if not st["review"]
@@ -126,14 +127,15 @@ def status_rows(cfg: Config) -> list[dict]:
     return rows
 
 
-def total_cost(cfg: Config) -> tuple[float, str | None]:
-    total, unit = 0.0, None
+def total_cost(cfg: Config) -> dict[str, float]:
+    """What every run spent, per unit: usd and credits are different currencies and are never added."""
+    totals: dict[str, float] = {}
     for run in _runs_newest_first(cfg):
         summary = S.run_summary(cfg, run.name)
         if summary.get("cost"):
-            total += float(summary["cost"])
-            unit = unit or summary.get("cost_unit")
-    return round(total, 3), unit
+            unit = summary.get("cost_unit") or "usd"
+            totals[unit] = round(totals.get(unit, 0.0) + float(summary["cost"]), 3)
+    return totals
 
 
 # ---------------- revise ----------------

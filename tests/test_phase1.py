@@ -111,9 +111,9 @@ def test_status_rows_and_total_cost(tmp_path):
     assert rows[0]["tasks_done"] == 1 and rows[0]["tasks_total"] == 2
     assert rows[1]["next"]["kind"] == "plan"
     assert rows[1]["next"]["command"] == "speckfish plan --feature 002-b"
-    assert flow.total_cost(cfg)[0] == 2.0
-    text = C.status_summary(rows, 2.0, "usd")
-    assert "001-a" in text and "->  speckfish plan --feature 002-b" in text and "spent so far" in text
+    assert flow.total_cost(cfg) == {"usd": 2.0}
+    text = C.status_summary(rows, {"usd": 2.0, "credits": 4.5})
+    assert "001-a" in text and "->  speckfish plan --feature 002-b" in text and "spent so far: 2 usd + 4.5 credits" in text
 
 
 # ---- revise ----
@@ -395,3 +395,21 @@ def test_the_new_commands_have_handlers():
     for name in ("go", "next", "revise", "status"):
         assert name in C.HANDLERS
         C.build_parser().parse_args([name])
+
+
+def test_costs_in_different_units_are_never_added(tmp_path):
+    cfg = _cfg(tmp_path)
+    for rid, unit, cost in (("20260101-000001", "usd", 1.5), ("20260101-000002", "credits", 30.0)):
+        res = StepResult(step="plan-x", ok=True, exit_code=0, duration_s=1.0, cost=cost, cost_unit=unit)
+        R.record_state(cfg, R.run_dir_for(cfg, rid), rid, res, "plan-x", NS(name="fake"),
+                       datetime.now().isoformat(timespec="seconds"))
+    assert flow.total_cost(cfg) == {"usd": 1.5, "credits": 30.0}
+
+
+def test_analyze_is_not_asked_once_the_design_was_reviewed(tmp_path):
+    """A project with reviews recorded but no analyze record must not be sent back to analyze."""
+    cfg = _cfg(tmp_path)
+    feat = _feature(tmp_path, plan_md="# p", tasks_md="- [ ] T1\n")
+    _record(cfg, "review-001-a", blockers=0)
+    assert flow.next_step(cfg, feat) == (None, "design reviewed with no blockers; "
+                                                "add --implement --yes to write the code")

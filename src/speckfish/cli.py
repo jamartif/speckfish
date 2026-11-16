@@ -1044,7 +1044,7 @@ def cmd_revise(run: Run) -> int:
     return flow_exit_code(out)
 
 
-def status_summary(rows: list[dict], spent: float, unit: str | None) -> str:
+def status_summary(rows: list[dict], spent: dict[str, float]) -> str:
     if not rows:
         return "(no features: run `speckfish go \"<idea>\"`)"
     lines = []
@@ -1060,15 +1060,15 @@ def status_summary(rows: list[dict], spent: float, unit: str | None) -> str:
         lines.append(f"  next: {nxt['why']}" + (f"  ->  {nxt['command']}" if nxt["command"] else ""))
     if spent:
         lines.append("")
-        lines.append(f"spent so far: {spent} {unit or ''}".rstrip())
+        lines.append("spent so far: " + " + ".join(f"{v:g} {u}" for u, v in spent.items()))
     return "\n".join(lines)
 
 
 def cmd_status(run: Run) -> int:
     from . import flow
     rows = flow.status_rows(run.cfg)
-    spent, unit = flow.total_cost(run.cfg)
-    run.emit({"features": rows, "spent": spent, "unit": unit}, status_summary(rows, spent, unit))
+    spent = flow.total_cost(run.cfg)
+    run.emit({"features": rows, "spent": spent}, status_summary(rows, spent))
     return EXIT_OK
 
 
