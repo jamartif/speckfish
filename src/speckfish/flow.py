@@ -16,7 +16,7 @@ from .runner import StepResult, run_step
 from .workspace import count_tasks, next_chunk, parse_tasks
 
 MAX_STEPS_PER_FEATURE = 24      # a guard against a loop that never settles
-CHUNK_DEFAULT = 15              # tasks per implement call: a whole feature (90-170 tasks) is too much
+CHUNK_DEFAULT = 5               # tasks per implement call: a whole feature (90-170 tasks) is too much
 
 
 # ---------------- what earlier runs recorded ----------------

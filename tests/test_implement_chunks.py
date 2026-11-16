@@ -267,7 +267,7 @@ def test_implement_passes_the_chunk_options_through(project, monkeypatch):
     assert seen["feature"] == "001-a"
 
 
-def test_the_default_chunk_is_fifteen(project):
+def test_the_default_chunk_is_five(project):
     args = C.build_parser().parse_args(["implement", "--yes"])
-    assert args.chunk == 15 and args.max_chunks == 0
-    assert C.build_parser().parse_args(["go", "--implement", "--yes"]).chunk == 15
+    assert args.chunk == 5 and args.max_chunks == 0
+    assert C.build_parser().parse_args(["go", "--implement", "--yes"]).chunk == 5

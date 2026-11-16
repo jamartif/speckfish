@@ -5,7 +5,7 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
-- `implement` works in chunks (`--chunk N`, default 15; `--max-chunks`, `--budget`). One agent call over
+- `implement` works in chunks (`--chunk N`, default 5; `--max-chunks`, `--budget`). One agent call over
   a whole `tasks.md` (92-173 tasks on a real project) ended after "fixing the critical points", wrote part
   of the code and ticked nothing. Now each call gets the next N pending tasks by id, must tick each as it
   finishes, and a cheap `reconcile` pass ticks the ones whose code exists but were left unticked.

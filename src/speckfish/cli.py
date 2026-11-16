@@ -449,8 +449,8 @@ def build_parser() -> argparse.ArgumentParser:
         if spec.get("dangerous"):
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
-            sp.add_argument("--chunk", type=int, default=15,
-                            help="tasks per agent call (default: 15; 0 = every pending task in one call)")
+            sp.add_argument("--chunk", type=int, default=5,
+                            help="tasks per agent call (default: 5; 0 = every pending task in one call)")
             sp.add_argument("--max-chunks", type=int, default=0,
                             help="stop after this many chunks (default: until every task is ticked)")
             sp.add_argument("--budget", type=float, default=None,
@@ -467,8 +467,8 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--yes", action="store_true", help="confirm that --implement writes code")
             sp.add_argument("--no-analyze", action="store_true", help="skip the analyze step")
             sp.add_argument("--no-drift", action="store_true", help="skip drift after implement")
-            sp.add_argument("--chunk", type=int, default=15,
-                            help="tasks per implement call (default: 15; 0 = all in one call)")
+            sp.add_argument("--chunk", type=int, default=5,
+                            help="tasks per implement call (default: 5; 0 = all in one call)")
 
     sp = sub.add_parser("go", help="idea -> specs -> plans -> tasks -> reviewed design (-> code), resumable")
     sp.add_argument("description", nargs="?", default="",

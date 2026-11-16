@@ -230,7 +230,7 @@ speckfish revise --max-rounds 2                              # review -> fix the
 is the same command to start and to resume. A review only counts while the design has not changed
 since; `revise` hands the review report back to the agent, which fixes the Blockers (add `--majors`
 for the Majors too) and the review runs again, up to `--max-rounds`. With `--implement` it also
-implements in chunks of `--chunk` tasks (default 15, each ticked in `tasks.md`), checks drift and, if the code diverged, appends the missing work (`converge`) and
+implements in chunks of `--chunk` tasks (default 5, each ticked in `tasks.md`), checks drift and, if the code diverged, appends the missing work (`converge`) and
 implements once more. `--budget` stops before the next step once that much was spent. Exit codes:
 `0` clean · `1` blockers left after the rounds · `2` a step failed · `3` quota, credentials or budget.
 
