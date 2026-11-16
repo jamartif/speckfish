@@ -192,7 +192,8 @@ def test_a_plain_review_runs_the_review(project, monkeypatch):
     assert seen == [None]                    # the default target is resolved inside do_review
 
 
-def test_a_handler_error_is_an_environment_exit(project, capsys):
+def test_a_handler_error_is_an_environment_exit(project, capsys, monkeypatch):
+    monkeypatch.setattr(C, "get_harness", lambda cfg, name=None: NS(name="fake"))
     code = C.main(["--root", str(project), "--json", "review", "missing/plan.md"])
     assert code == C.EXIT_ENV
     assert "does not exist" in capsys.readouterr().out
