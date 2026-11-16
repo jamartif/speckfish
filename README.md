@@ -215,6 +215,27 @@ review works with any of the three agents regardless of which Spec Kit integrati
 
 ## Usage
 
+### The short way: `go`
+
+```bash
+speckfish go "a task CLI in Python" --stack "stdlib only"   # idea -> specs -> plans -> tasks -> analyze -> review/revise
+speckfish go @brief.md --budget 30                           # long briefs are split into features automatically
+speckfish go --implement --yes                               # resume, and also write the code and check drift
+speckfish status                                             # where every feature stands, what is next, what it cost
+speckfish next                                               # run only the one step the current feature needs
+speckfish revise --max-rounds 2                              # review -> fix the blockers -> review again
+```
+
+`go` works out what is missing from the files in `specs/` and from what earlier runs recorded, so it
+is the same command to start and to resume. A review only counts while the design has not changed
+since; `revise` hands the review report back to the agent, which fixes the Blockers (add `--majors`
+for the Majors too) and the review runs again, up to `--max-rounds`. With `--implement` it also
+implements, checks drift and, if the code diverged, appends the missing work (`converge`) and
+implements once more. `--budget` stops before the next step once that much was spent. Exit codes:
+`0` clean · `1` blockers left after the rounds · `2` a step failed · `3` quota, credentials or budget.
+
+### Step by step
+
 ```bash
 speckfish doctor                    # environment, harness, specify and EGM
 speckfish init                      # git init + specify init + clone EGM into vendor/egm

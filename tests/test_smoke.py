@@ -1711,7 +1711,8 @@ def test_every_feature_step_exposes_the_same_flags():
     for cmd, subs in p._subparsers._group_actions[0].choices.items():
         # not feature-oriented: setup, inspection, exploration over a material, or split by task
         if cmd in ("init", "doctor", "config", "features", "runs", "show", "report",
-                   "editors", "pipeline", "specify", "constitution", "brainstorm", "draft"):
+                   "editors", "pipeline", "specify", "constitution", "brainstorm", "draft",
+                   "go", "next", "revise", "status"):
             continue
         opts = {a.dest for a in subs._actions}
         assert {"all_features", "only", "from_feature", "skip_existing"} <= opts, cmd

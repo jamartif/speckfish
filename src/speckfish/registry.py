@@ -146,6 +146,8 @@ STEPS: dict[str, StepSpec] = dict([
     _spec("checklist", requires=("spec.md",), produces="checklists", optional=True),
     _spec("review", requires=("plan.md|spec.md",), schema="review", validate=validate_review,
           reports=True),
+    # not a Spec Kit skill: speckfish asks the agent to fix the design after a review
+    _spec("revise", requires=("plan.md|spec.md",)),
     _spec("implement", requires=("tasks.md",), validate=validate_implement, destructive=True),
     _spec("drift", requires=("spec.md",), schema="drift", validate=validate_drift, reports=True),
     _spec("converge", requires=("tasks.md",), optional=True),

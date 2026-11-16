@@ -252,10 +252,10 @@ def test_review_defaults_to_the_active_feature_not_the_newest(tmp_path):
     cfg = _cfg(tmp_path)
     old = _feature(tmp_path, "001-a", plan=True)
     new = _feature(tmp_path, "002-b", plan=True)
-    (old / "spec.md").touch()
-    new_time = old.stat().st_mtime + 100
     import os
-    os.utime(new / "spec.md", (new_time, new_time))
+    base = old.stat().st_mtime
+    os.utime(old, (base, base))                  # latest_feature orders by the folder's mtime
+    os.utime(new, (base + 100, base + 100))
     S.set_active_feature(cfg, old)
     assert S.current_feature(cfg) == old.resolve()
     assert S.resolve_target(cfg, None, "plan.md").parent == old.resolve()

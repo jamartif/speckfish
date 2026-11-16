@@ -450,6 +450,43 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
 
+    def add_flow_options(sp, implement: bool = True) -> None:
+        sp.add_argument("--max-rounds", type=int, default=2,
+                        help="review -> revise rounds before giving up (default: 2)")
+        sp.add_argument("--majors", action="store_true",
+                        help="revise fixes the Majors too, not only the Blockers")
+        if implement:
+            sp.add_argument("--implement", action="store_true",
+                            help="also write the code (needs --yes) and check drift afterwards")
+            sp.add_argument("--yes", action="store_true", help="confirm that --implement writes code")
+            sp.add_argument("--no-analyze", action="store_true", help="skip the analyze step")
+            sp.add_argument("--no-drift", action="store_true", help="skip drift after implement")
+
+    sp = sub.add_parser("go", help="idea -> specs -> plans -> tasks -> reviewed design (-> code), resumable")
+    sp.add_argument("description", nargs="?", default="",
+                    help="idea, or @path/to/brief.md (omit to resume the features that exist)")
+    sp.add_argument("--stack", default="", help="stack and constraints for the plans")
+    sp.add_argument("--split", dest="split", action="store_true", default=None,
+                    help="cut the brief into independent features (automatic for a long brief)")
+    sp.add_argument("--no-split", dest="split", action="store_false", help="never cut the brief")
+    sp.add_argument("--max-features", type=int, default=6)
+    sp.add_argument("--budget", type=float, default=None,
+                    help="stop before a step once this much was spent (usd or credits)")
+    sp.add_argument("--no-init", action="store_true", help="do not run init when .specify is missing")
+    add_flow_options(sp)
+
+    sp = sub.add_parser("next", help="run the one step this feature needs next")
+    sp.add_argument("--feature", default=None, help="number, name or path (default: the current one)")
+    sp.add_argument("--stack", default="", help="stack and constraints, when the next step is plan")
+    sp.add_argument("--explain", action="store_true", help="only say what the next step is")
+    add_flow_options(sp)
+
+    sp = sub.add_parser("revise", help="review -> fix the blockers -> review again, until clean")
+    sp.add_argument("--feature", default=None, help="number, name or path (default: the current one)")
+    add_flow_options(sp, implement=False)
+
+    sub.add_parser("status", help="where every feature stands, what is next and what it cost")
+
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
                     help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language)")
@@ -870,8 +907,174 @@ def cmd_show(run: Run) -> int:
     return EXIT_OK
 
 
+def flow_summary(out: dict) -> str:
+    """Per feature: the steps that ran, where it stopped and why. One screen, no JSON."""
+    lines = []
+    if out.get("note"):
+        lines.append(out["note"])
+    if out.get("error"):
+        lines.append(f"ERROR  {out['error']}")
+    for name, feat in (out.get("features") or {}).items():
+        st = feat.get("state") or {}
+        tasks = f"  tasks {st['tasks_done']}/{st['tasks_total']}" if st.get("tasks_total") else ""
+        review = ""
+        if st.get("blockers") is not None:
+            review = f"  review: {st['blockers']} blocker(s)"
+        lines.append(f"{name}{tasks}{review}")
+        for s in feat.get("steps") or []:
+            mark = "OK    " if s.get("ok") else "FAILED"
+            cost = ""
+            if s.get("cost"):
+                unit = s.get("cost_unit") or "usd"
+                cost = f"  ${float(s['cost']):.2f}" if unit == "usd" else f"  {float(s['cost']):.1f} {unit}"
+            lines.append(f"  {mark} {s.get('kind') or s.get('step'):<10} {_dur(s.get('duration_s'))}{cost}")
+        for sw in feat.get("switched") or []:
+            lines.append(f"  fallback {sw}")
+        if feat.get("stopped"):
+            lines.append(f"  stopped at {feat['stopped']}: {feat.get('reason')}")
+        elif feat.get("reason"):
+            lines.append(f"  {feat['reason']}")
+    if out.get("spent"):
+        cap = f" of {out['budget']:g}" if out.get("budget") else ""
+        lines.append(f"spent {out['spent']}{cap}")
+    if out.get("run_id"):
+        lines.append(f"run {out['run_id']}")
+    return "\n".join(lines)
+
+
+def flow_exit_code(out: dict) -> int:
+    """0 clean · 1 blockers left after the rounds · 2 a step failed · 3 quota/auth/budget."""
+    if out.get("ok"):
+        return EXIT_OK
+    feats = list((out.get("features") or {}).values())
+    if any(f.get("error_kind") in ("quota", "auth") or f.get("stopped") == "budget" for f in feats):
+        return EXIT_ENV
+    if feats and all(f.get("stopped") in (None, "revise") for f in feats) and out.get("blockers"):
+        return EXIT_BLOCKERS
+    return EXIT_ERROR
+
+
+def _flow_options(args) -> dict:
+    return {"implement": getattr(args, "implement", False),
+            "analyze": not getattr(args, "no_analyze", False),
+            "drift": not getattr(args, "no_drift", False),
+            "max_rounds": args.max_rounds, "majors": args.majors}
+
+
+def _refuse_unconfirmed_implement(run: Run) -> int | None:
+    args = run.args
+    if getattr(args, "implement", False) and not getattr(args, "yes", False) and not args.dry_run:
+        msg = ("--implement writes code: re-run with --yes to confirm, or --dry-run to see "
+               "the first step")
+        run.emit({"error": msg}, f"refusing: {msg}")
+        return EXIT_ENV
+    return None
+
+
+def cmd_go(run: Run) -> int:
+    from . import flow
+    args = run.args
+    refused = _refuse_unconfirmed_implement(run)
+    if refused is not None:
+        return refused
+    out = flow.do_go(run.cfg, args.description, stack=args.stack, split=args.split,
+                     max_features=args.max_features, budget=args.budget,
+                     fallback=getattr(args, "fallback", None), harness=run.harness(),
+                     stream=run.stream, dry_run=args.dry_run, init=not args.no_init,
+                     **_flow_options(args))
+    run.emit(out, flow_summary(out))
+    return flow_exit_code(out)
+
+
+def _current_feature_or_error(run: Run) -> Path | None:
+    args, cfg = run.args, run.cfg
+    feat = S.find_feature(cfg, args.feature) if args.feature else S.current_feature(cfg)
+    if feat is None:
+        print("no feature yet: run `speckfish go \"<idea>\"` or `speckfish specify` first",
+              file=sys.stderr)
+    return feat
+
+
+def cmd_next(run: Run) -> int:
+    from . import flow
+    args, cfg = run.args, run.cfg
+    refused = _refuse_unconfirmed_implement(run)
+    if refused is not None:
+        return refused
+    feat = _current_feature_or_error(run)
+    if feat is None:
+        return EXIT_ERROR
+    opts = _flow_options(args)
+    kind, why = flow.next_step(cfg, feat, implement=opts["implement"], analyze=opts["analyze"],
+                               drift=opts["drift"])
+    if args.explain or kind is None:
+        info = {"feature": feat.name, "next": kind, "why": why,
+                "command": flow.command_for(kind, feat.name) if kind else None}
+        run.emit(info, f"{feat.name}: {why}" + (f"\n  -> {info['command']}" if kind else ""))
+        return EXIT_OK
+    rid = S.ensure_run(cfg, None)
+    result = flow.advance(cfg, feat, rid, run.harness(), stack=args.stack,
+                          fallback=getattr(args, "fallback", None), stream=run.stream,
+                          dry_run=args.dry_run, only_one=True, **opts)
+    st = flow.feature_state(cfg, feat)
+    result["state"] = {k: st[k] for k in ("spec", "plan", "tasks", "tasks_done", "tasks_total",
+                                          "blockers", "review_current")}
+    out = {"run_id": rid, "ok": not result["stopped"], "blockers": st["blockers"] or 0,
+           "features": {feat.name: result}}
+    run.emit(out, flow_summary(out))
+    return flow_exit_code(out)
+
+
+def cmd_revise(run: Run) -> int:
+    from . import flow
+    args, cfg = run.args, run.cfg
+    feat = _current_feature_or_error(run)
+    if feat is None:
+        return EXIT_ERROR
+    rid = S.ensure_run(cfg, None)
+    result = flow.do_fix_loop(cfg, feat, rid, run.harness(), max_rounds=args.max_rounds,
+                              majors=args.majors, fallback=getattr(args, "fallback", None),
+                              stream=run.stream, dry_run=args.dry_run)
+    st = flow.feature_state(cfg, feat)
+    result["state"] = {k: st[k] for k in ("spec", "plan", "tasks", "tasks_done", "tasks_total",
+                                          "blockers", "review_current")}
+    out = {"run_id": rid, "ok": bool(result.get("clean")), "blockers": st["blockers"] or 0,
+           "features": {feat.name: result}}
+    run.emit(out, flow_summary(out))
+    return flow_exit_code(out)
+
+
+def status_summary(rows: list[dict], spent: float, unit: str | None) -> str:
+    if not rows:
+        return "(no features: run `speckfish go \"<idea>\"`)"
+    lines = []
+    for r in rows:
+        arts = "".join("+" if r[k] else "-" for k in ("spec", "plan", "tasks"))
+        tasks = f"{r['tasks_done']}/{r['tasks_total']}" if r["tasks_total"] else "-"
+        if r["blockers"] is not None:
+            review = f"{r['blockers']} blocker(s)"
+        else:
+            review = "stale" if r["review"] else "never"
+        lines.append(f"{r['name']:<34} [{arts}]  tasks {tasks:<7} review: {review}")
+        nxt = r["next"]
+        lines.append(f"  next: {nxt['why']}" + (f"  ->  {nxt['command']}" if nxt["command"] else ""))
+    if spent:
+        lines.append("")
+        lines.append(f"spent so far: {spent} {unit or ''}".rstrip())
+    return "\n".join(lines)
+
+
+def cmd_status(run: Run) -> int:
+    from . import flow
+    rows = flow.status_rows(run.cfg)
+    spent, unit = flow.total_cost(run.cfg)
+    run.emit({"features": rows, "spent": spent, "unit": unit}, status_summary(rows, spent, unit))
+    return EXIT_OK
+
+
 # one handler per subcommand: adding a command is adding a row here and a parser above
 HANDLERS = {
+    "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
     "editors": cmd_editors, "init": cmd_init, "doctor": cmd_doctor, "specify": cmd_specify,
     "plan": cmd_plan, "review": cmd_review, "drift": cmd_drift, "pipeline": cmd_pipeline,
     "features": cmd_features, "config": cmd_config, "runs": cmd_runs, "report": cmd_report,

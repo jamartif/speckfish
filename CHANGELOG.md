@@ -5,6 +5,16 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Phase 1 of `PLAN.md`, fewer steps:
+  - `speckfish go "<idea|@brief>"`: init, specify (split automatically for a long brief), plan, tasks,
+    analyze, review, and fix-and-review until no blockers; `--implement --yes` also implements, checks
+    drift and converges once. Resumable: it derives where it is from `specs/` and the recorded steps.
+  - `speckfish revise`: review -> agent fixes the blockers -> review again, up to `--max-rounds`.
+  - `speckfish next` (`--explain` to only say what it is) and `speckfish status` (phase, tasks,
+    review, next command and total cost per feature).
+  - `--budget` caps what one `go` may spend (usd or credits); `--fallback` applies to every step.
+  - A review is "current" only until spec.md/plan.md change; ticking tasks does not invalidate it.
+
 - Phase 2 of `PLAN.md`, structure (no change to the commands):
   - `run_step` takes the **kind** of step (`review`) apart from its **label** (`review-001-foo`):
     budgets, timeouts and validation follow the kind; folders, logs and state follow the label.

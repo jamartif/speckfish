@@ -39,6 +39,8 @@ Higiene:
 
 ## Fase 1 — Menos pasos (objetivo del producto)
 
+**Estado: hecha en la rama `feat/phase1-go`** (apilada sobre la Fase 2; 220 tests). Hecho: `go`, `revise`, bucle drift → converge dentro de `go --implement`, `next`, `status`, `--budget`. Por hacer: validarlo con un agente real (todo está probado con agentes simulados) y `--fallback` ya aplica a toda la cadena de `go`.
+
 1. **`speckfish go "<idea|@brief>"`**: un solo comando que recorre el ciclo:
    - `init` si falta.
    - `--split` automático si el brief es grande.

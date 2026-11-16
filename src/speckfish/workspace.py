@@ -6,6 +6,16 @@ import re
 from pathlib import Path
 
 
+def count_tasks(path: Path) -> tuple[int, int]:
+    """(done, total) task checkboxes in one tasks.md; (0, 0) when it does not exist."""
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return 0, 0
+    done = len(re.findall(r"^-\s*\[[xX]\]", text, re.MULTILINE))
+    return done, done + len(re.findall(r"^-\s*\[\s\]", text, re.MULTILINE))
+
+
 def task_progress(root: Path) -> tuple[int, int] | None:
     """(done, total) checkboxes in the active feature's tasks.md — the honest measure of implement."""
     try:
