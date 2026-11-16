@@ -8,6 +8,10 @@ Estado de partida: 151 tests en verde (`pytest tests`), Claude y Copilot verific
 
 ## Fase 0 — Errores que corregir ya
 
+**Estado: hecha** en la rama `fix/phase0-batches` (tests en `tests/test_phase0.py`, 176 en verde, ruff limpio). Pendiente de PR.
+
+Hallazgo adicional: el `speckfish` instalado en editable apuntaba a otra copia (`C:\Users\javie\dev\sdd-lab\speckfish`), así que `pytest` probaba esa y no este repo. Corregido con `pythonpath = ["src"]`.
+
 | # | Error | Dónde | Efecto |
 |---|---|---|---|
 | 1 | En los batches el nombre del paso lleva la feature (`review-001-x`), y `postprocess` busca `step == "review"` exacto | `runner.py:343`, `steps.py:365` | `review --all-features` nunca lee los blockers: **sale con 0 aunque haya blockers**. El gate de CI no sirve para batches. Igual con `drift-*` y `specify-N`, que tampoco se validan |

@@ -5,6 +5,23 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- Phase 0 of `PLAN.md`, batch correctness:
+  - `review/drift --all-features` and `specify --split` now validate each step as its kind
+    (`review-001-x` was never recognised), so blockers set exit 1 and a drift with no report fails.
+  - Drift reports, logs and `state.json` entries are per feature (they overwrote each other).
+  - `specify --split --review` keeps one review per spec.
+  - `specify`/`plan`/`--split` with copilot or codex expand `@file` and apply `language`.
+  - An agent closed for inactivity is judged by what it wrote (`spec.md`, `plan.md`, `tasks.md`,
+    reports), not only by reports.
+  - `implement` compares the working tree before and after: an already-dirty repo no longer passes.
+  - `review`/`drift` default to the same feature as `plan`/`tasks` (`.specify/feature.json`).
+  - `--with-clarify`/`--with-analyze` refuse batch flags instead of ignoring them;
+    `review --with-analyze` with no target analyzes the current feature.
+  - Quota/auth detection needs HTTP or billing context (a bare `429` or `credit` no longer matches).
+  - Spec Kit skills for copilot/codex are read from `.github/skills` / `.agents/skills`.
+  - Windows fallback path for `git.exe` was misspelled.
+  - Tests run against `src/` (`pythonpath`), lint runs in CI, `pip install -e ".[dev]"`.
+
 - The `implement` prompt now asks the agent to tick each `- [ ]` as it finishes. Without that the work
   was on disk but `tasks.md` stayed untouched: 10 tasks done, 0 recorded, and the next run would start
   from T001 again.
