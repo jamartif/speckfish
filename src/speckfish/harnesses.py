@@ -273,8 +273,10 @@ CODEX_FILE_HINT = (
     "Get-Content -Raw -Encoding utf8. This machine's PowerShell 5.1 reports output encoding ibm850, so "
     "a plain Get-Content shows 'CatÃ¡logo' for a file that is correct on disk: that is the console, "
     "never rewrite a file to fix it, and do not spend turns grepping for mojibake. "
-    "Do not install packages (no pip install): if a validator is missing, say so and validate by "
-    "inspection."
+    "Do not install packages on this machine (no pip install of validators or tools): if a validator "
+    "is missing, say so and validate by inspection. This does not apply to the project's own "
+    "dependencies: when a task needs a NuGet, npm or pip dependency, add it to the project and "
+    "restore it."
 )
 
 
