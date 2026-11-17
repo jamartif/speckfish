@@ -6,6 +6,7 @@ this process, so any of it can be interrupted and resumed with the same command.
 from __future__ import annotations
 
 import json
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -13,7 +14,9 @@ from . import prompts
 from . import steps as S
 from .config import Config, norm
 from .runner import StepResult, run_step
-from .workspace import count_tasks, next_chunk, parse_tasks
+from .workspace import changed_besides, count_tasks, git_snapshot, next_chunk, parse_tasks
+
+_MARKS = re.compile(r"\[[ xX]\]")
 
 MAX_STEPS_PER_FEATURE = 24      # a guard against a loop that never settles
 CHUNK_DEFAULT = 5               # tasks per implement call: a whole feature (90-170 tasks) is too much
@@ -37,8 +40,8 @@ def latest_record(cfg: Config, kind: str, feature: str) -> dict | None:
             steps = json.loads(state.read_text(encoding="utf-8")).get("steps") or {}
         except (OSError, ValueError):
             continue
-        hits = [(v.get("started_at") or "", k, v) for k, v in steps.items()
-                if k == f"{kind}-{feature}" or k.startswith(f"{kind}-{feature}-r")]
+        pat = re.compile(rf"{re.escape(kind)}-{re.escape(feature)}(-r\d+)?")
+        hits = [(v.get("started_at") or "", k, v) for k, v in steps.items() if pat.fullmatch(k)]
         if hits:
             _when, key, entry = max(hits, key=lambda h: h[0])
             return {**entry, "key": key, "run": run.name}
@@ -249,19 +252,35 @@ def do_implement_chunk(cfg: Config, feature: Path, rid: str, harness, chunk: int
         return res
     left = _unticked(feature, ids)
     stuck_on_ticks = (res.error or "").startswith("implement finished without ticking")
+    recovered, reconciled_ids = False, []
     if left and (res.ok or stuck_on_ticks):
         # the agent wrote code but left the boxes alone: check the work against the code and tick it
+        tasks_md = feature / "tasks.md"
+        text_before = tasks_md.read_text(encoding="utf-8", errors="replace")
+        snap_before = git_snapshot(cfg.root)
         rec = run_step(cfg, harness, unique_label(cfg, rid, f"reconcile-{name}"),
                        S.with_language(reconcile_prompt(feature, left), cfg), cfg.root, rid,
                        cfg.egm_path(), kind="reconcile", stream=stream)
         if rec.cost:
             res.cost = float(res.cost or 0) + float(rec.cost)
+        text_after = tasks_md.read_text(encoding="utf-8", errors="replace")
+        stray = changed_besides(snap_before, git_snapshot(cfg.root), tasks_md)
+        if _MARKS.sub("[ ]", text_before) != _MARKS.sub("[ ]", text_after) or stray:
+            res.ok, res.error = False, "reconcile edited more than checkboxes"
+            res.verdict = "reconcile edited more than checkboxes"
+            return res
+        newly = [t["id"] for t in parse_tasks(tasks_md) if t["id"] in ids and t["done"]
+                 and t["id"] in {x["id"] for x in left}]
+        reconciled_ids = newly
         left = _unticked(feature, ids)
+        recovered = True
     ticked = len(ids) - len(left)
     res.tasks_done, res.tasks_total = count_tasks(feature / "tasks.md")
     res.verdict = f"{ticked}/{len(ids)} of this chunk ticked  ({res.tasks_done}/{res.tasks_total} overall)"
-    if ticked and not res.ok and res.exit_code == 0:
-        res.ok, res.error = True, ""          # the reconcile pass recovered the ticks
+    if reconciled_ids:
+        res.verdict += "  [reconcile ticked: " + ", ".join(reconciled_ids) + "]"
+    if recovered and ticked and stuck_on_ticks and res.exit_code == 0:
+        res.ok, res.error = True, ""          # only the missing ticks failed it, and the reconcile fixed that
     elif not ticked and res.ok:
         res.ok = False
         res.error = (f"none of the {len(ids)} task(s) of this chunk got ticked, "
@@ -275,7 +294,7 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
     """Implement a feature chunk by chunk until every task is ticked or it stops making progress."""
     budget = budget or Budget(None)
     out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
-    stalled = 0
+    stalled, sticky = 0, {}
     for _ in range(max_chunks or 10_000):
         done, total = count_tasks(feature / "tasks.md")
         if not total or done >= total:
@@ -286,7 +305,7 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
                        reason=f"budget of {budget.limit:g} reached ({budget.spent:.2f} spent)")
             return out
         res, switched = run_with_fallback(cfg, fallback, harness, lambda h: do_implement_chunk(
-            cfg, feature, rid, h, chunk, stream, dry_run))
+            cfg, feature, rid, h, chunk, stream, dry_run), sticky)
         if switched:
             out["switched"].append(f"implement: {switched}")
         budget.add(res)
@@ -302,7 +321,8 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
             out.update(stopped="implement", reason="two chunks in a row ticked nothing")
             return out
     done, total = count_tasks(feature / "tasks.md")
-    out["reason"] = f"{total - done} task(s) pending after {max_chunks} chunk(s): run it again to continue"
+    ran = len(out["steps"])
+    out["reason"] = f"{total - done} task(s) pending after {ran} chunk(s): run it again to continue"
     return out
 
 
@@ -331,17 +351,29 @@ def run_kind(cfg: Config, kind: str, feature: Path, rid: str, harness, *, stack:
     return S.do_skill(cfg, kind, "", rid, harness, stream, dry_run, feature=name, step_name=label)
 
 
-def run_with_fallback(cfg: Config, fallback: str | None, harness, call) -> tuple[StepResult, str | None]:
-    """`call(harness)`; on a quota/auth stop retry once with the fallback harness."""
+def run_with_fallback(cfg: Config, fallback: str | None, harness, call,
+                      sticky: dict | None = None) -> tuple[StepResult, str | None]:
+    """`call(harness)`; on a quota/auth stop retry once with the fallback harness.
+
+    With a `sticky` dict, once the main harness was out of quota the fallback is used straight away
+    for the rest of that loop instead of failing on the main one again at every step.
+    """
+    if sticky and sticky.get("alt") is not None:
+        return call(sticky["alt"]), None
     res = call(harness)
     alt = S._fallback_for(cfg, fallback)
     if S._needs_fallback(res) and alt is not None:
+        if sticky is not None:
+            sticky["alt"] = alt
         return call(alt), f"{harness.name} -> {alt.name}"
     return res, None
 
 
 class Budget:
-    """A cap on what one `go` may spend. Units are whatever the harness reports (usd or credits)."""
+    """A cap on what one `go` may spend. Units are whatever the harness reports (usd or credits).
+
+    `None` or `0` means no limit.
+    """
 
     def __init__(self, limit: float | None):
         self.limit = limit
@@ -364,14 +396,21 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
     """Take a feature as far as the options allow, one step at a time, stopping at the first problem."""
     budget = budget or Budget(None)
     out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
-    revisions = converges = stalled = 0
-    done0, total0 = count_tasks(feature / "tasks.md")
-    chunks = -(-(total0 - done0) // chunk) if chunk > 0 else 1
-    for _ in range(MAX_STEPS_PER_FEATURE + 2 * max(chunks, 1)):
+    revisions = converges = stalled = design_steps = 0
+    sticky: dict = {}
+    while True:
         kind, why = next_step(cfg, feature, implement=implement, analyze=analyze, drift=drift)
         out["reason"] = why
         if kind is None:
             return out
+        # only design steps count against the guard: implement is bounded by the task list and by
+        # the "two chunks ticked nothing" rule, and a feature can need dozens of chunks
+        if kind != "implement":
+            design_steps += 1
+            if design_steps > MAX_STEPS_PER_FEATURE:
+                out["stopped"] = "loop"
+                out["reason"] = f"no settled state after {design_steps - 1} design steps"
+                return out
         if kind == "specify":
             out["stopped"] = "specify"
             return out
@@ -388,7 +427,7 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
             return out
         res, switched = run_with_fallback(cfg, fallback, harness, lambda h, k=kind: run_kind(
             cfg, k, feature, rid, h, stack=stack, stream=stream, dry_run=dry_run, majors=majors,
-            chunk=chunk))
+            chunk=chunk), sticky)
         if switched:
             out["switched"].append(f"{kind}: {switched}")
         budget.add(res)
@@ -409,16 +448,16 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
         if kind == "drift" and implement and converges < 1 and (res.structured or {}).get("drift_found"):
             # the code diverged from the design: add the missing work to tasks.md, then implement again
             converges += 1
-            conv = run_kind(cfg, "converge", feature, rid, harness, stream=stream, dry_run=dry_run)
+            conv, switched = run_with_fallback(cfg, fallback, harness, lambda h: run_kind(
+                cfg, "converge", feature, rid, h, stream=stream, dry_run=dry_run), sticky)
+            if switched:
+                out["switched"].append(f"converge: {switched}")
             budget.add(conv)
             out["steps"].append({"kind": "converge", **conv.to_dict()})
             if not conv.ok:
                 out["stopped"] = "converge"
                 out["reason"] = conv.error or "converge failed"
                 return out
-    out["stopped"] = "loop"
-    out["reason"] = f"no settled state after {MAX_STEPS_PER_FEATURE} steps"
-    return out
 
 
 # ---------------- revise loop: review -> fix -> review ----------------

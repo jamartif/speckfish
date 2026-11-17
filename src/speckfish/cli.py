@@ -11,6 +11,7 @@ from pathlib import Path
 from . import __version__
 from . import steps as S
 from .config import Config, norm
+from .flow import CHUNK_DEFAULT
 from .harnesses import get_harness
 from .prompts import SKILL_SPECS
 
@@ -169,6 +170,13 @@ STEP_ARTIFACT = {
     "clarify": None,
     "converge": None,
 }
+
+
+def _non_negative(value: str) -> int:
+    n = int(value)
+    if n < 0:
+        raise argparse.ArgumentTypeError("must be 0 or more")
+    return n
 
 
 def add_feature_selection(sp) -> None:
@@ -449,9 +457,9 @@ def build_parser() -> argparse.ArgumentParser:
         if spec.get("dangerous"):
             sp.add_argument("--yes", action="store_true",
                             help="required: this step writes source code")
-            sp.add_argument("--chunk", type=int, default=5,
+            sp.add_argument("--chunk", type=_non_negative, default=CHUNK_DEFAULT,
                             help="tasks per agent call (default: 5; 0 = every pending task in one call)")
-            sp.add_argument("--max-chunks", type=int, default=0,
+            sp.add_argument("--max-chunks", type=_non_negative, default=0,
                             help="stop after this many chunks (default: until every task is ticked)")
             sp.add_argument("--budget", type=float, default=None,
                             help="stop before a chunk once this much was spent (usd or credits)")
@@ -467,7 +475,7 @@ def build_parser() -> argparse.ArgumentParser:
             sp.add_argument("--yes", action="store_true", help="confirm that --implement writes code")
             sp.add_argument("--no-analyze", action="store_true", help="skip the analyze step")
             sp.add_argument("--no-drift", action="store_true", help="skip drift after implement")
-            sp.add_argument("--chunk", type=int, default=5,
+            sp.add_argument("--chunk", type=_non_negative, default=CHUNK_DEFAULT,
                             help="tasks per implement call (default: 5; 0 = all in one call)")
 
     sp = sub.add_parser("go", help="idea -> specs -> plans -> tasks -> reviewed design (-> code), resumable")
@@ -1010,7 +1018,7 @@ def _flow_options(args) -> dict:
             "analyze": not getattr(args, "no_analyze", False),
             "drift": not getattr(args, "no_drift", False),
             "max_rounds": args.max_rounds, "majors": args.majors,
-            "chunk": getattr(args, "chunk", 15)}
+            "chunk": getattr(args, "chunk", CHUNK_DEFAULT)}
 
 
 def _refuse_unconfirmed_implement(run: Run) -> int | None:

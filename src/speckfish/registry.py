@@ -105,11 +105,11 @@ def validate_implement(res, ctx: Ctx) -> None:
     if ctx.tasks_before is not None and root is not None:
         after = task_progress(root)
         if after:
-            done_before, total = ctx.tasks_before
-            done_after = after[0]
+            done_before, _total_before = ctx.tasks_before
+            done_after, total = after            # the agent may have added tasks: count them
             res.tasks_done, res.tasks_total = done_after, total
             res.verdict = f"{done_after}/{total} tasks done"
-            if res.exit_code == 0 and done_after <= done_before:
+            if res.exit_code == 0 and done_after <= done_before and done_before < total:
                 res.ok = False
                 res.error = (f"implement finished without ticking a single task in tasks.md "
                              f"({done_before}/{total} before, {done_after}/{total} after)")
