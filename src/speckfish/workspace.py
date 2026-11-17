@@ -7,13 +7,13 @@ from pathlib import Path
 
 
 def count_tasks(path: Path) -> tuple[int, int]:
-    """(done, total) task checkboxes in one tasks.md; (0, 0) when it does not exist."""
-    try:
-        text = path.read_text(encoding="utf-8", errors="replace")
-    except OSError:
-        return 0, 0
-    done = len(re.findall(r"^-\s*\[[xX]\]", text, re.MULTILINE))
-    return done, done + len(re.findall(r"^-\s*\[\s\]", text, re.MULTILINE))
+    """(done, total) task checkboxes in one tasks.md; (0, 0) when it does not exist.
+
+    Same reading as `parse_tasks` (indented subtasks count, code blocks do not), so the loop and the
+    chunk picker can never disagree about what is pending.
+    """
+    tasks = parse_tasks(path)
+    return sum(1 for t in tasks if t["done"]), len(tasks)
 
 
 def task_progress(root: Path) -> tuple[int, int] | None:
@@ -28,9 +28,7 @@ def task_progress(root: Path) -> tuple[int, int] | None:
     for path in candidates:
         if not path.exists():
             continue
-        text = path.read_text(encoding="utf-8", errors="replace")
-        done = len(re.findall(r"^-\s*\[[xX]\]", text, re.MULTILINE))
-        total = done + len(re.findall(r"^-\s*\[\s\]", text, re.MULTILINE))
+        done, total = count_tasks(path)
         if total:
             return done, total
     return None
@@ -87,6 +85,15 @@ def _git_dirty(root: Path, before: dict | None = None) -> bool:
     return bool(interesting)
 
 
+def changed_besides(before: dict | None, after: dict | None, allowed: Path) -> list[str]:
+    """Paths whose state differs between two `git_snapshot`s, leaving out `allowed` (None: unknown)."""
+    if before is None or after is None:
+        return []
+    allowed_name = allowed.name
+    changed = [ln for ln in after if before.get(ln, "~") != after[ln]]
+    return [ln for ln in changed if not ln.rstrip().endswith(allowed_name)]
+
+
 def feature_dir(root: Path) -> Path | None:
     """The feature Spec Kit points at (`.specify/feature.json`), else the newest one."""
     try:
@@ -101,6 +108,8 @@ def feature_dir(root: Path) -> Path | None:
 
 
 TASK_LINE = re.compile(r"^\s*-\s*\[(?P<mark>[ xX])\]\s*(?P<id>T\d+)?\s*(?P<text>.*?)\s*$")
+_FENCE = re.compile(r"^\s*(```|~~~)")
+_WORDS = re.compile(r"\s+")
 
 
 def parse_tasks(path: Path) -> list[dict]:
@@ -109,15 +118,22 @@ def parse_tasks(path: Path) -> list[dict]:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
         return []
-    tasks, phase = [], ""
+    tasks, phase, in_code = [], "", False
     for ln in lines:
+        if _FENCE.match(ln):
+            in_code = not in_code
+            continue
+        if in_code:
+            continue                     # a `- [ ]` inside a code block is an example, not a task
         if ln.startswith("#"):
             phase = ln.lstrip("#").strip()
             continue
         m = TASK_LINE.match(ln)
         if m:
-            tasks.append({"id": m.group("id") or f"#{len(tasks) + 1}", "done": m.group("mark") != " ",
-                          "text": m.group("text"), "phase": phase})
+            text = m.group("text")
+            # a task without a T-number is named by its text, so an inserted line does not shift it
+            ident = m.group("id") or "~" + _WORDS.sub(" ", text).strip().lower()[:80]
+            tasks.append({"id": ident, "done": m.group("mark") != " ", "text": text, "phase": phase})
     return tasks
 
 

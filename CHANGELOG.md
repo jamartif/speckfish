@@ -3,6 +3,10 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## Unreleased
+
+- Review fixes: `go --implement` no longer stops mid-feature (the step cap counts only design steps); `count_tasks` and `parse_tasks` read the same lines (indented subtasks count, code blocks do not) and tasks without a T-number are named by their text; `reconcile` is rejected if it edits anything but checkboxes and records which tasks it ticked; the task total is read after the step; `--chunk`/`--max-chunks` refuse negative values; `latest_record` matches the feature name exactly; the fallback harness sticks for the rest of a loop and also covers `converge`.
+
 ## 0.2.0
 
 - `implement` works in chunks (`--chunk N`, default 5; `--max-chunks`, `--budget`). One agent call over
