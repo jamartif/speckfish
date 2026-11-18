@@ -237,9 +237,11 @@ def read_version(cmd: str) -> str:
 
 # ---------- EGM report parsing ----------
 
-SEV_BLOCK = re.compile(r"^#+\s*.*(blocker|bloqueante)", re.I)
-SEV_MAJOR = re.compile(r"^#+\s*.*(major|mayor)", re.I)
-SEV_NIT = re.compile(r"^#+\s*.*(nit|menor)", re.I)
+SEV_BLOCK = re.compile(r"^#+\s*.*\b(blockers?|bloqueantes?)\b", re.I)
+SEV_MAJOR = re.compile(r"^#+\s*.*\b(majors?|mayor(?:es)?)\b", re.I)
+SEV_NIT = re.compile(r"^#+\s*.*\b(nits?|menor(?:es)?)\b", re.I)
+# "### B1. Title", "### M12: Title": one heading per finding under a severity heading
+FINDING_HEADING = re.compile(r"^(#+)\s*[A-Za-z]{1,2}-?\d+[.:)\s]")
 BULLET = re.compile(r"^\s*(?:[-*]|\d+[.)])\s+(.*\S)")
 TABLE_ROW = re.compile(r"^\s*\|(.+)\|\s*$")
 TABLE_SEP = re.compile(r"^\s*\|[\s:|-]+\|\s*$")
@@ -274,19 +276,30 @@ def parse_consolidated(report: Path) -> dict:
     text = report.read_text(encoding="utf-8", errors="replace")
     lines = text.splitlines()
     section = None
+    section_level = 0
     in_table = False
     for line in lines:
-        if SEV_BLOCK.match(line):
-            section, in_table = "blockers", False
+        finding = FINDING_HEADING.match(line)
+        if finding and section and len(finding.group(1)) > section_level:
+            # one subheading per finding (what the Codex review writes): each one is an item
+            if section == "blockers":
+                out["blockers"].append(line.lstrip("# ").strip()[:300])
+            elif section == "majors":
+                out["majors"] += 1
+            else:
+                out["nits"] += 1
+            in_table = False
             continue
-        if SEV_MAJOR.match(line):
-            section, in_table = "majors", False
-            continue
-        if SEV_NIT.match(line):
-            section, in_table = "nits", False
-            continue
+        hashes = len(line) - len(line.lstrip("#")) if line.startswith("#") else 0
+        for name, rx in (("blockers", SEV_BLOCK), ("majors", SEV_MAJOR), ("nits", SEV_NIT)):
+            if rx.match(line):
+                section, section_level, in_table = name, hashes, False
+                break
+        else:
+            if line.startswith("#"):
+                section, section_level, in_table = None, 0, False
+                continue
         if line.startswith("#"):
-            section, in_table = None, False
             continue
         if not section:
             continue
@@ -305,10 +318,16 @@ def parse_consolidated(report: Path) -> dict:
             out["majors"] += 1
         else:
             out["nits"] += 1
-    for line in lines[:40]:
+    for i, line in enumerate(lines[:60]):
         low = line.lower()
         if "veredicto" in low or "verdict" in low:
             out["verdict"] = line.strip("# *:")[:400]
+            if line.startswith("#"):
+                # a bare "## Verdict" heading: the verdict is the first sentence under it
+                for nxt in lines[i + 1:i + 8]:
+                    if nxt.strip() and not nxt.startswith("#"):
+                        out["verdict"] = nxt.strip(" *:")[:400]
+                        break
             break
     blob = text[:4000].lower()
     NEGATIVE = ("no cumple", "no se cumple", "does not meet", "doesn't meet",
