@@ -5,6 +5,7 @@ this process, so any of it can be interrupted and resumed with the same command.
 """
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 from datetime import datetime
@@ -504,8 +505,13 @@ def do_fix_loop(cfg: Config, feature: Path, rid: str, harness, *, max_rounds: in
 def _split_wanted(material: str, cfg: Config, force: bool) -> bool:
     if force:
         return True
-    body, _src = prompts.expand_input(material, cfg.root)
-    return len(body) > 6000
+    body, src = prompts.expand_input(material, cfg.root)
+    size = len(body)
+    if src:
+        # for an `@file` the "body" is only the instruction to read it: measure the file itself
+        with contextlib.suppress(OSError):
+            size = max(size, Path(src).stat().st_size)
+    return size > 6000
 
 
 def do_go(cfg: Config, idea: str, *, stack: str = "", split: bool | None = None,

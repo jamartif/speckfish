@@ -5,6 +5,8 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `go` splits a big brief given as `@file`: the size check measured the 158-character "read this file" instruction instead of the file, so a 22 KB brief was never split.
+
 - `go`, `next` and `revise` read the blocker and major counts again from the consolidated report instead of trusting the number saved in `state.json`, so a review recorded as "0 blockers" by an older parser is corrected. `revise --majors` also revises when only Majors are left.
 
 - The consolidated review report is read when each finding has its own heading (`### B1. ...`, as the Codex review writes it): `go` no longer says "no blockers" on a report with 4 blockers and 25 majors. Severity headings match whole words only (a heading with "monitoring" or "limit" no longer switches to Nits) and a bare `## Verdict` heading takes the sentence under it.

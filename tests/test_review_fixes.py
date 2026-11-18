@@ -262,3 +262,14 @@ def test_majors_only_trigger_a_revision_when_asked(tmp_path):
     assert flow.next_step(cfg, feat)[0] is None
     kind, why = flow.next_step(cfg, feat, majors=True)
     assert kind == "revise" and "2 major" in why
+
+
+# ---- go splits a big brief given as @file (the check measured the pointer text, not the file) ----
+
+def test_a_big_brief_given_as_a_file_is_split(tmp_path):
+    (tmp_path / "brief.md").write_text("requirement line\n" * 1000, encoding="utf-8")     # ~17 KB
+    (tmp_path / "small.md").write_text("one small requirement\n", encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    assert flow._split_wanted("@brief.md", cfg, False) is True
+    assert flow._split_wanted("@small.md", cfg, False) is False
+    assert flow._split_wanted("a short idea", cfg, False) is False
