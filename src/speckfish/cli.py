@@ -1185,6 +1185,10 @@ def main(argv: list[str] | None = None) -> int:
         return EXIT_ERROR
     try:
         return handler(Run(cfg, args))
+    except KeyboardInterrupt:
+        print("\nInterrupted: the agent was stopped. Nothing written so far is lost; run the same "
+              "command to continue.", file=sys.stderr)
+        return 130
     except SystemExit as e:
         msg = str(e) or "environment error"
         emit({"error": msg}, args.json, f"ERROR: {msg}")

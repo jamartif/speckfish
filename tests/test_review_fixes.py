@@ -12,6 +12,7 @@ from speckfish import cli as C
 from speckfish import flow
 from speckfish import steps as S
 from speckfish import workspace as W
+from speckfish.config import Config
 from speckfish.runner import StepResult
 
 # ---- reading tasks.md ----
@@ -298,3 +299,47 @@ def test_revise_report_must_exist(tmp_path, monkeypatch, fake_agent):
     code = C.main(["--root", str(tmp_path), "--json", "revise", "--feature", "001",
                    "--report", "nope.md"])
     assert code == C.EXIT_ENV
+
+
+# ---- an agent that printed its final event but never exits is closed, and Ctrl+C stops the tree ----
+
+def _fake_harness(script: str):
+    import sys
+
+    from speckfish.harnesses import StepInvocation
+    return NS(name="fake", echo_stdout=False,
+              build=lambda **k: StepInvocation(argv=[sys.executable, "-c", script]),
+              parse_output=lambda out, err, code: {})
+
+
+def test_a_hung_process_after_the_final_event_is_closed_quickly(tmp_path, monkeypatch):
+    import time
+
+    from speckfish import runner as R
+    monkeypatch.setenv("SPECKFISH_RESULT_GRACE", "2")
+    script = ("import pathlib, time; d = pathlib.Path('specs/001-a'); d.mkdir(parents=True); "
+              "(d / 'spec.md').write_text('# s'); "
+              "print('{\"type\":\"result\",\"result\":\"done\"}', flush=True); time.sleep(120)")
+    t0 = time.time()
+    res = R.run_step(_cfg(tmp_path), _fake_harness(script), "specify", "p", tmp_path, "rid", None,
+                     progress=False)
+    assert time.time() - t0 < 60
+    assert res.ok is True and "stayed alive" in res.error
+
+
+def test_final_event_detection():
+    from speckfish.runner import _is_final_event
+    assert _is_final_event('{"type":"result","subtype":"success"}\n')
+    assert _is_final_event('{"type":"turn.completed","usage":{}}')
+    assert not _is_final_event('{"type":"assistant","text":"the result is"}')
+    assert not _is_final_event("plain text with result in it")
+
+
+def test_ctrl_c_is_a_clean_exit(tmp_path, monkeypatch, capsys):
+    monkeypatch.setitem(C.HANDLERS, "features", lambda run: (_ for _ in ()).throw(KeyboardInterrupt()))
+    code = C.main(["--root", str(tmp_path), "features"])
+    assert code == 130 and "Interrupted" in capsys.readouterr().err
+
+
+def test_revise_default_timeout_is_an_hour():
+    assert Config(root=Path(".")).timeouts["revise"] == 3600
