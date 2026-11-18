@@ -226,3 +226,39 @@ def test_a_word_inside_a_heading_does_not_switch_the_severity(tmp_path):
                  encoding="utf-8")
     out = parse_consolidated(f)
     assert len(out["blockers"]) == 2 and out["nits"] == 0
+
+
+# ---- blockers are read again from the report, not trusted from state.json ----
+
+def _record_review(cfg, feat, artifact_dir, blockers=0, majors=0):
+    run = cfg.runs_dir / "20261118-000000"
+    run.mkdir(parents=True, exist_ok=True)
+    (run / "state.json").write_text(json.dumps({"steps": {f"review-{feat.name}": {
+        "started_at": "2999-01-01T00:00:00", "status": "ok", "blockers": blockers, "majors": majors,
+        "artifact_dir": str(artifact_dir)}}}), encoding="utf-8")
+
+
+def test_blockers_saved_as_zero_are_counted_again_from_the_report(tmp_path):
+    feat = _feature(tmp_path)
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "consolidated_review_report.md").write_text(HEADING_REPORT, encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    _record_review(cfg, feat, art)                         # an older speckfish recorded 0
+    st = flow.feature_state(cfg, feat)
+    assert st["blockers"] == 2 and st["majors"] == 2
+    kind, why = flow.next_step(cfg, feat)
+    assert kind == "revise" and "2 blocker" in why
+
+
+def test_majors_only_trigger_a_revision_when_asked(tmp_path):
+    feat = _feature(tmp_path)
+    art = tmp_path / "art"
+    art.mkdir()
+    (art / "consolidated_review_report.md").write_text(
+        "## Major Findings\n\n### M1. One\n### M2. Two\n", encoding="utf-8")
+    cfg = _cfg(tmp_path)
+    _record_review(cfg, feat, art)
+    assert flow.next_step(cfg, feat)[0] is None
+    kind, why = flow.next_step(cfg, feat, majors=True)
+    assert kind == "revise" and "2 major" in why

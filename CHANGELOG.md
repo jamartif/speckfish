@@ -5,6 +5,8 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `go`, `next` and `revise` read the blocker and major counts again from the consolidated report instead of trusting the number saved in `state.json`, so a review recorded as "0 blockers" by an older parser is corrected. `revise --majors` also revises when only Majors are left.
+
 - The consolidated review report is read when each finding has its own heading (`### B1. ...`, as the Codex review writes it): `go` no longer says "no blockers" on a report with 4 blockers and 25 majors. Severity headings match whole words only (a heading with "monitoring" or "limit" no longer switches to Nits) and a bare `## Verdict` heading takes the sentence under it.
 
 - Review fixes: `go --implement` no longer stops mid-feature (the step cap counts only design steps); `count_tasks` and `parse_tasks` read the same lines (indented subtasks count, code blocks do not) and tasks without a T-number are named by their text; `reconcile` is rejected if it edits anything but checkboxes and records which tasks it ticked; the task total is read after the step; `--chunk`/`--max-chunks` refuse negative values; `latest_record` matches the feature name exactly; the fallback harness sticks for the rest of a loop and also covers `converge`.
