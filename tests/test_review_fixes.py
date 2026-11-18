@@ -179,3 +179,50 @@ def test_budget_zero_means_no_limit():
     b = flow.Budget(0)
     b.spent = 99.0
     assert b.exhausted is False
+
+
+# ---- consolidated report written with one heading per finding (seen with the Codex review) ----
+
+HEADING_REPORT = """# Consolidated Goldfish Review Report
+
+## Verdict
+
+The plan is not implementation-ready. Four blockers can violate required invariants.
+
+## Blockers
+
+### B1. Lifecycle transitions serialize on different locks
+Text with the word unit and monitoring.
+
+### B2. Retry rules can duplicate incidents
+More text.
+
+## Major Findings
+
+### M1. Transport retries conflict
+### M2. Pipeline order is not implementable
+
+## Nits
+
+### N1. Wording
+"""
+
+
+def test_a_report_with_one_heading_per_finding_is_counted(tmp_path):
+    from speckfish.config import parse_consolidated
+    f = tmp_path / "consolidated_review_report.md"
+    f.write_text(HEADING_REPORT, encoding="utf-8")
+    out = parse_consolidated(f)
+    assert [b.split(".")[0] for b in out["blockers"]] == ["B1", "B2"]
+    assert out["majors"] == 2 and out["nits"] == 1
+    assert out["meets_standard"] is False
+    assert out["verdict"].startswith("The plan is not implementation-ready")
+
+
+def test_a_word_inside_a_heading_does_not_switch_the_severity(tmp_path):
+    from speckfish.config import parse_consolidated
+    f = tmp_path / "r.md"
+    f.write_text("## Blockers\n\n### B1. Unit tests and monitoring gaps\n\n### B2. Limit rules\n",
+                 encoding="utf-8")
+    out = parse_consolidated(f)
+    assert len(out["blockers"]) == 2 and out["nits"] == 0
