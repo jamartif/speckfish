@@ -215,8 +215,9 @@ def unique_label(cfg: Config, rid: str, base: str) -> str:
 
 
 def do_revise(cfg: Config, feature: Path, rid: str, harness, majors: bool = False,
-              stream: bool = True, dry_run: bool = False) -> StepResult:
-    report = review_report_for(cfg, feature.name)
+              stream: bool = True, dry_run: bool = False, report: Path | None = None) -> StepResult:
+    """One fix pass over the feature's documents; `report` overrides the recorded review's report."""
+    report = report or review_report_for(cfg, feature.name)
     label = unique_label(cfg, rid, f"revise-{feature.name}")
     if report is None:
         return StepResult(step=label, kind="revise", ok=False, exit_code=2, duration_s=0.0,

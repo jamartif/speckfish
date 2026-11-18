@@ -309,7 +309,7 @@ Global flags accepted by every command (before or after the subcommand):
 | `init` | `--integration claude\|copilot\|codex\|all\|list` · `--no-egm` · `--no-editors` · `--prefix` | git + `specify init` + EGM in `vendor/` + editor commands |
 | `doctor` | — | versions of specify/EGM/harness and project state |
 | `features` | — | every feature under `specs/`, its artifacts and which one is active |
-| `config [key=value]` | `--set` (harness, model, profile, language, egm_root, `timeout.<step>`) | show or store project defaults |
+| `config [key=value]` | e.g. `config timeout.revise=3600` (harness, model, profile, language, egm_root, `timeout.<step>`) | show or store project defaults |
 | `runs` / `show` | `runs --clean --keep N` | list runs / detail one run |
 | `editors` | `--targets` · `--command` · `--prefix` · `--codex-home` · `--no-force` | VS Code tasks, Copilot prompts, Claude commands, Codex prompts |
 

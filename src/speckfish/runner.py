@@ -110,12 +110,14 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     log = log_path.open("w", encoding="utf-8")
     log.write("$ " + " ".join(inv.argv) + "\n\n")
 
-    activity = {"t": time.time()}
+    activity = {"t": time.time(), "final": False}
 
     def pump(pipe, chunks, echo=False):
         try:
             for line in pipe:
                 activity["t"] = time.time()
+                if _is_final_event(line):
+                    activity["final"] = True
                 chunks.append(line)
                 log.write(line)
                 log.flush()
@@ -135,22 +137,35 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     # an agent can finish its work and never exit (EGM's final pass does this): a long silence with
     # the process still alive is a finished run, not a hang worth burning the whole timeout on
     idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
-    while True:
-        try:
-            proc.wait(timeout=5)
-            break
-        except subprocess.TimeoutExpired:
-            now = time.time()
-            if idle_limit and now - activity["t"] >= idle_limit:
-                idle_closed = True
-            elif now - started >= timeout:
-                timed_out = True
-            else:
-                continue
-            _kill_tree(proc)
-            with contextlib.suppress(subprocess.TimeoutExpired):
-                proc.wait(timeout=30)
-            break
+    # once the agent has printed its final event ("result" / "turn.completed") a process that does not
+    # exit is only hanging on its way out (seen with Claude on Windows: 10 minutes after the last report)
+    grace = int(os.environ.get("SPECKFISH_RESULT_GRACE", "45"))
+    try:
+        while True:
+            try:
+                proc.wait(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                now = time.time()
+                limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
+                if limit and now - activity["t"] >= limit:
+                    idle_closed = True
+                elif now - started >= timeout:
+                    timed_out = True
+                else:
+                    continue
+                _kill_tree(proc)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=30)
+                break
+    except KeyboardInterrupt:
+        # Ctrl+C reaches speckfish, not the agent's own process group: stop the whole tree or it
+        # keeps running (and writing, with the sandbox off) after the command is gone
+        _kill_tree(proc)
+        with contextlib.suppress(Exception):
+            log.close()
+        meter.stop()
+        raise
     t_out.join(timeout=15)
     t_err.join(timeout=5)
     with contextlib.suppress(Exception):
@@ -161,6 +176,18 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         code = 0 if code is None else code
     return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
             idle_closed)
+
+
+def _is_final_event(line: str) -> bool:
+    """The agent CLI's last event of a turn: Claude/Copilot `result`, Codex `turn.completed`."""
+    text = (line or "").lstrip()
+    if not text.startswith("{") or not ('"result"' in text or "turn.completed" in text):
+        return False
+    try:
+        obj = json.loads(text)
+    except ValueError:
+        return False
+    return isinstance(obj, dict) and obj.get("type") in ("result", "turn.completed")
 
 
 def is_noise_line(line: str) -> bool:

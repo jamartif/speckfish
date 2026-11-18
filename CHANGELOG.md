@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- An agent that printed its final event (`result` for Claude/Copilot, `turn.completed` for Codex) but does not exit is closed after 45 s (`SPECKFISH_RESULT_GRACE`), instead of waiting 10 minutes for the idle limit; what the step wrote decides the verdict. Seen with Claude on Windows after an EGM review.
+- Ctrl+C stops the agent's whole process tree (it used to leave `codex exec` running with the sandbox off) and exits with 130 and a one-line message instead of a traceback.
+- `revise` timeout default is 3600 s (it was 1800 and `--majors` needs more). README: `config timeout.revise=3600`, not `--set`.
+
+- `revise --report FILE` fixes the feature in one pass from a review report that already exists (a review run by hand, or one recorded as failed although its reports are complete), without paying for another review.
+
 - `go` splits a big brief given as `@file`: the size check measured the 158-character "read this file" instruction instead of the file, so a 22 KB brief was never split.
 
 - `go`, `next` and `revise` read the blocker and major counts again from the consolidated report instead of trusting the number saved in `state.json`, so a review recorded as "0 blockers" by an older parser is corrected. `revise --majors` also revises when only Majors are left.
