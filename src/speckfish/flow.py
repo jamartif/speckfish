@@ -12,7 +12,7 @@ from pathlib import Path
 
 from . import prompts
 from . import steps as S
-from .config import Config, norm
+from .config import Config, find_report, norm, parse_consolidated
 from .runner import StepResult, run_step
 from .workspace import changed_besides, count_tasks, git_snapshot, next_chunk, parse_tasks
 
@@ -73,24 +73,45 @@ def _ok_record(entry: dict | None) -> dict | None:
     return entry if entry and entry.get("status") == "ok" else None
 
 
+def _review_counts(review: dict | None) -> tuple[int, int]:
+    """(blockers, majors) of a recorded review, read again from its consolidated report.
+
+    The counts saved in `state.json` come from the parser of the speckfish that ran the review; a
+    report written in a format that parser did not know was recorded as 0 and stayed 0. The report
+    on disk is the source of truth, so it is parsed again now and the larger count wins.
+    """
+    review = review or {}
+    blockers, majors = int(review.get("blockers") or 0), int(review.get("majors") or 0)
+    art = review.get("artifact_dir")
+    if art:
+        report = find_report(Path(art), "consolidated_review_report.md")
+        if report is not None:
+            parsed = parse_consolidated(report)
+            blockers = max(blockers, len(parsed.get("blockers") or []))
+            majors = max(majors, int(parsed.get("majors") or 0))
+    return blockers, majors
+
+
 def feature_state(cfg: Config, feature: Path) -> dict:
     name = feature.name
     done, total = count_tasks(feature / "tasks.md")
     review = latest_record(cfg, "review", name)
+    current = review_is_current(feature, review)
+    blockers, majors = _review_counts(review) if current else (None, None)
     return {
         "name": name, "path": norm(feature),
         "spec": (feature / "spec.md").exists(), "plan": (feature / "plan.md").exists(),
         "tasks": (feature / "tasks.md").exists(),
         "tasks_done": done, "tasks_total": total,
         "review": review, "review_current": review_is_current(feature, review),
-        "blockers": int((review or {}).get("blockers") or 0) if review_is_current(feature, review) else None,
+        "blockers": blockers, "majors": majors,
         "analyzed": _ok_record(latest_record(cfg, "analyze", name)),
         "drift": _ok_record(latest_record(cfg, "drift", name)),
     }
 
 
 def next_step(cfg: Config, feature: Path, implement: bool = False, analyze: bool = True,
-              drift: bool = True) -> tuple[str | None, str]:
+              drift: bool = True, majors: bool = False) -> tuple[str | None, str]:
     """(kind, why) of the step this feature needs next; kind None means there is nothing to do."""
     st = feature_state(cfg, feature)
     if not st["spec"]:
@@ -107,6 +128,8 @@ def next_step(cfg: Config, feature: Path, implement: bool = False, analyze: bool
                           else "the documents changed after the last review")
     if st["blockers"]:
         return "revise", f"the review left {st['blockers']} blocker(s)"
+    if majors and st["majors"]:
+        return "revise", f"the review left {st['majors']} major finding(s)"
     if not implement:
         return None, "design reviewed with no blockers; add --implement --yes to write the code"
     if st["tasks_total"] and st["tasks_done"] < st["tasks_total"]:
@@ -399,7 +422,8 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
     revisions = converges = stalled = design_steps = 0
     sticky: dict = {}
     while True:
-        kind, why = next_step(cfg, feature, implement=implement, analyze=analyze, drift=drift)
+        kind, why = next_step(cfg, feature, implement=implement, analyze=analyze, drift=drift,
+                              majors=majors)
         out["reason"] = why
         if kind is None:
             return out

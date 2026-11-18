@@ -1066,7 +1066,7 @@ def cmd_next(run: Run) -> int:
         return EXIT_ERROR
     opts = _flow_options(args)
     kind, why = flow.next_step(cfg, feat, implement=opts["implement"], analyze=opts["analyze"],
-                               drift=opts["drift"])
+                               drift=opts["drift"], majors=opts["majors"])
     if args.explain or kind is None:
         info = {"feature": feat.name, "next": kind, "why": why,
                 "command": flow.command_for(kind, feat.name) if kind else None}
