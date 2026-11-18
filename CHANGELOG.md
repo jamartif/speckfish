@@ -5,6 +5,8 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `revise --report FILE` fixes the feature in one pass from a review report that already exists (a review run by hand, or one recorded as failed although its reports are complete), without paying for another review.
+
 - `go` splits a big brief given as `@file`: the size check measured the 158-character "read this file" instruction instead of the file, so a 22 KB brief was never split.
 
 - `go`, `next` and `revise` read the blocker and major counts again from the consolidated report instead of trusting the number saved in `state.json`, so a review recorded as "0 blockers" by an older parser is corrected. `revise --majors` also revises when only Majors are left.

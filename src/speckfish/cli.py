@@ -499,6 +499,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("revise", help="review -> fix the blockers -> review again, until clean")
     sp.add_argument("--feature", default=None, help="number, name or path (default: the current one)")
+    sp.add_argument("--report", default=None,
+                    help="fix the feature from this consolidated_review_report.md in ONE pass, without "
+                         "reviewing again (use a review that was run by hand or recorded as failed)")
     add_flow_options(sp, implement=False)
 
     sub.add_parser("status", help="where every feature stands, what is next and what it cost")
@@ -1092,6 +1095,8 @@ def cmd_revise(run: Run) -> int:
     if feat is None:
         return EXIT_ERROR
     rid = S.ensure_run(cfg, None)
+    if args.report:
+        return _revise_from_report(run, feat, rid)
     result = flow.do_fix_loop(cfg, feat, rid, run.harness(), max_rounds=args.max_rounds,
                               majors=args.majors, fallback=getattr(args, "fallback", None),
                               stream=run.stream, dry_run=args.dry_run)
@@ -1102,6 +1107,27 @@ def cmd_revise(run: Run) -> int:
            "features": {feat.name: result}}
     run.emit(out, flow_summary(out))
     return flow_exit_code(out)
+
+
+def _revise_from_report(run: Run, feat: Path, rid: str) -> int:
+    """`revise --report FILE`: one fix pass from a review report that already exists."""
+    from . import flow
+    args, cfg = run.args, run.cfg
+    report = Path(args.report)
+    if not report.is_absolute():
+        report = cfg.root / report
+    if not report.is_file():
+        run.emit({"error": f"no such report: {report}"}, f"ERROR: no such report: {report}")
+        return EXIT_ENV
+    res = flow.do_revise(cfg, feat, rid, run.harness(), majors=args.majors, stream=run.stream,
+                         dry_run=args.dry_run, report=report)
+    out = {"run_id": rid, "ok": res.ok, "features": {feat.name: {
+        "name": feat.name, "steps": [{"kind": "revise", **res.to_dict()}],
+        "stopped": None if res.ok else "revise",
+        "reason": ("fixed in one pass: run `speckfish review` to check it" if res.ok
+                   else res.error)}}}
+    run.emit(out, flow_summary(out))
+    return EXIT_OK if res.ok else flow_exit_code(out)
 
 
 def status_summary(rows: list[dict], spent: dict[str, float]) -> str:

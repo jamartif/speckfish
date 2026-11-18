@@ -273,3 +273,28 @@ def test_a_big_brief_given_as_a_file_is_split(tmp_path):
     assert flow._split_wanted("@brief.md", cfg, False) is True
     assert flow._split_wanted("@small.md", cfg, False) is False
     assert flow._split_wanted("a short idea", cfg, False) is False
+
+
+# ---- revise --report: one fix pass from a review that already exists ----
+
+def test_revise_uses_the_given_report_instead_of_a_recorded_review(tmp_path, monkeypatch):
+    feat = _feature(tmp_path)
+    report = tmp_path / "mine.md"
+    report.write_text("## Blockers\n\n### B1. Something\n", encoding="utf-8")
+    seen = {}
+
+    def run_step(cfg, h, label, prompt, cwd, rid, egm, **k):
+        seen["prompt"] = prompt
+        (feat / "plan.md").write_text("# changed plan", encoding="utf-8")
+        return StepResult(step=label, kind="revise", ok=True, exit_code=0, duration_s=0.0)
+
+    monkeypatch.setattr(flow, "run_step", run_step)
+    res = flow.do_revise(_cfg(tmp_path), feat, "rid", NS(name="fake"), report=report)
+    assert res.ok is True and str(report).replace("\\", "/") in seen["prompt"].replace("\\", "/")
+
+
+def test_revise_report_must_exist(tmp_path, monkeypatch, fake_agent):
+    _feature(tmp_path)
+    code = C.main(["--root", str(tmp_path), "--json", "revise", "--feature", "001",
+                   "--report", "nope.md"])
+    assert code == C.EXIT_ENV
