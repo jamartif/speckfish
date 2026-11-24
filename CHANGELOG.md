@@ -3,7 +3,7 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
-## Unreleased
+## v0.2.1 — 2026-11-24
 
 - An agent that printed its final event (`result` for Claude/Copilot, `turn.completed` for Codex) but does not exit is closed after 45 s (`SPECKFISH_RESULT_GRACE`), instead of waiting 10 minutes for the idle limit; what the step wrote decides the verdict. Seen with Claude on Windows after an EGM review.
 - Ctrl+C stops the agent's whole process tree (it used to leave `codex exec` running with the sandbox off) and exits with 130 and a one-line message instead of a traceback.
