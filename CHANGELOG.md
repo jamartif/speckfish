@@ -8,6 +8,8 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 This release adds an interactive console, a permission model and a security and CI audit's worth of fixes. Five
 changes need an action when you upgrade (the first block below); everything else is additive.
 
+**Found by the Windows CI before release:** under concurrency `state.json` could lose entries on Windows (38 of 40 saved). Creating the lock file while another process was deleting it fails there with `PermissionError`, which was read as "nothing to protect" and ran unlocked; every writer in a process also shared one temp file name. The lock now waits on that error, temp files are unique per write, and a `state.json` that is busy for a moment is retried and, if it stays busy, raises instead of being read as empty (which would have erased the run's history on the next write).
+
 **Upgrading from 0.2.x**
 
 - Codex needs your consent (`config unsafe=true`, `--unsafe`, or `SPECKFISH_UNSAFE=1`).

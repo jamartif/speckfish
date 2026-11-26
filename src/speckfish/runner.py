@@ -17,7 +17,7 @@ from . import proctree
 from .config import Config, agent_env, env_number, is_windows, norm
 from .harnesses import Harness, StepInvocation
 from .registry import missing_output
-from .store import file_lock, write_json_atomic
+from .store import file_lock, read_json_retry, write_json_atomic
 from .workspace import _git_dirty, feature_dir, git_snapshot, task_progress  # noqa: F401  (re-exported)
 
 
@@ -406,10 +406,9 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
     # read-modify-write under a lock, and written atomically: another process on the same run (or a
     # Ctrl+C in the middle of the write) must not lose entries or leave a truncated file behind
     with file_lock(state_path):
-        try:
-            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-        except (OSError, ValueError):
-            state = {}                   # unreadable (an older interrupted write): start it again
+        # missing or not JSON (an older interrupted write): start it again. A file that is merely busy is
+        # retried and then raised, never taken for empty (that would erase the run's history)
+        state = read_json_retry(state_path) or {}
         if not isinstance(state, dict):
             state = {}
         state.setdefault("run_id", run_id)

@@ -366,3 +366,120 @@ def test_the_plan_prompt_carries_the_stack_once(tmp_path):
     assert text.count("UNIQUE-MARKER") == 1
     assert text.startswith("/speckit-plan ") and "001-a" in text
     assert prompts.plan_prompt("", tmp_path).startswith("/speckit-plan")
+
+
+# ---------------- Windows behaviours, simulated: found by CI, where state entries were lost ----------------
+
+def test_a_permission_error_creating_the_lock_means_busy_not_nothing_to_protect(tmp_path, monkeypatch):
+    """Windows raises PermissionError (not FileExistsError) when the lock file is being deleted."""
+    real_open, calls = os.open, []
+
+    def flaky(path, flags, *a, **k):
+        if str(path).endswith(".lock") and len(calls) < 4:
+            calls.append(1)
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(os, "open", flaky)
+    with store.file_lock(tmp_path / "state.json", timeout=5) as held:
+        assert held is True                                   # it waited and got the lock
+    assert len(calls) == 4
+
+
+def test_a_lock_that_is_never_free_gives_up_unlocked_after_the_timeout(tmp_path, monkeypatch):
+    real_open = os.open
+
+    def always(path, flags, *a, **k):
+        if str(path).endswith(".lock"):
+            raise PermissionError(13, "Permission denied")
+        return real_open(path, flags, *a, **k)
+
+    monkeypatch.setattr(os, "open", always)
+    started = time.time()
+    with store.file_lock(tmp_path / "state.json", timeout=0.3) as held:
+        assert held is False
+    assert time.time() - started < 3
+
+
+def test_other_errors_creating_the_lock_still_mean_nothing_to_protect(tmp_path, monkeypatch):
+    def broken(path, flags, *a, **k):
+        raise FileNotFoundError(2, "no such folder")
+
+    monkeypatch.setattr(os, "open", broken)
+    with store.file_lock(tmp_path / "state.json", timeout=5) as held:
+        assert held is False
+
+
+def test_two_writers_in_one_process_never_share_a_temp_file(tmp_path, monkeypatch):
+    seen = []
+    real = os.replace
+    monkeypatch.setattr(os, "getpid", lambda: 4242)           # the same pid, as every thread has
+    monkeypatch.setattr(os, "replace", lambda a, b: (seen.append(Path(a).name), real(a, b))[1])
+    for i in range(3):
+        store.write_json_atomic(tmp_path / "state.json", {"i": i})
+    assert len(set(seen)) == 3 and all(n.startswith(".state.json.4242.") and n.endswith(".tmp") for n in seen)
+
+
+def test_a_file_that_is_busy_for_a_moment_is_read_after_a_retry(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    path.write_text('{"a": 1}')
+    real, fails = Path.read_text, [2]
+
+    def busy(self, *a, **k):
+        if self == path and fails[0]:
+            fails[0] -= 1
+            raise PermissionError(13, "sharing violation")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", busy)
+    assert store.read_json_retry(path) == {"a": 1}
+    assert store.read_json_retry(tmp_path / "missing.json") is None
+    path.write_text("{ broken")
+    assert store.read_json_retry(path) is None
+
+
+def test_a_file_that_stays_busy_raises_instead_of_reading_as_empty(tmp_path, monkeypatch):
+    path = tmp_path / "state.json"
+    path.write_text('{"a": 1}')
+    monkeypatch.setattr(Path, "read_text", lambda self, *a, **k: (_ for _ in ()).throw(PermissionError(13, "busy")))
+    with pytest.raises(PermissionError):
+        store.read_json_retry(path, attempts=2)
+
+
+def test_record_state_keeps_the_history_when_the_file_is_busy_for_a_moment(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    run_dir = R.run_dir_for(cfg, "rid")
+    _record(cfg, "rid", "plan-001-a", "2026-01-01T00:00:01")
+    state_path = run_dir / "state.json"
+    real, fails = Path.read_text, [1]
+
+    def busy(self, *a, **k):
+        if self == state_path and fails[0]:
+            fails[0] -= 1
+            raise PermissionError(13, "sharing violation")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", busy)
+    _record(cfg, "rid", "tasks-001-a", "2026-01-01T00:00:02")
+    assert set(json.loads(real(state_path, encoding="utf-8"))["steps"]) == {"plan-001-a", "tasks-001-a"}
+
+
+def test_record_state_does_not_erase_the_history_when_the_file_stays_unreadable(tmp_path, monkeypatch):
+    cfg = _cfg(tmp_path)
+    run_dir = R.run_dir_for(cfg, "rid")
+    _record(cfg, "rid", "plan-001-a", "2026-01-01T00:00:01")
+    state_path = run_dir / "state.json"
+    before = state_path.read_text(encoding="utf-8")
+    real = Path.read_text
+    monkeypatch.setattr(store.time, "sleep", lambda s: None)
+
+    def locked(self, *a, **k):
+        if self == state_path:
+            raise PermissionError(13, "locked")
+        return real(self, *a, **k)
+
+    monkeypatch.setattr(Path, "read_text", locked)
+    with pytest.raises(PermissionError):
+        _record(cfg, "rid", "tasks-001-a", "2026-01-01T00:00:02")
+    monkeypatch.undo()
+    assert state_path.read_text(encoding="utf-8") == before

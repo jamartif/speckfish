@@ -15,6 +15,7 @@ import contextlib
 import json
 import os
 import time
+import uuid
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -29,7 +30,7 @@ def write_json_atomic(path: Path, data: object, **dumps: Any) -> None:
     dumps.setdefault("ensure_ascii", False)
     text = json.dumps(data, **dumps)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(text, encoding="utf-8")
         for attempt in range(5):
@@ -49,7 +50,7 @@ def write_json_atomic(path: Path, data: object, **dumps: Any) -> None:
 def write_text_atomic(path: Path, text: str) -> None:
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = path.with_name(f".{path.name}.{os.getpid()}.tmp")
+    tmp = path.with_name(f".{path.name}.{os.getpid()}.{uuid.uuid4().hex[:8]}.tmp")
     try:
         tmp.write_text(text, encoding="utf-8")
         os.replace(tmp, path)
@@ -64,6 +65,10 @@ def file_lock(path: Path, timeout: float = 10.0, stale: float = 60.0) -> Iterato
 
     Best effort by design: a lock older than `stale` seconds belongs to a dead process and is taken over,
     and after `timeout` the block runs anyway (yielding False) rather than hanging a pipeline.
+
+    On Windows, creating the lock file while another process is deleting it fails with PermissionError, not
+    FileExistsError: that is "busy, try again", never "nothing to protect" (treating it as the latter let
+    two writers run unlocked and lose state entries).
     """
     lock = Path(str(path) + ".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
@@ -75,24 +80,45 @@ def file_lock(path: Path, timeout: float = 10.0, stale: float = 60.0) -> Iterato
             os.close(fd)
             held = True
             break
-        except FileExistsError:
-            try:
-                if time.time() - lock.stat().st_mtime > stale:
-                    lock.unlink()
-                    continue
-            except OSError:
-                continue                     # it vanished between the two calls: try again
+        except (FileExistsError, PermissionError) as busy:
+            if isinstance(busy, FileExistsError):
+                try:
+                    if time.time() - lock.stat().st_mtime > stale:
+                        lock.unlink()
+                        continue
+                except OSError:
+                    continue                 # it vanished between the two calls: try again
             if time.time() >= deadline:
                 break
             time.sleep(0.02)
         except OSError:
-            break                            # a read-only folder: nothing to protect
+            break                            # anything else (no such folder, read-only): nothing to protect
     try:
         yield held
     finally:
         if held:
             with contextlib.suppress(OSError):
                 lock.unlink()
+
+
+def read_json_retry(path: Path, attempts: int = 6) -> Any:
+    """JSON of `path`, or None when it does not exist or is not valid JSON.
+
+    A file being replaced can fail to open for a moment on Windows (PermissionError). That is retried, and if
+    it persists the error is raised: reading it as "empty" would make the next write erase what was there.
+    """
+    for attempt in range(attempts):
+        try:
+            return json.loads(Path(path).read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return None
+        except PermissionError:
+            if attempt == attempts - 1:
+                raise
+            time.sleep(0.05 * (attempt + 1))
+        except (OSError, ValueError):
+            return None
+    return None
 
 
 def read_json_cached(path: Path) -> Any:
