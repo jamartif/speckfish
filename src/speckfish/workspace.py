@@ -16,14 +16,32 @@ def count_tasks(path: Path) -> tuple[int, int]:
     return sum(1 for t in tasks if t["done"]), len(tasks)
 
 
+def feature_json_dir(root: Path) -> Path | None:
+    """The folder `.specify/feature.json` points at, only if it exists and is inside the project.
+
+    The file is written by the agent: an absolute path or `../..` in it must not move tasks, reviews or
+    `implement` to some other directory.
+    """
+    try:
+        rel = json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8")
+                         ).get("feature_directory") or ""
+    except (OSError, ValueError, AttributeError):
+        return None
+    if not rel:
+        return None
+    base = Path(root).resolve()
+    try:
+        target = (base / rel).resolve()
+        target.relative_to(base)
+    except (ValueError, OSError):
+        return None
+    return target if target.is_dir() else None
+
+
 def task_progress(root: Path) -> tuple[int, int] | None:
     """(done, total) checkboxes in the active feature's tasks.md — the honest measure of implement."""
-    try:
-        feat = json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8"))
-        rel = feat.get("feature_directory") or ""
-    except (OSError, ValueError):
-        rel = ""
-    candidates = [root / rel / "tasks.md"] if rel else []
+    active = feature_json_dir(root)
+    candidates = [active / "tasks.md"] if active else []
     candidates += sorted((root / "specs").glob("*/tasks.md"), reverse=True)
     for path in candidates:
         if not path.exists():
@@ -34,20 +52,38 @@ def task_progress(root: Path) -> tuple[int, int] | None:
     return None
 
 
-_GIT_NOISE = (".speckfish/", "/bin/", "/obj/", "bin/Debug", "obj/Debug", ".gitignore", "CLAUDE.md",
-              "AGENTS.md", ".agents/", ".claude/")
+_NOISE_DIRS = {".speckfish", ".agents", ".claude"}          # tool state, never the user's work
+_NOISE_FILES = {".gitignore", "CLAUDE.md", "AGENTS.md"}
+_BUILD_DIRS = {"bin", "obj"}                                  # .NET output: bin/Debug, obj/Release, ...
+
+
+def _porcelain_path(line: str) -> str:
+    path = line[3:].strip().strip('"')
+    return path.split(" -> ")[-1] if " -> " in path else path
+
+
+def _is_noise(path: str) -> bool:
+    """Tool state or build output, by path *segments*: `src/bin/main.rs` is real work, `bin/Debug/x.dll` is not."""
+    parts = [p for p in path.replace("\\", "/").split("/") if p]
+    if not parts:
+        return False
+    if parts[-1] in _NOISE_FILES or any(p in _NOISE_DIRS for p in parts[:-1]):
+        return True
+    return any(p in _BUILD_DIRS and nxt in ("Debug", "Release") for p, nxt in zip(parts, parts[1:], strict=False))
 
 
 def _git_porcelain(root: Path) -> list[str] | None:
     """`git status --porcelain` lines that are real work, not build output or tool state (None: unknown)."""
     import subprocess as sp
+
+    from .config import find_git
     try:
-        out = sp.run(["git", "status", "--porcelain", "-uall"], cwd=str(root), capture_output=True,
+        # find_git, not a bare "git": on Windows with App Control the one on PATH can be blocked
+        out = sp.run([find_git(), "status", "--porcelain", "-uall"], cwd=str(root), capture_output=True,
                      text=True, timeout=60, encoding="utf-8", errors="replace").stdout
-    except (OSError, sp.SubprocessError):
+    except (OSError, sp.SubprocessError, SystemExit):
         return None
-    return [ln for ln in out.splitlines()
-            if ln.strip() and not any(n in ln.replace("\\", "/") for n in _GIT_NOISE)]
+    return [ln for ln in out.splitlines() if ln.strip() and not _is_noise(_porcelain_path(ln))]
 
 
 def git_snapshot(root: Path) -> dict | None:
@@ -61,9 +97,7 @@ def git_snapshot(root: Path) -> dict | None:
         return None
     snap: dict = {}
     for ln in lines:
-        path = ln[3:].strip().strip('"')
-        if " -> " in path:
-            path = path.split(" -> ")[-1]
+        path = _porcelain_path(ln)
         try:
             st = (Path(root) / path).stat()
             snap[ln] = (st.st_size, st.st_mtime_ns)
@@ -96,13 +130,9 @@ def changed_besides(before: dict | None, after: dict | None, allowed: Path) -> l
 
 def feature_dir(root: Path) -> Path | None:
     """The feature Spec Kit points at (`.specify/feature.json`), else the newest one."""
-    try:
-        rel = json.loads((root / ".specify" / "feature.json").read_text(encoding="utf-8")
-                         ).get("feature_directory") or ""
-    except (OSError, ValueError):
-        rel = ""
-    if rel and (root / rel).is_dir():
-        return root / rel
+    active = feature_json_dir(root)
+    if active is not None:
+        return active
     feats = sorted((root / "specs").glob("*/spec.md"), key=lambda p: p.stat().st_mtime)
     return feats[-1].parent if feats else None
 

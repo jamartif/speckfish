@@ -5,6 +5,18 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+State integrity and speed (see `AUDITORIA.md`, Sprint 2):
+
+- `state.json`, `*.result.json`, `config.json`, `.specify/feature.json`, `specs/features.json` and the batch/`go`/`pipeline` summaries are written atomically (temp file + replace): an interrupted write leaves the previous file, not a truncated one. `state.json` is updated under a lock, so two steps finishing at once no longer lose each other's entry.
+- Two speckfish processes started in the same second no longer share a run folder: the id gets `-2`, `-3`, … (claimed with an atomic `mkdir`).
+- `status` / `next` / `go` read each `state.json` once (cached until it changes) and build one index of the newest review/analyze/drift per feature instead of re-reading every run for every feature: 20 features over 500 runs went from 1.5 s to 0.4 s.
+- `--budget` counts one currency. Claude reports dollars and Copilot credits; a fallback in the other currency used to be added to the cap (30 credits counted as 30 dollars). The cap now applies to the first cost seen, the other currency is reported as `spent_other`, and the stop message says the unit (`budget of 5 usd reached`).
+- `specify --review` keeps the review it ran: it is in the result (`review`), shown in the summary, and blockers exit 1 (a failed review exits 2, or 3 on quota/auth). It was discarded before.
+- `--feature` with a prefix that matches several features is an error naming them; an exact name or a number wins over a prefix.
+- `.specify/feature.json` cannot point outside the project (an absolute path or `../` is ignored).
+- `implement` no longer treats `src/bin/main.rs` or any path containing `/bin/` as build output: only `bin/Debug|Release`, `obj/Debug|Release`, `.speckfish/`, `.claude/`, `.agents/`, `.gitignore`, `CLAUDE.md` and `AGENTS.md` are ignored. Its git check also uses the git that `find_git` validated.
+- `runs --clean --keep -1` no longer deletes an arbitrary run; the Copilot adapter honours the budget it is given; `plan` sends the stack once instead of twice (a `@stack.md` of 12 KB cost double the tokens). *The `plan` prompt change has not been measured with a real agent.*
+
 Security and robustness (see `AUDITORIA.md`, Sprint 1):
 
 - **EGM is pinned.** `init` used to clone the tip of EGM's `main` and load it as an agent plugin with the agent's full permissions. It now checks out tag `v0.1.1` and verifies its commit (`dea7761…`); if the tag has moved it refuses to use it. `speckfish init --egm-ref <tag|sha>` changes the version on purpose. `doctor` shows the commit and whether it is the pinned one.

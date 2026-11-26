@@ -57,10 +57,10 @@ def feature_line(feature_dir) -> str:
 
 def plan_prompt(stack: str, cfg_root: Path | None = None, feature_dir=None) -> str:
     stack, _src = expand_input((stack or "").strip(), cfg_root)
-    extra = f"Stack and constraints: {stack}\n\n" if stack else ""
     fline = feature_line(feature_dir)
     body = (fline + "\n\n") if fline else ""
-    return f"/speckit-plan {stack}\n\n{extra}{body}{NO_QUESTIONS}"
+    # the stack goes once, as the command's argument: repeating it doubled a 12 KB `@stack.md`
+    return f"/speckit-plan {stack}\n\n{body}{NO_QUESTIONS}"
 
 
 def review_prompt(target: str, artifact_dir: Path, profile: str = "speckit",

@@ -16,6 +16,7 @@ from pathlib import Path
 from .config import Config, env_number, is_windows, norm
 from .harnesses import Harness, StepInvocation
 from .registry import missing_output
+from .store import file_lock, write_json_atomic
 from .workspace import _git_dirty, feature_dir, git_snapshot, task_progress  # noqa: F401  (re-exported)
 
 
@@ -49,13 +50,30 @@ class StepResult:
     writes: str = ""
     interactive: bool = False
     raw_tail: str = ""
+    review: dict | None = None     # `specify --review`: the spec's review, as a result dict
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if k not in ("raw_tail",)}
 
 
-def new_run_id() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
+def new_run_id(cfg: Config | None = None) -> str:
+    """`20261126-101500`; with a `cfg` the folder is claimed on the spot (`-2`, `-3`, ... if taken).
+
+    Resolution is one second, so two processes started together (two CI jobs on one checkout) used to
+    share a run folder and overwrite each other's state. `mkdir` is atomic: exactly one of them wins a name.
+    """
+    base = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if cfg is None:
+        return base
+    cfg.runs_dir.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        rid = base if n == 1 else f"{base}-{n}"
+        try:
+            (cfg.runs_dir / rid).mkdir()
+            return rid
+        except FileExistsError:
+            n += 1
 
 
 def run_dir_for(cfg: Config, run_id: str) -> Path:
@@ -182,8 +200,6 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         log.close()
     meter.stop()
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
-    if idle_closed:
-        code = 0 if code is None else code
     return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
             idle_closed)
 
@@ -245,9 +261,13 @@ _NO_CREDITS = re.compile(r"(insufficient|no|out of|exhausted|run out of)\s+(ai\s
                          r"|credits?\s+(exhausted|required|depleted)")
 
 
-def error_kind(out: str, err: str) -> str:
-    """Classify a failed run: quota / auth / agent error / unknown."""
-    payloads = _json_payloads(out) or _json_payloads(err)
+def error_kind(out: str, err: str, payloads: list[dict] | None = None) -> str:
+    """Classify a failed run: quota / auth / agent error / unknown.
+
+    `payloads` is what `_json_payloads` already extracted; pass it to avoid parsing a big stream twice.
+    """
+    if payloads is None:
+        payloads = _json_payloads(out) or _json_payloads(err)
     for obj in reversed(payloads):
         api = str(obj.get("api_error") or "").lower()
         status = obj.get("api_error_status")
@@ -308,7 +328,7 @@ def human_error(out: str, err: str, code: int) -> str:
     status = obj.get("api_error_status")
     hint = _reset_hint(payloads)
 
-    kind = error_kind(out, err)
+    kind = error_kind(out, err, payloads)
     if kind == "quota":
         detail = message or api or "rate limit reached"
         return f"the agent ran out of quota (HTTP {status or 429}): {detail}{hint}"
@@ -347,28 +367,30 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | Non
 def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                  step: str, harness: Harness, started_at: str) -> None:
     state_path = run_dir / "state.json"
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-    except (OSError, ValueError):
-        state = {}                       # a truncated state.json (an interrupted write) must not stop the run
-    if not isinstance(state, dict):
-        state = {}
-    state.setdefault("run_id", run_id)
-    state.setdefault("steps", {})
-    entry = state["steps"].get(step, {})
-    entry.update({"status": "ok" if res.ok else "failed", "started_at": started_at,
-                  "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
-                  "blockers": len(res.blockers), "reports": res.reports,
-                  "exit_code": res.exit_code, "harness": harness.name,
-                  "model": res.model, "interactive": res.interactive,
-                  "majors": res.majors, "nits": res.nits,
-                  "meets_standard": res.meets_standard, "verdict": res.verdict,
-                  "denials": res.denials, "artifact_dir": res.artifact_dir,
-                  "log": res.log, "tasks_done": res.tasks_done, "tasks_total": res.tasks_total})
-    state["steps"][step] = entry
-    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    (run_dir / f"{step}.result.json").write_text(
-        json.dumps(res.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    # read-modify-write under a lock, and written atomically: another process on the same run (or a
+    # Ctrl+C in the middle of the write) must not lose entries or leave a truncated file behind
+    with file_lock(state_path):
+        try:
+            state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+        except (OSError, ValueError):
+            state = {}                   # unreadable (an older interrupted write): start it again
+        if not isinstance(state, dict):
+            state = {}
+        state.setdefault("run_id", run_id)
+        state.setdefault("steps", {})
+        entry = state["steps"].get(step, {})
+        entry.update({"status": "ok" if res.ok else "failed", "started_at": started_at,
+                      "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
+                      "blockers": len(res.blockers), "reports": res.reports,
+                      "exit_code": res.exit_code, "harness": harness.name,
+                      "model": res.model, "interactive": res.interactive,
+                      "majors": res.majors, "nits": res.nits,
+                      "meets_standard": res.meets_standard, "verdict": res.verdict,
+                      "denials": res.denials, "artifact_dir": res.artifact_dir,
+                      "log": res.log, "tasks_done": res.tasks_done, "tasks_total": res.tasks_total})
+        state["steps"][step] = entry
+        write_json_atomic(state_path, state)
+    write_json_atomic(run_dir / f"{step}.result.json", res.to_dict())
 
 
 def _base_step(cfg: Config, step: str) -> str:

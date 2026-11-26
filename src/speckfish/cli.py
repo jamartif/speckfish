@@ -108,6 +108,15 @@ def summarize(res: dict, root: str | None = None) -> str:
             if r not in main:
                 lines.append(f"    {r}")
 
+    nested = res.get("review")
+    if nested:
+        state = "OK" if nested.get("ok") else "FAILED"
+        lines.append(f"  review of the spec: {state} · {len(nested.get('blockers') or [])} blocker(s) · "
+                     f"{nested.get('majors', 0)} major(s)")
+        for b in (nested.get("blockers") or [])[:5]:
+            lines.append(f"    BLOCKER  {b}")
+        if nested.get("error"):
+            lines.append(f"    ERROR  {nested['error']}")
     if res.get("error"):
         lines.append(f"  ERROR  {res['error']}")
         hint = ERROR_HINTS.get(res.get("error_kind") or "")
@@ -313,6 +322,11 @@ def exit_for(res: dict) -> int:
     # exit 1 only with blockers: "does not meet the standard" is read from the JSON
     kind = res.get("kind") or str(res.get("step") or "").split("-")[0]
     if kind in ("review", "drift") and res.get("blockers"):
+        return EXIT_BLOCKERS
+    nested = res.get("review") or {}                  # `specify --review`
+    if nested and not nested.get("ok"):
+        return EXIT_ENV if nested.get("error_kind") in ("quota", "auth") else EXIT_ERROR
+    if nested.get("blockers"):
         return EXIT_BLOCKERS
     return EXIT_OK
 

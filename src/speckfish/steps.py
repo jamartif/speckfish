@@ -10,6 +10,7 @@ from . import prompts
 from .config import STATE_DIR, Config, find_git, norm, run_cmd, which
 from .harnesses import Harness, get_harness
 from .runner import StepResult, new_run_id, run_dir_for, run_interactive, run_step
+from .store import read_json_cached, write_json_atomic
 
 # ---------------- infrastructura ----------------
 
@@ -80,7 +81,7 @@ def latest_feature(root: Path) -> Path | None:
 
 
 def ensure_run(cfg: Config, run_id: str | None) -> str:
-    rid = run_id or new_run_id()
+    rid = run_id or new_run_id(cfg)
     run_dir_for(cfg, rid)
     return rid
 
@@ -163,8 +164,7 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
     out["config"] = norm(cfg.save())
     out["note"] = ("Spec Kit keeps only the last integration in .specify/integration.json; "
                    "the skills of the others stay on disk. Re-run `speckfish init` to repair.")
-    (cfg.state_dir / "init.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
-                                             encoding="utf-8")
+    write_json_atomic(cfg.state_dir / "init.json", out)
     return out
 
 
@@ -301,7 +301,7 @@ def do_doctor(cfg: Config) -> dict:
         "has_specify": (cfg.root / ".specify").exists(),
         "has_claude_skills": (cfg.root / ".claude" / "skills").is_dir(),
         "state_ignored": is_git_ignored(cfg.root, STATE_DIR),
-        "feature": norm(latest_feature(cfg.root)) if latest_feature(cfg.root) else None,
+        "feature": norm(latest) if (latest := latest_feature(cfg.root)) else None,
     }
     return info
 
@@ -330,19 +330,8 @@ def list_features(cfg: Config) -> list[dict]:
 
 def active_feature(cfg: Config) -> Path | None:
     """The feature Spec Kit considers current (`.specify/feature.json`)."""
-    f = cfg.root / ".specify" / "feature.json"
-    if not f.exists():
-        return None
-    try:
-        rel = json.loads(f.read_text(encoding="utf-8")).get("feature_directory")
-    except Exception:
-        return None
-    if not rel:
-        return None
-    p = Path(rel)
-    if not p.is_absolute():
-        p = cfg.root / p
-    return p if p.is_dir() else None
+    from .workspace import feature_json_dir
+    return feature_json_dir(cfg.root)
 
 
 def current_feature(cfg: Config) -> Path | None:
@@ -366,8 +355,7 @@ def set_active_feature(cfg: Config, feature: Path) -> Path:
         rel = feature.relative_to(cfg.root.resolve()).as_posix()
     except ValueError:
         rel = str(feature)
-    (fdir / "feature.json").write_text(json.dumps({"feature_directory": rel}, indent=2),
-                                      encoding="utf-8")
+    write_json_atomic(fdir / "feature.json", {"feature_directory": rel})
     return feature
 
 
@@ -383,9 +371,15 @@ def find_feature(cfg: Config, wanted: str) -> Path:
     if not specs_dir.is_dir():
         raise SystemExit("no specs/ directory here: run `speckfish specify` first")
     names = sorted(p.name for p in specs_dir.iterdir() if p.is_dir())
-    for name in names:
-        if name == raw or name.startswith(raw) or name.split("-")[0] == raw.zfill(3):
-            return (specs_dir / name).resolve()
+    for rule in (lambda n: n == raw,                              # exact name
+                 lambda n: n.split("-")[0] == raw.zfill(3),       # its number: 2 -> 002-...
+                 lambda n: n.startswith(raw)):                    # a prefix
+        hits = [n for n in names if rule(n)]
+        if len(hits) > 1:
+            raise SystemExit(f"--feature {raw!r} matches {len(hits)} features ({', '.join(hits)}): "
+                             f"use the full name or the number")
+        if hits:
+            return (specs_dir / hits[0]).resolve()
     raise SystemExit(f"feature not found: {raw}. Available: {', '.join(names) or 'none'}")
 
 
@@ -481,8 +475,7 @@ def run_batch(cfg: Config, action: str, features: list[Path], h: Harness, rid: s
     out["done"] = out["stopped_at"] is None
     # state.json is keyed by label now, but a per-run batch file keeps the per-feature view in one place
     out["detail_file"] = detail_file
-    (cfg.runs_dir / rid / detail_file).write_text(json.dumps(out, indent=2, ensure_ascii=False),
-                                                  encoding="utf-8")
+    write_json_atomic(cfg.runs_dir / rid / detail_file, out)
     return out
 
 
@@ -569,7 +562,8 @@ def do_specify(cfg: Config, idea: str, run_id: str | None = None,
     if review and not dry_run and res.ok:
         spec = spec_path_from(res) or (latest_feature(cfg.root) or Path()) / "spec.md"
         if Path(spec).exists():
-            do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md")
+            rev = do_review(cfg, str(spec), rid, h, stream=stream, default_file="spec.md")
+            res.review = rev.to_dict()       # it used to be thrown away: blockers could not fail the run
     return res
 
 
@@ -790,8 +784,7 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
     # never overwrite an approved cut with nothing: a --dry-run (or a failed inventory) has no features
     if features and not dry_run:
         (cfg.root / "specs").mkdir(parents=True, exist_ok=True)
-        (cfg.root / "specs" / "features.json").write_text(
-            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json_atomic(cfg.root / "specs" / "features.json", payload)
     if dry_run or inventory_only:
         out["inventory_only"] = bool(inventory_only)
         out["dry_run"] = bool(dry_run)
@@ -830,8 +823,7 @@ def _specify_each(cfg: Config, h: Harness, rid: str, pairs: list[tuple[int, dict
                                 step_name=f"review-{i}")
                 out["steps"][f"review-{i}"] = rev.to_dict()
     out["ok"] = all(s.get("ok") for k, s in out["steps"].items() if k != "split") and bool(pairs)
-    (cfg.runs_dir / rid / "split.json").write_text(json.dumps(out, indent=2, ensure_ascii=False),
-                                                   encoding="utf-8")
+    write_json_atomic(cfg.runs_dir / rid / "split.json", out)
     return out
 
 
@@ -938,8 +930,7 @@ def do_pipeline(cfg: Config, idea: str, stack: str = "", target: str | None = No
     results["ok"] = all(s.get("ok") for s in results["steps"].values())
     results.update(run_totals(results["steps"]))
     run_dir = cfg.runs_dir / rid
-    (run_dir / "pipeline.json").write_text(json.dumps(results, indent=2, ensure_ascii=False),
-                                           encoding="utf-8")
+    write_json_atomic(run_dir / "pipeline.json", results)
     return results
 
 
@@ -971,13 +962,11 @@ def run_summary(cfg: Config, run_id: str) -> dict:
     state_path = cfg.runs_dir / run_id / "state.json"
     if not state_path.exists():
         return {}
-    try:
-        state = json.loads(state_path.read_text(encoding="utf-8"))
-    except (OSError, ValueError):
+    cached = read_json_cached(state_path)
+    if not isinstance(cached, dict):
         return {}                        # unreadable: show the run as having no steps, not a traceback
-    if not isinstance(state, dict):
-        return {}
-    state.update(run_totals(state.get("steps", {})))
+    state = dict(cached)                 # the cache is shared and read-only
+    state.update(run_totals(state.get("steps") or {}))
     return state
 
 
@@ -985,6 +974,7 @@ def clean_runs(cfg: Config, keep: int = 10) -> dict:
     """Delete old run directories, keeping the newest `keep`."""
     import shutil as _shutil
     runs = sorted([p for p in cfg.runs_dir.iterdir() if p.is_dir()]) if cfg.runs_dir.exists() else []
+    keep = max(0, int(keep))             # `runs[:-(-1)]` would delete one run and mean nothing
     doomed = runs[:-keep] if keep > 0 else runs
     removed = []
     for p in doomed:

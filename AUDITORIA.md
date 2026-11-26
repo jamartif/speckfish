@@ -434,12 +434,13 @@ Regresión en `tests/test_sprint1.py` (33 tests). Suite: 344 en verde, de 21 s a
 - [x] **B4**: capturar config corrupta, variables de entorno no numéricas y fallo de `Popen`.
 - [x] **P4**: intervalo de sondeo configurable (`SPECKFISH_POLL_SECONDS`). La suite baja de 21 s a 11 s, no a ~2 s: los 4 tests de inactividad aún esperan los 2 s del límite que fijan ellos mismos.
 
-### Sprint 2: estado y rendimiento (~2–3 días)
-- [ ] **B3**: escritura atómica (`os.replace`), `run_id` con sufijo y lock en `record_state`.
-- [ ] **P2**: `RunIndex` compartido por `status`, `next`, `go` y `review_already_done`.
-- [ ] **P3**: extracción incremental en `pump`, cola acotada y `payloads` calculados una sola vez.
-- [ ] **B2**: `Budget` por unidad y presupuesto restante pasado al paso siguiente.
-- [ ] **P6** y **B5**: pequeños arreglos agrupados en un PR `fix: minor robustness`.
+### Sprint 2: estado y rendimiento (~2–3 días) — HECHO, con tres matices
+Regresión en `tests/test_sprint2.py` (37 tests). Suite: 381 en verde.
+- [x] **B3**: escritura atómica (`os.replace`), `run_id` con sufijo y lock en `record_state`.
+- [x] **P2**: `RunIndex` compartido por `status`, `next`, `go` y `review_already_done`.
+- [~] **P3**: medido y descartado en su mayor parte. Analizar 61 MB de salida de agente cuesta 0,3–0,8 s, así que reescribir `pump` de forma incremental no compensa. Hecho lo barato: `human_error` calcula los `payloads` una vez (0,82 s → 0,35 s). Sin cola acotada: la salida completa sigue en memoria.
+- [~] **B2**: `Budget` cuenta una sola moneda y muestra la otra aparte. **No hecho:** pasar el presupuesto restante como `--max-budget-usd` al paso siguiente (hay que llevarlo por todos los `do_*`); el tope se sigue comprobando solo entre pasos.
+- [~] **P6** y **B5**: hechos todos salvo `CODEX_FILE_HINT` solo en Windows: el prompt está medido con ejecuciones reales y varios tests lo fijan, así que cambiarlo exige volver a medir con codex. El cambio de P6 en el prompt de `plan` tampoco está medido con un agente real.
 
 ### Sprint 3: modelo de permisos (~3–5 días, requiere probar con agentes reales)
 - [ ] **S1**: `StepSpec.tools` por *kind*, perfiles de solo lectura para review/drift/analyze, Codex con

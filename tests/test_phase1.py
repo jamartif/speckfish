@@ -275,7 +275,7 @@ def test_the_budget_stops_before_the_next_step(tmp_path, monkeypatch):
     cfg, feat, fake = _prepare(tmp_path, monkeypatch, blockers=[0], cost=1.0)
     out = flow.advance(cfg, feat, RID, NS(name="fake"), budget=flow.Budget(2.0))
     assert fake.calls == ["plan", "tasks"]
-    assert out["stopped"] == "budget" and "budget of 2 reached" in out["reason"]
+    assert out["stopped"] == "budget" and "budget of 2 usd reached" in out["reason"]
 
 
 def test_only_one_runs_a_single_step(tmp_path, monkeypatch):

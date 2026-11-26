@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .store import write_json_atomic
+
 STATE_DIR = ".speckfish"
 
 DEFAULTS = {
@@ -125,7 +127,7 @@ class Config:
             data.pop("timeouts", None)
         if data.get("budgets") == DEFAULTS["budgets"]:
             data.pop("budgets", None)
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json_atomic(p, data)
         return p
 
     # ---------- working paths ----------

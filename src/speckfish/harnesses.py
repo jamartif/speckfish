@@ -183,7 +183,8 @@ class CopilotHarness(Harness):
         if egm_root:
             argv += ["--plugin-dir", norm(egm_root), "--add-dir", norm(egm_root),
                      "--agent", "egm:egm"]
-        credits = self.cfg.budgets.get("copilot", {}).get(kind)
+        credits = budget if isinstance(budget, (int, float)) and budget else \
+            self.cfg.budgets.get("copilot", {}).get(kind)
         if credits:
             # the Copilot CLI rejects anything below 30 credits
             argv += ["--max-ai-credits", str(max(30, int(credits)))]
