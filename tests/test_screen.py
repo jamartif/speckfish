@@ -321,3 +321,89 @@ def test_a_killed_console_still_gives_the_screen_back(tmp_path):
     rest = _read(fd, LEAVE.encode())
     os.waitpid(pid, 0)
     assert LEAVE.encode() in rest
+
+
+# ---------------- layout: nothing is cut in the middle of a word, the wizard does not linger ----------------
+
+def _wide(monkeypatch, columns):
+    monkeypatch.setattr(SH.shutil, "get_terminal_size",
+                        lambda fallback=None: type("S", (), {"columns": columns, "lines": 30})())
+
+
+@pytest.mark.parametrize("columns", [50, 80, 110])
+def test_the_hint_lines_fit_the_terminal_and_break_between_words(tmp_path, monkeypatch, columns):
+    _wide(monkeypatch, columns)
+    shell, out, _ = _shell(tmp_path, ["/exit"])
+    shell.run()
+    for line in out.getvalue().splitlines():
+        assert len(line) <= columns or line.startswith("🐟"), line        # a path cannot be broken
+    assert "/model the model" in out.getvalue().replace("\n", " ")
+    assert "/mode\nl" not in out.getvalue()
+
+
+def test_the_editor_hint_wraps_too(tmp_path, monkeypatch):
+    _wide(monkeypatch, 60)
+    shell, out, _ = _shell(tmp_path, ["/constitution", "", "", "/exit"])
+    shell.run()
+    for line in out.getvalue().splitlines():
+        assert len(line) <= 60 or line.startswith("🐟"), line
+
+
+def test_the_menu_uses_plain_descriptions_not_the_parsers_internals():
+    cat = dict(SH.command_catalog())
+    assert cat["constitution"] == "Write or update the project's principles"
+    assert "speckit-" not in " ".join(cat.values()) and "writes " not in cat["tasks"]
+    assert cat["review"].startswith("Goldfish review")
+
+
+def test_a_command_without_a_friendly_description_keeps_the_parsers_help(monkeypatch):
+    real = C.build_parser
+
+    def with_extra():
+        p = real()
+        p._subparsers._group_actions[0].add_parser("zap", help="a brand new command")
+        return p
+
+    monkeypatch.setattr(C, "build_parser", with_extra)
+    assert dict(SH.command_catalog())["zap"] == "a brand new command"
+
+
+def test_the_status_bar_is_cut_with_an_ellipsis_not_mid_word(tmp_path, monkeypatch):
+    _wide(monkeypatch, 60)
+
+    class UI:
+        bar = ""
+
+        def set_toolbar(self, text):
+            self.bar = text
+
+        def command(self):
+            return "/exit"
+
+    ui = UI()
+    shell, _out, _ = _shell(tmp_path, [])
+    shell.ui = ui
+    shell.run()
+    assert len(ui.bar) <= 59 and ui.bar.endswith("…")
+
+
+def test_after_the_wizard_the_screen_is_cleared_and_only_the_result_is_kept(tmp_path, monkeypatch):
+    fake = FakeScreen()
+    out, it = io.StringIO(), iter(["y", "", "", "/exit"])
+    shell = SH.Shell(tmp_path, input_fn=lambda p="": next(it), out=out, main=lambda argv: 0, screen=fake)
+
+    def fake_init(cfg, integration, **kw):
+        (cfg.root / ".specify").mkdir(exist_ok=True)
+        cfg.save()
+        return {"actions": [{"git_init": True}, {"integration": integration, "specify_init": True},
+                            {"egm": "cloned", "ref": "v0.1.1"}]}
+
+    monkeypatch.setattr(SH.S, "do_init", fake_init)
+    monkeypatch.setattr(SH.Shell, "installed_agents", lambda self, cfg: ["claude"])
+    shell.run()
+    text = out.getvalue()
+    assert fake.cleared == 1
+    tail = text.split("Initialising with claude")[-1]
+    assert tail.count("🐟 speckfish") == 1                    # the banner is drawn again on the clean screen
+    assert "✔ EGM (cloned v0.1.1)" in tail and "✔ Spec Kit (claude)" in tail
+    assert "Which agent" not in tail and "Set it up now?" not in tail.split("🐟")[-1]

@@ -5,6 +5,12 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+Full-screen console and README:
+
+- **`speckfish` takes the whole terminal.** The console runs on the terminal's alternate screen (as `vim` or `less` do): earlier commands are out of sight and the terminal is restored exactly on exit — also after an error, `atexit`, SIGTERM or SIGHUP. Output longer than the window goes through a pager (`Enter` for more, `q` to skip), because that screen has no scrollback; `/clear` redraws it. Off with `config fullscreen=false` or `SPECKFISH_FULLSCREEN=0`, and automatically when the terminal cannot take escape codes.
+- After the setup wizard the screen is cleared and only its result is kept. Hint lines wrap between words to the terminal width (they used to break `/model` into `/mode` + `l`), the status bar is cut with an ellipsis, and the menu uses plain one-line descriptions instead of the parser's internals.
+- README: quick start, eight screenshots of the real console, the console section rewritten, settings and environment variables, exit code 130. The screenshots are regenerated with `python docs/screenshots/capture.py`: real speckfish in a pseudo-terminal, with a scripted stand-in for the agent.
+
 Ctrl+C while an agent runs (reported with Codex on `implement`):
 
 - **It now says what it is doing and whether it worked.** Ctrl+C prints `Stopping the agent…`, kills the whole process tree and *checks* that it is gone. If it is not, it prints `WARNING: the agent (pid N) is still running` with the exact command to stop it by hand (`taskkill /F /T /PID N`); before, a kill that failed was silent and the agent kept writing code with its sandbox off. A second Ctrl+C forces the kill.

@@ -15,7 +15,9 @@ from __future__ import annotations
 import contextlib
 import io
 import shlex
+import shutil
 import sys
+import textwrap
 from collections.abc import Callable
 from pathlib import Path
 
@@ -40,19 +42,46 @@ SESSION_ONLY = {"harness", "model"}
 
 # commands that exist only in the console, with the text the menu shows for them
 SESSION_COMMANDS = {
-    "next": "run the step the current feature needs",
-    "feature": "choose the active feature (or /feature NAME)",
-    "harness": "choose the agent CLI: claude, copilot or codex (--save to keep it)",
-    "model": "choose the model the agent uses (--save to keep it)",
-    "clear": "clear the screen",
-    "verbose": "show every action the agent takes (on | off), not only the files it writes",
-    "help": "show the commands",
-    "exit": "leave the console (Ctrl+D also works)",
+    "next": "Run the step the current feature needs",
+    "feature": "Choose the active feature (or /feature NAME)",
+    "harness": "Choose the agent CLI: claude, copilot or codex (--save keeps it)",
+    "model": "Choose the model the agent uses (--save keeps it)",
+    "clear": "Clear the screen",
+    "verbose": "Show every action the agent takes (on | off)",
+    "help": "Show the commands",
+    "exit": "Leave the console (Ctrl+D also works)",
 }
 # the order people use them in; whatever else the CLI has follows alphabetically
 ORDER = ("constitution", "specify", "go", "plan", "tasks", "analyze", "clarify", "checklist", "review",
          "revise", "implement", "converge", "drift", "next", "feature", "status")
 HIDDEN = {"shell", "editors", "pipeline"}
+# what the menu says: the parser's own help describes files and skills, which reads like internals
+FRIENDLY = {
+    "constitution": "Write or update the project's principles",
+    "specify": "Describe a feature: creates spec.md",
+    "go": "Idea to spec, plan, tasks and a reviewed design in one go",
+    "plan": "Plan the feature: stack, design, contracts",
+    "tasks": "Break the plan into tasks",
+    "analyze": "Check that spec, plan and tasks agree",
+    "clarify": "List the open questions in the spec",
+    "checklist": "Quality checklist for the requirements",
+    "review": "Goldfish review of the plan (EGM)",
+    "revise": "Fix the review's blockers, then review again",
+    "implement": "Write the code, task by task (asks first)",
+    "converge": "Add the work the code still lacks to tasks.md",
+    "drift": "Does the code still match the design?",
+    "status": "Where each feature stands, what is next, what it cost",
+    "features": "List the features and the active one",
+    "runs": "List past runs",
+    "report": "Print the latest review or drift report",
+    "show": "Details of a run",
+    "doctor": "Check the agent CLI, Spec Kit and EGM",
+    "config": "Show or change the project's settings",
+    "trust": "Trust this project's EGM checkout",
+    "init": "Set up git, Spec Kit and EGM in this folder",
+    "brainstorm": "Explore a vague idea before specifying it",
+    "draft": "Turn a concepts brief into a design draft",
+}
 TEXT_EXTENSIONS = (".md", ".markdown", ".txt", ".rst")
 
 
@@ -63,7 +92,8 @@ def command_catalog() -> list[tuple[str, str]]:
     """
     from .cli import build_parser
     action = build_parser()._subparsers._group_actions[0]
-    rows = {a.dest: (a.help or "").strip() for a in action._choices_actions if a.dest not in HIDDEN}
+    rows = {a.dest: FRIENDLY.get(a.dest) or (a.help or "").strip()
+            for a in action._choices_actions if a.dest not in HIDDEN}
     rows.update(SESSION_COMMANDS)
     names = sorted(rows, key=lambda n: (ORDER.index(n) if n in ORDER else len(ORDER), n))
     return [(n, rows[n]) for n in names]
@@ -137,6 +167,7 @@ class Shell:
         self.ui = ui                          # optional rich front end (tui.PtkUI); None = plain input()
         self._catalog: list[tuple[str, str]] | None = None
         self.screen = screen                  # the alternate screen, when the console runs full screen
+        self.setup_summary: list[str] = []    # what the wizard did, shown again on the clean screen
         self.tip = tip
         self.out = out or sys.stdout
         if main is None:
@@ -167,10 +198,17 @@ class Shell:
         else:
             self.say(text)
 
+    def width(self) -> int:
+        return max(40, shutil.get_terminal_size((100, 30)).columns - 1)
+
+    def say_wrapped(self, text: str, indent: str = "") -> None:
+        """A long line, broken between words to fit the terminal (never in the middle of one)."""
+        self.say(textwrap.fill(text, width=self.width(), subsequent_indent=indent))
+
     def banner(self) -> None:
         self.say(f"🐟 speckfish {__version__} · {norm(self.root)}")
         if self.tip:
-            self.say(self.tip)
+            self.say_wrapped(self.tip)
 
     @property
     def catalog(self) -> list[tuple[str, str]]:
@@ -212,8 +250,9 @@ class Shell:
         """One pass of the multi-line editor. None = cancelled."""
         if self.ui is not None:
             return self.ui.editor(title, may_be_empty, initial)
-        self.say(f"{title} (empty line to send, `@file.md` to import"
-                 f"{', empty = let the agent propose' if may_be_empty else ''}; /cancel to abort):")
+        self.say(title)
+        self.say_wrapped(f"  (empty line sends · `@file.md` imports · /cancel aborts"
+                         f"{' · empty = let the agent propose' if may_be_empty else ''})", indent="  ")
         lines: list[str] = []
         while True:
             try:
@@ -298,6 +337,10 @@ class Shell:
             return order[0] if order else "the agent"
         return name
 
+    def welcome(self) -> None:
+        self.say_wrapped("Type /help for the commands, or press Enter to run the suggested step.")
+        self.say_wrapped("/harness changes the agent CLI, /model the model, /clear clears the screen.")
+
     def header_text(self) -> str:
         cfg = self.cfg()
         agent = self.harness or cfg.harness
@@ -312,6 +355,9 @@ class Shell:
 
     def header(self) -> None:
         text = self.header_text()
+        room = self.width() - (0 if self.ui is not None else 2)         # the plain form adds "┌ "
+        if len(text) > room:
+            text = text[:room - 1] + "…"                 # the toolbar cuts at the edge: do it ourselves
         if self.ui is not None:
             self.ui.set_toolbar(text)         # computed once per prompt: a toolbar redraws on every key
         else:
@@ -361,12 +407,17 @@ class Shell:
             self.say(f"ERROR: {e}")
             return False
         for action in out["actions"]:
+            line = ""
             if "git_init" in action:
-                self.say(f"  {'✔' if action['git_init'] else '✘'} git init")
+                line = f"  {'✔' if action['git_init'] else '✘'} git init"
             elif "integration" in action:
-                self.say(f"  {'✔' if action.get('specify_init') else '✘'} Spec Kit ({action['integration']})")
+                line = f"  {'✔' if action.get('specify_init') else '✘'} Spec Kit ({action['integration']})"
             elif "egm" in action:
-                self.say(f"  {'✔' if action['egm'] != 'failed' else '✘'} EGM ({action['egm']})")
+                ref = f" {action['ref']}" if action.get("ref") else ""
+                line = f"  {'✔' if action['egm'] != 'failed' else '✘'} EGM ({action['egm']}{ref})"
+            if line:
+                self.say(line)
+                self.setup_summary.append(line)
         ok = all(a.get("specify_init", True) and a.get("egm") != "failed" for a in out["actions"])
         if not ok:
             self.say("Some parts failed: run /doctor to see what is missing.")
@@ -632,10 +683,15 @@ class Shell:
     # ---------- main loop ----------
     def run(self) -> int:
         self.banner()
-        if not self.initialised() and not self.wizard():
-            return 0 if self.initialised() else 1
-        self.say("Type /help for the commands, or an empty line to run the suggested step. "
-                 "/harness changes the agent CLI, /model the model.")
+        if not self.initialised():
+            if not self.wizard():
+                return 0 if self.initialised() else 1
+            if self.fullscreen:                           # the wizard's questions have done their job
+                self.screen.clear()
+                self.banner()
+                for line in self.setup_summary:
+                    self.say(line)
+        self.welcome()
         while True:
             self.header()
             try:

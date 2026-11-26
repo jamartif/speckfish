@@ -97,7 +97,11 @@ class PtkUI:
 
         hint = ("empty line sends · @file.md imports · Esc+Enter sends · /cancel aborts"
                 + (" · empty = let the agent propose" if may_be_empty else ""))
-        print(f"{title}  ({hint})")
+        import shutil
+        import textwrap
+        width = max(40, shutil.get_terminal_size((100, 30)).columns - 1)
+        print(title)
+        print(textwrap.fill(f"  ({hint})", width=width, subsequent_indent="  "))
         session = PromptSession(multiline=True, key_bindings=kb, completer=self._completer,
                                 complete_while_typing=True, input=self._input, output=self._output,
                                 prompt_continuation=lambda width, line_no, wrap: "│ ")
