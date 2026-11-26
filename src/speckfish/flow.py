@@ -15,6 +15,7 @@ from . import prompts
 from . import steps as S
 from .config import Config, find_report, norm, parse_consolidated
 from .runner import StepResult, run_step
+from .store import read_json_cached, write_json_atomic
 from .workspace import changed_besides, count_tasks, git_snapshot, next_chunk, parse_tasks
 
 _MARKS = re.compile(r"\[[ xX]\]")
@@ -31,16 +32,65 @@ def _runs_newest_first(cfg: Config) -> list[Path]:
     return sorted((p for p in cfg.runs_dir.iterdir() if p.is_dir()), reverse=True)
 
 
+_KINDS = ("review", "analyze", "drift")
+_REVISION = re.compile(r"-r\d+$")
+
+
+class RunIndex:
+    """The newest recorded step per (kind, feature) over every run, built from one pass over the runs.
+
+    `latest_record` used to walk the runs newest-first and parse each `state.json` again for every kind
+    of every feature: with 20 features and 500 runs that was thousands of JSON parses per `status`.
+    """
+
+    def __init__(self, cfg: Config):
+        self.records: dict[tuple[str, str], dict] = {}
+        for run in _runs_newest_first(cfg):
+            data = read_json_cached(run / "state.json")
+            steps = (data.get("steps") if isinstance(data, dict) else None) or {}
+            for key, entry in steps.items():
+                for kind in _KINDS:
+                    if not key.startswith(kind + "-"):
+                        continue
+                    rest = key[len(kind) + 1:]
+                    # `review-001-a-r2` is a second round of 001-a (or a feature that really ends in -r2)
+                    for feature in {rest, _REVISION.sub("", rest)}:
+                        when = (entry.get("started_at") or "") if isinstance(entry, dict) else ""
+                        current = self.records.get((kind, feature))
+                        if current is None or when > (current.get("started_at") or ""):
+                            self.records[(kind, feature)] = {**entry, "key": key, "run": run.name}
+                    break
+
+    def get(self, kind: str, feature: str) -> dict | None:
+        return self.records.get((kind, feature))
+
+
+_INDEX: dict = {}
+
+
+def run_index(cfg: Config) -> RunIndex:
+    """The index, rebuilt only when a run folder or a state.json changed (a step just recorded one)."""
+    runs = _runs_newest_first(cfg)
+    sig = []
+    for run in runs:
+        try:
+            st = (run / "state.json").stat()
+            sig.append((run.name, st.st_size, st.st_mtime_ns, st.st_ino))
+        except OSError:
+            sig.append((run.name, 0, 0, 0))
+    key = (str(cfg.runs_dir), tuple(sig))
+    if _INDEX.get("key") != key:
+        _INDEX["key"], _INDEX["index"] = key, RunIndex(cfg)
+    return _INDEX["index"]
+
+
 def latest_record(cfg: Config, kind: str, feature: str) -> dict | None:
     """The newest recorded step of this kind for this feature (`review-<feature>`, `review-<feature>-r2`)."""
+    if kind in _KINDS:
+        return run_index(cfg).get(kind, feature)
     for run in _runs_newest_first(cfg):
-        state = run / "state.json"
-        if not state.exists():
-            continue
-        try:
-            steps = json.loads(state.read_text(encoding="utf-8")).get("steps") or {}
-        except (OSError, ValueError):
-            continue
+        data = read_json_cached(run / "state.json")
+        steps = (data.get("steps") if isinstance(data, dict) else None) or {}
         pat = re.compile(rf"{re.escape(kind)}-{re.escape(feature)}(-r\d+)?")
         hits = [(v.get("started_at") or "", k, v) for k, v in steps.items() if pat.fullmatch(k)]
         if hits:
@@ -97,14 +147,14 @@ def feature_state(cfg: Config, feature: Path) -> dict:
     name = feature.name
     done, total = count_tasks(feature / "tasks.md")
     review = latest_record(cfg, "review", name)
-    current = review_is_current(feature, review)
+    current = review_is_current(feature, review)           # stats the documents: once, not twice
     blockers, majors = _review_counts(review) if current else (None, None)
     return {
         "name": name, "path": norm(feature),
         "spec": (feature / "spec.md").exists(), "plan": (feature / "plan.md").exists(),
         "tasks": (feature / "tasks.md").exists(),
         "tasks_done": done, "tasks_total": total,
-        "review": review, "review_current": review_is_current(feature, review),
+        "review": review, "review_current": current,
         "blockers": blockers, "majors": majors,
         "analyzed": _ok_record(latest_record(cfg, "analyze", name)),
         "drift": _ok_record(latest_record(cfg, "drift", name)),
@@ -112,9 +162,13 @@ def feature_state(cfg: Config, feature: Path) -> dict:
 
 
 def next_step(cfg: Config, feature: Path, implement: bool = False, analyze: bool = True,
-              drift: bool = True, majors: bool = False) -> tuple[str | None, str]:
-    """(kind, why) of the step this feature needs next; kind None means there is nothing to do."""
-    st = feature_state(cfg, feature)
+              drift: bool = True, majors: bool = False,
+              state: dict | None = None) -> tuple[str | None, str]:
+    """(kind, why) of the step this feature needs next; kind None means there is nothing to do.
+
+    Pass `state` (from `feature_state`) when you already have it: it is not computed twice.
+    """
+    st = state or feature_state(cfg, feature)
     if not st["spec"]:
         return "specify", "no spec.md"
     if not st["plan"]:
@@ -149,7 +203,7 @@ def status_rows(cfg: Config) -> list[dict]:
     rows = []
     for f in S.features_with_spec(cfg):
         st = feature_state(cfg, f)
-        kind, why = next_step(cfg, f, implement=True)
+        kind, why = next_step(cfg, f, implement=True, state=st)
         st["next"] = {"kind": kind, "why": why, "command": command_for(kind, f.name) if kind else None}
         rows.append(st)
     return rows
@@ -327,7 +381,7 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
             return out
         if budget.exhausted:
             out.update(stopped="budget",
-                       reason=f"budget of {budget.limit:g} reached ({budget.spent:.2f} spent)")
+                       reason=budget.describe())
             return out
         res, switched = run_with_fallback(cfg, fallback, harness, lambda h: do_implement_chunk(
             cfg, feature, rid, h, chunk, stream, dry_run), sticky)
@@ -395,22 +449,49 @@ def run_with_fallback(cfg: Config, fallback: str | None, harness, call,
 
 
 class Budget:
-    """A cap on what one `go` may spend. Units are whatever the harness reports (usd or credits).
+    """A cap on what one `go` may spend, in ONE currency.
 
-    `None` or `0` means no limit.
+    Claude reports dollars, Copilot reports credits, and the two must never be added: a fallback agent in
+    another currency used to count its 30 credits as 30 dollars and stop the chain. The cap applies to
+    the unit of the first cost seen (`unit` fixes it up front); spending in any other unit is tracked in
+    `other` and shown, but does not count against the limit. `None` or `0` means no limit.
     """
 
-    def __init__(self, limit: float | None):
+    def __init__(self, limit: float | None, unit: str | None = None):
         self.limit = limit
-        self.spent = 0.0
+        self.unit = unit
+        self.counted = 0.0
+        self.other: dict[str, float] = {}
+
+    @property
+    def spent(self) -> float:
+        return self.counted
+
+    @spent.setter
+    def spent(self, value: float) -> None:
+        self.counted = float(value)
+
+    def add_cost(self, cost, unit: str | None) -> None:
+        if not cost:
+            return
+        unit = unit or "usd"
+        if self.unit is None:
+            self.unit = unit
+        if unit == self.unit:
+            self.counted += float(cost)
+        else:
+            self.other[unit] = self.other.get(unit, 0.0) + float(cost)
 
     def add(self, res: StepResult) -> None:
-        if res.cost:
-            self.spent += float(res.cost)
+        self.add_cost(res.cost, res.cost_unit)
 
     @property
     def exhausted(self) -> bool:
-        return bool(self.limit) and self.spent >= self.limit
+        return bool(self.limit) and self.counted >= self.limit
+
+    def describe(self) -> str:
+        unit = f" {self.unit}" if self.unit else ""
+        return f"budget of {self.limit:g}{unit} reached ({self.counted:.2f} spent)"
 
 
 def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = False,
@@ -449,7 +530,7 @@ def advance(cfg: Config, feature: Path, rid: str, harness, *, implement: bool = 
         done_before = count_tasks(feature / "tasks.md")[0] if kind == "implement" else 0
         if budget.exhausted:
             out["stopped"] = "budget"
-            out["reason"] = f"budget of {budget.limit:g} reached ({budget.spent:.2f} spent)"
+            out["reason"] = budget.describe()
             return out
         res, switched = run_with_fallback(cfg, fallback, harness, lambda h, k=kind: run_kind(
             cfg, k, feature, rid, h, stack=stack, stream=stream, dry_run=dry_run, majors=majors,
@@ -541,8 +622,7 @@ def do_go(cfg: Config, idea: str, *, stack: str = "", split: bool | None = None,
                                        "error": sp.get("error", "")}
             ok = out["steps"]["specify"]["ok"]
             for step in (sp.get("steps") or {}).values():
-                if step.get("cost"):
-                    meter.spent += float(step["cost"])
+                meter.add_cost(step.get("cost"), step.get("cost_unit"))
         else:
             res = S.do_specify(cfg, idea, rid, h, stream, dry_run)
             meter.add(res)
@@ -574,8 +654,11 @@ def do_go(cfg: Config, idea: str, *, stack: str = "", split: bool | None = None,
         if dry_run:
             break
     out["spent"] = round(meter.spent, 3)
+    out["spent_unit"] = meter.unit
+    if meter.other:
+        out["spent_other"] = {u: round(v, 3) for u, v in meter.other.items()}
     out["budget"] = budget
     run_dir = cfg.runs_dir / rid
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / "go.json").write_text(json.dumps(out, indent=2, ensure_ascii=False), encoding="utf-8")
+    write_json_atomic(run_dir / "go.json", out)
     return out

@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in for the Copilot CLI, only so the setup wizard has three agents to list.
+[ "$1" = "--version" ] && { echo "GitHub Copilot CLI 1.0.112."; exit 0; }
+echo "stub: this is not the real Copilot CLI" >&2; exit 1

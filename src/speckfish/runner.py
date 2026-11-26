@@ -2,10 +2,10 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -13,9 +13,11 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import Config, is_windows, norm
+from . import proctree
+from .config import Config, agent_env, env_number, is_windows, norm
 from .harnesses import Harness, StepInvocation
 from .registry import missing_output
+from .store import file_lock, read_json_retry, write_json_atomic
 from .workspace import _git_dirty, feature_dir, git_snapshot, task_progress  # noqa: F401  (re-exported)
 
 
@@ -49,13 +51,31 @@ class StepResult:
     writes: str = ""
     interactive: bool = False
     raw_tail: str = ""
+    review: dict | None = None     # `specify --review`: the spec's review, as a result dict
+    activity: dict | None = None   # what the agent did: actions, commands, files written, subagents
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if k not in ("raw_tail",)}
 
 
-def new_run_id() -> str:
-    return datetime.now().strftime("%Y%m%d-%H%M%S")
+def new_run_id(cfg: Config | None = None) -> str:
+    """`20261126-101500`; with a `cfg` the folder is claimed on the spot (`-2`, `-3`, ... if taken).
+
+    Resolution is one second, so two processes started together (two CI jobs on one checkout) used to
+    share a run folder and overwrite each other's state. `mkdir` is atomic: exactly one of them wins a name.
+    """
+    base = datetime.now().strftime("%Y%m%d-%H%M%S")
+    if cfg is None:
+        return base
+    cfg.runs_dir.mkdir(parents=True, exist_ok=True)
+    n = 1
+    while True:
+        rid = base if n == 1 else f"{base}-{n}"
+        try:
+            (cfg.runs_dir / rid).mkdir()
+            return rid
+        except FileExistsError:
+            n += 1
 
 
 def run_dir_for(cfg: Config, run_id: str) -> Path:
@@ -65,22 +85,31 @@ def run_dir_for(cfg: Config, run_id: str) -> Path:
     return d
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
+def _kill_tree(proc: subprocess.Popen, job: proctree.Job | None = None) -> tuple[bool, str]:
+    """Stop the agent and everything it started, and say whether that worked (see proctree)."""
+    return proctree.kill_tree(proc, job, windows=is_windows())
+
+
+def _stop_and_report(proc: subprocess.Popen, job: proctree.Job | None) -> bool:
+    """Kill the tree and tell the person if it did not die: a silent failure looks like "Ctrl+C does nothing"."""
     try:
-        if is_windows():
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True)
-        else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except Exception:
+        ok, how = _kill_tree(proc, job)
+    except KeyboardInterrupt:                       # Ctrl+C again: stop being polite
         with contextlib.suppress(Exception):
             proc.kill()
+        ok, how = proc.poll() is not None, "forced"
+    if not ok:
+        sys.stderr.write(f"WARNING: the agent (pid {proc.pid}) is still running — {how}.\n"
+                         f"  Stop it by hand: {proctree.manual_hint(proc.pid, is_windows())}\n")
+        sys.stderr.flush()
+    return ok
 
 
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
             run_dir: Path, timeout: int, stream: bool = True,
             progress: bool = True,
-            label: str | None = None) -> tuple[int, str, str, float, bool, bool]:
+            label: str | None = None,
+            env_allowlist: str = "") -> tuple[int, str, str, float, bool, bool]:
     """Launch the subprocess, write the log and honour the timeout by killing the tree.
 
     stdout is read on a thread so the timeout does not depend on the child
@@ -97,18 +126,42 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     meter = Progress(step, enabled=progress, plain_only=echo_lines, root=str(cwd))
     started = time.time()
     meter.start()
+    has_stdin = getattr(inv, "stdin", None) is not None
     popen_kwargs = dict(cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                        errors="replace", env={**os.environ, **(inv.env or {})})
+                        stdin=subprocess.PIPE if has_stdin else subprocess.DEVNULL, text=True,
+                        encoding="utf-8", errors="replace",
+                        env=agent_env(inv.env, env_allowlist))
     if is_windows():
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
-    proc = subprocess.Popen(inv.argv, **popen_kwargs)
+    try:
+        proc = subprocess.Popen(inv.argv, **popen_kwargs)
+    except OSError as e:
+        # the binary vanished, is not executable or is a Windows shim: a failed step, not a traceback,
+        # and the progress line must not be left running
+        meter.stop()
+        message = f"cannot launch {inv.argv[0]}: {e}"
+        log_path.write_text("$ " + " ".join(inv.argv) + "\n\n" + message + "\n", encoding="utf-8")
+        return 127, "", message, time.time() - started, False, False
+    # Windows: one job for the whole tree, so a single call can stop it (and the OS does if we die)
+    job = proctree.start(proc) if is_windows() else None
     out_chunks: list[str] = []
     err_chunks: list[str] = []
     log = log_path.open("w", encoding="utf-8")
     log.write("$ " + " ".join(inv.argv) + "\n\n")
+    if has_stdin:
+        log.write("--- prompt (sent on stdin) ---\n" + inv.stdin + "\n--- end of prompt ---\n\n")
+    if has_stdin:
+        def feed() -> None:
+            # a thread: a prompt bigger than the pipe buffer must not block us while the agent writes output
+            try:
+                proc.stdin.write(inv.stdin)
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass                             # the agent exited before reading it all
+
+        threading.Thread(target=feed, daemon=True).start()
 
     activity = {"t": time.time(), "final": False}
 
@@ -125,7 +178,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
                 if echo and stream and not is_noise_line(line):
                     sys.stderr.write(line if line.endswith("\n") else line + "\n")
                     sys.stderr.flush()
-        except Exception:
+        except Exception:  # noqa: S110  a reader thread must never raise: the step result is the product
             pass
 
     t_out = threading.Thread(target=pump, args=(proc.stdout, out_chunks, echo_lines), daemon=True)
@@ -136,44 +189,53 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     idle_closed = False
     # an agent can finish its work and never exit (EGM's final pass does this): a long silence with
     # the process still alive is a finished run, not a hang worth burning the whole timeout on
-    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     # once the agent has printed its final event ("result" / "turn.completed") a process that does not
     # exit is only hanging on its way out (seen with Claude on Windows: 10 minutes after the last report)
-    grace = int(os.environ.get("SPECKFISH_RESULT_GRACE", "45"))
+    grace = int(env_number("SPECKFISH_RESULT_GRACE", 45))
+    # how often the timeout and the inactivity rule are looked at: it is the latency of both
+    poll = env_number("SPECKFISH_POLL_SECONDS", 1.0, minimum=0.01)
+    guard = proctree.ConsoleGuard(enabled=is_windows())
     try:
-        while True:
-            try:
-                proc.wait(timeout=5)
-                break
-            except subprocess.TimeoutExpired:
-                now = time.time()
-                limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
-                if limit and now - activity["t"] >= limit:
-                    idle_closed = True
-                elif now - started >= timeout:
-                    timed_out = True
-                else:
-                    continue
-                _kill_tree(proc)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=30)
-                break
+        with guard:
+            while True:
+                try:
+                    proc.wait(timeout=poll)
+                    break
+                except subprocess.TimeoutExpired:
+                    guard.tick()                    # an agent that put the console in raw mode kills Ctrl+C
+                    now = time.time()
+                    limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
+                    if limit and now - activity["t"] >= limit:
+                        idle_closed = True
+                    elif now - started >= timeout:
+                        timed_out = True
+                    else:
+                        continue
+                    _stop_and_report(proc, job)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=30)
+                    break
     except KeyboardInterrupt:
         # Ctrl+C reaches speckfish, not the agent's own process group: stop the whole tree or it
         # keeps running (and writing, with the sandbox off) after the command is gone
-        _kill_tree(proc)
+        meter.stop()
+        sys.stderr.write("\nStopping the agent…  (Ctrl+C again forces it)\n")
+        sys.stderr.flush()
+        _stop_and_report(proc, job)
         with contextlib.suppress(Exception):
             log.close()
-        meter.stop()
+        if job is not None:
+            job.close()
         raise
     t_out.join(timeout=15)
     t_err.join(timeout=5)
     with contextlib.suppress(Exception):
         log.close()
     meter.stop()
+    if job is not None:
+        job.close()                  # anything the agent left running goes with it (the job kills on close)
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
-    if idle_closed:
-        code = 0 if code is None else code
     return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
             idle_closed)
 
@@ -235,9 +297,13 @@ _NO_CREDITS = re.compile(r"(insufficient|no|out of|exhausted|run out of)\s+(ai\s
                          r"|credits?\s+(exhausted|required|depleted)")
 
 
-def error_kind(out: str, err: str) -> str:
-    """Classify a failed run: quota / auth / agent error / unknown."""
-    payloads = _json_payloads(out) or _json_payloads(err)
+def error_kind(out: str, err: str, payloads: list[dict] | None = None) -> str:
+    """Classify a failed run: quota / auth / agent error / unknown.
+
+    `payloads` is what `_json_payloads` already extracted; pass it to avoid parsing a big stream twice.
+    """
+    if payloads is None:
+        payloads = _json_payloads(out) or _json_payloads(err)
     for obj in reversed(payloads):
         api = str(obj.get("api_error") or "").lower()
         status = obj.get("api_error_status")
@@ -287,6 +353,8 @@ def _best_payload(payloads: list[dict]) -> dict:
 
 def human_error(out: str, err: str, code: int) -> str:
     """A message a human can act on — never the agent's JSON payload."""
+    if (err or "").startswith("cannot launch"):
+        return err.strip()[:300]            # ours, complete: the tail logic below would cut the path
     payloads = _json_payloads(out) or _json_payloads(err)
     obj = _best_payload(payloads)
     message = str(obj.get("result") or obj.get("error") or "").strip()
@@ -296,7 +364,7 @@ def human_error(out: str, err: str, code: int) -> str:
     status = obj.get("api_error_status")
     hint = _reset_hint(payloads)
 
-    kind = error_kind(out, err)
+    kind = error_kind(out, err, payloads)
     if kind == "quota":
         detail = message or api or "rate limit reached"
         return f"the agent ran out of quota (HTTP {status or 429}): {detail}{hint}"
@@ -335,23 +403,29 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | Non
 def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                  step: str, harness: Harness, started_at: str) -> None:
     state_path = run_dir / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
-    state.setdefault("run_id", run_id)
-    state.setdefault("steps", {})
-    entry = state["steps"].get(step, {})
-    entry.update({"status": "ok" if res.ok else "failed", "started_at": started_at,
-                  "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
-                  "blockers": len(res.blockers), "reports": res.reports,
-                  "exit_code": res.exit_code, "harness": harness.name,
-                  "model": res.model, "interactive": res.interactive,
-                  "majors": res.majors, "nits": res.nits,
-                  "meets_standard": res.meets_standard, "verdict": res.verdict,
-                  "denials": res.denials, "artifact_dir": res.artifact_dir,
-                  "log": res.log, "tasks_done": res.tasks_done, "tasks_total": res.tasks_total})
-    state["steps"][step] = entry
-    state_path.write_text(json.dumps(state, indent=2, ensure_ascii=False), encoding="utf-8")
-    (run_dir / f"{step}.result.json").write_text(
-        json.dumps(res.to_dict(), indent=2, ensure_ascii=False), encoding="utf-8")
+    # read-modify-write under a lock, and written atomically: another process on the same run (or a
+    # Ctrl+C in the middle of the write) must not lose entries or leave a truncated file behind
+    with file_lock(state_path):
+        # missing or not JSON (an older interrupted write): start it again. A file that is merely busy is
+        # retried and then raised, never taken for empty (that would erase the run's history)
+        state = read_json_retry(state_path) or {}
+        if not isinstance(state, dict):
+            state = {}
+        state.setdefault("run_id", run_id)
+        state.setdefault("steps", {})
+        entry = state["steps"].get(step, {})
+        entry.update({"status": "ok" if res.ok else "failed", "started_at": started_at,
+                      "duration_s": res.duration_s, "cost": res.cost, "cost_unit": res.cost_unit,
+                      "blockers": len(res.blockers), "reports": res.reports,
+                      "exit_code": res.exit_code, "harness": harness.name,
+                      "model": res.model, "interactive": res.interactive,
+                      "majors": res.majors, "nits": res.nits,
+                      "meets_standard": res.meets_standard, "verdict": res.verdict,
+                      "denials": res.denials, "artifact_dir": res.artifact_dir,
+                      "log": res.log, "tasks_done": res.tasks_done, "tasks_total": res.tasks_total})
+        state["steps"][step] = entry
+        write_json_atomic(state_path, state)
+    write_json_atomic(run_dir / f"{step}.result.json", res.to_dict())
 
 
 def _base_step(cfg: Config, step: str) -> str:
@@ -362,6 +436,51 @@ def _base_step(cfg: Config, step: str) -> str:
         if step.startswith(f"{key}-"):
             return key
     return step
+
+
+_VERSIONS: dict[str, str] = {}
+
+
+def _agent_version(harness: Harness) -> str:
+    """`claude --version` and friends, asked once per process (it costs a subprocess)."""
+    name = getattr(harness, "name", "")
+    if name not in _VERSIONS:
+        try:
+            _VERSIONS[name] = str(harness.doctor().get("version") or "")
+        except Exception:                         # a fake or broken adapter: the metadata is a courtesy
+            _VERSIONS[name] = ""
+    return _VERSIONS[name]
+
+
+def write_meta(cfg: Config, harness: Harness, inv: StepInvocation, prompt: str, res: StepResult,
+               kind: str, label: str, started_at: str, egm_root: Path | None, run_dir: Path) -> None:
+    """`logs/<label>.meta.json`: what is needed to understand or repeat this step, with no secrets in it.
+
+    The prompt itself stays in the log; here only its length and hash. Long arguments (the prompt, a JSON
+    schema) are replaced by their size, and environment variables are never listed, only whether the
+    allowlist was on.
+    """
+    from . import __version__, trust
+    argv = [a if len(a) <= 300 else f"<{len(a)} chars>" for a in inv.argv]
+    egm: dict | None = None
+    if egm_root:
+        from .steps import egm_commit
+        egm = {"path": norm(egm_root), "commit": egm_commit(Path(egm_root)),
+               "trusted": trust.status(cfg, Path(egm_root))[0]}
+    describe = getattr(harness, "permissions", None)
+    meta = {
+        "label": label, "kind": kind, "speckfish": __version__, "started_at": started_at,
+        "ok": res.ok, "exit_code": res.exit_code, "duration_s": res.duration_s,
+        "cost": res.cost, "cost_unit": res.cost_unit, "model": res.model,
+        "harness": harness.name, "harness_version": _agent_version(harness),
+        "argv": argv, "prompt_via": "stdin" if getattr(inv, "stdin", None) is not None else "argv",
+        "prompt_chars": len(prompt), "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "permissions": describe(kind) if callable(describe) else "",
+        "permissions_setting": cfg.permissions,
+        "env_filtered": bool(cfg.env_allowlist or os.environ.get("SPECKFISH_ENV_ALLOWLIST")),
+        "egm": egm,
+    }
+    write_json_atomic(run_dir / "logs" / f"{label}.meta.json", meta)
 
 
 def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
@@ -376,8 +495,10 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     The label (`artifact_name`, else `step`) is *which run of it* (`review-001-foo`): folders, logs
     and state follow that. Callers that do not pass `kind` get it derived from the label.
     """
+    from . import trust
     from .registry import timeout_key
 
+    trust.require(cfg, egm_root)             # before anything is created or launched
     run_dir = run_dir_for(cfg, run_id)
     # a batch runs the same step once per feature: each one needs its own folder and log or they overwrite
     label = artifact_name or step
@@ -389,16 +510,21 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     inv = harness.build(kind=kind, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
                         egm_root=egm_root, budget=budget, timeout=timeout, schema=schema)
     if dry_run:
+        stdin = getattr(inv, "stdin", None)
+        shown = " ".join(inv.argv) + (f"\n--- prompt (stdin) ---\n{stdin}" if stdin else "")
         return StepResult(step=step, kind=kind, ok=True, exit_code=0, duration_s=0.0,
-                          log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
-                          error="dry-run")
+                          log=shown, artifact_dir=norm(artifact_dir), error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
     is_implement = kind == "implement"
     before_tasks = task_progress(Path(cwd)) if is_implement else None
     before_git = git_snapshot(Path(cwd)) if is_implement else None
+    from . import progress as _progress
+    _progress.take_last()                       # forget what an earlier step left
     code, out, err, duration, timed_out, idle_closed = execute(
-        harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label)
-    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+        harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label,
+        env_allowlist=cfg.env_allowlist)
+    activity = _progress.take_last()
+    idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     if idle_closed and not timed_out:
         # the agent was stopped by us after going quiet, so the exit code is ours, not its verdict:
         # what the step wrote decides (postprocess below), not the signal that ended the process
@@ -425,6 +551,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = human_error(out, err, code)
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
+    res.activity = activity
     postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git, kind=kind)
     if idle_closed:
         # the work landed but the CLI never exited: keep it when the step's own output is there
@@ -438,6 +565,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
                          f"kept what it had already written")
     # keyed by label: a batch runs `plan` once per feature and each needs its own entry
     record_state(cfg, run_dir, run_id, res, label, harness, started_at)
+    with contextlib.suppress(Exception):          # metadata must never fail a step that already ran
+        write_meta(cfg, harness, inv, prompt, res, kind, label, started_at, egm_root, run_dir)
     return res
 
 
@@ -449,6 +578,8 @@ def run_interactive(cfg: Config, harness: Harness, step: str, prompt: str, cwd: 
     stdio is inherited (no capture, no timeout). The prompt tells the agent it is an
     interactive session and that it must ask every open question.
     """
+    from . import trust
+    trust.require(cfg, egm_root)
     run_dir = run_dir_for(cfg, run_id)
     artifact_dir = run_dir / "artifacts" / step
     artifact_dir.mkdir(parents=True, exist_ok=True)

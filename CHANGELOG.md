@@ -3,6 +3,97 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## v0.3.0 — 2026-11-26
+
+This release adds an interactive console, a permission model and a security and CI audit's worth of fixes. Five
+changes need an action when you upgrade (the first block below); everything else is additive.
+
+**Found by the Windows CI before release:** under concurrency `state.json` could lose entries on Windows (38 of 40 saved). Creating the lock file while another process was deleting it fails there with `PermissionError`, which was read as "nothing to protect" and ran unlocked; every writer in a process also shared one temp file name. The lock now waits on that error, temp files are unique per write, and a `state.json` that is busy for a moment is retried and, if it stays busy, raises instead of being read as empty (which would have erased the run's history on the next write).
+
+**Upgrading from 0.2.x**
+
+- Codex needs your consent (`config unsafe=true`, `--unsafe`, or `SPECKFISH_UNSAFE=1`).
+- An EGM checkout that comes with a project (`vendor/egm`) is not loaded until `speckfish trust`.
+- `@file` only reads inside the project (`--allow-outside-root` overrides it).
+- Old run folders are deleted automatically, keeping the newest 50 (`config keep_runs=N`, `0` = never).
+- Regenerate the VS Code tasks with `speckfish editors`: they no longer go through a shell.
+
+
+Full-screen console and README:
+
+- **`speckfish` takes the whole terminal.** The console runs on the terminal's alternate screen (as `vim` or `less` do): earlier commands are out of sight and the terminal is restored exactly on exit — also after an error, `atexit`, SIGTERM or SIGHUP. Output longer than the window goes through a pager (`Enter` for more, `q` to skip), because that screen has no scrollback; `/clear` redraws it. Off with `config fullscreen=false` or `SPECKFISH_FULLSCREEN=0`, and automatically when the terminal cannot take escape codes.
+- After the setup wizard the screen is cleared and only its result is kept. Hint lines wrap between words to the terminal width (they used to break `/model` into `/mode` + `l`), the status bar is cut with an ellipsis, and the menu uses plain one-line descriptions instead of the parser's internals.
+- README: quick start, eight screenshots of the real console, the console section rewritten, settings and environment variables, exit code 130. The screenshots are regenerated with `python docs/screenshots/capture.py`: real speckfish in a pseudo-terminal, with a scripted stand-in for the agent.
+
+Ctrl+C while an agent runs (reported with Codex on `implement`):
+
+- **It now says what it is doing and whether it worked.** Ctrl+C prints `Stopping the agent…`, kills the whole process tree and *checks* that it is gone. If it is not, it prints `WARNING: the agent (pid N) is still running` with the exact command to stop it by hand (`taskkill /F /T /PID N`); before, a kill that failed was silent and the agent kept writing code with its sandbox off. A second Ctrl+C forces the kill.
+- **Windows: one job object per agent** (kill-on-close). A single call ends the whole tree — `node`, the native binary and every shell it started — without depending on `taskkill`, which App Control can block; the OS also does it if speckfish dies. The chain is job → `taskkill /T` → `kill`, and each step is verified.
+- **Windows: the console keeps delivering Ctrl+C.** Some agents switch the console input to raw mode, after which Ctrl+C is just a key and never reaches speckfish. While a step runs speckfish puts `ENABLE_PROCESSED_INPUT` back each second and restores the console to how it found it afterwards.
+- Anything an agent leaves running after its step finished is stopped with its job (Windows).
+- Verified on Linux with a real SIGINT (an agent plus a child that outlives it); the Windows paths are covered with a simulated `kernel32` only, since there is no Windows machine in the test setup.
+
+- `/harness` and `/model` in the console are pickers when given no argument. `/harness` lists the agent CLIs that are installed (codex is marked "no sandbox", and choosing it asks for consent); `/model` lists what the chosen CLI lets speckfish discover: the aliases `claude --help` documents (`fable`, `opus`, `sonnet`), the `choices` Copilot prints in its own `--help`, and the model set in `~/.codex/config.toml`. None of the three CLIs has a command that lists its models, so nothing is invented: pick `default` or type any name the CLI accepts. Both take `--save` to keep the choice in `.speckfish/config.json` (saving codex also saves that you accepted it); without it the choice lasts for the session. The header shows the model when one is set.
+
+Cleaner console output:
+
+- While an agent works there is **one live line** (spinner, step, clock, what it is doing in words, how many actions) cut to the real width of the terminal, so it never wraps. Commands are described instead of dumped: `[System.IO.File]::ReadAllText('C:\\Users\\…\\SKILL.md')` shows as `reading .agents/skills/speckit-constitution/SKILL.md`, `Get-ChildItem -Force .specify; …` as `listing .specify`, `git status --short; …` as `git status`.
+- Only **milestones stay on screen**: files written or edited, subagents, warnings. `--verbose` (or `SPECKFISH_VERBOSE=1`, or `/verbose` in the console) keeps every action, in plain words. Without a terminal (CI, a pipe) every action is still one plain line, now without the JSON escaping.
+- Each step's summary says what the agent did (`agent: 14 commands · wrote .specify/memory/constitution.md · 2 subagents`) and is coloured (OK green, FAILED/BLOCKER/ERROR red, WARNING yellow). Colour is only used on a terminal; `NO_COLOR` turns it off, and JSON output is never touched.
+- The console leaves a blank line between a step's result and the next prompt.
+- `workspace` and the tests no longer depend on which test happened to cache `git` first.
+
+Permission model and CI hardening (see `AUDITORIA.md`, Sprints 3 and 4, and `SECURITY.md`).
+
+**Changes you will notice when upgrading**
+
+- **Codex needs your consent.** It runs with its sandbox and approvals off, so `get_harness` refuses it until you say so: `speckfish config unsafe=true`, `--unsafe` for one run, or `SPECKFISH_UNSAFE=1`. `harness=auto` never picks it on its own, and a `--fallback codex` without consent is ignored. The console asks when you choose it.
+- **A project's EGM must be trusted.** An EGM checkout inside the project (`vendor/egm`) or named by its `.speckfish/config.json` is only loaded if its content hash is in `~/.speckfish/trusted.json`. `speckfish init` records the pinned checkout it installs; for one you already have, run `speckfish trust` once (it shows what it is trusting). Any changed byte revokes it. `SPECKFISH_TRUST_ALL=1` turns the check off (a disposable CI container).
+- **`@file` only reads inside the project.** `--allow-outside-root` overrides it. The file's text now sits between a random `SPECKFISH-INPUT-…` fence and is labelled as data, so it cannot close the block and add instructions.
+- Old run folders are deleted automatically, keeping the newest 50 (`speckfish config keep_runs=N`, `0` = never). A run is never deleted while it holds the only review/analyze/drift of a feature or the newest report, so `status` and `report` keep working.
+
+**New**
+
+- Read-only steps (`review`, `drift`, the `--split` inventory) run Claude with `Bash` and `PowerShell` **denied** (`--disallowedTools`); they still write their report. Checked against the real CLI: a denied tool is not loaded at all. Spec Kit steps and `implement` keep their shell. `speckfish config permissions=open` restores the old behaviour for every step.
+- Claude receives the prompt on stdin instead of argv (not visible in `ps`, no command-line length limit). The log and `--dry-run` still show it.
+- `env_allowlist` / `SPECKFISH_ENV_ALLOWLIST=NAME,PREFIX_*`: the agent inherits only the basics, its provider's variables and what you list.
+- `logs/<step>.meta.json` per step: agent and version, argv without the prompt, prompt length and SHA-256, permission profile, EGM commit and trust, cost. No environment variables, no prompt text.
+- `/implement` in the console shows what the chosen agent will be allowed to do before asking.
+- `SECURITY.md` (threat model, what is and is not protected, how to run in CI), Dependabot for Actions and pip, release build provenance attestations, least-privilege workflow permissions, every Action pinned to a commit SHA, `ruff` with the bandit/perflint/ruff rule sets, `mypy` (strict for `store`, `trust`, `registry`, `workspace`) and a coverage floor of 80 % in CI.
+
+State integrity and speed (see `AUDITORIA.md`, Sprint 2):
+
+- `state.json`, `*.result.json`, `config.json`, `.specify/feature.json`, `specs/features.json` and the batch/`go`/`pipeline` summaries are written atomically (temp file + replace): an interrupted write leaves the previous file, not a truncated one. `state.json` is updated under a lock, so two steps finishing at once no longer lose each other's entry.
+- Two speckfish processes started in the same second no longer share a run folder: the id gets `-2`, `-3`, … (claimed with an atomic `mkdir`).
+- `status` / `next` / `go` read each `state.json` once (cached until it changes) and build one index of the newest review/analyze/drift per feature instead of re-reading every run for every feature: 20 features over 500 runs went from 1.5 s to 0.4 s.
+- `--budget` counts one currency. Claude reports dollars and Copilot credits; a fallback in the other currency used to be added to the cap (30 credits counted as 30 dollars). The cap now applies to the first cost seen, the other currency is reported as `spent_other`, and the stop message says the unit (`budget of 5 usd reached`).
+- `specify --review` keeps the review it ran: it is in the result (`review`), shown in the summary, and blockers exit 1 (a failed review exits 2, or 3 on quota/auth). It was discarded before.
+- `--feature` with a prefix that matches several features is an error naming them; an exact name or a number wins over a prefix.
+- `.specify/feature.json` cannot point outside the project (an absolute path or `../` is ignored).
+- `implement` no longer treats `src/bin/main.rs` or any path containing `/bin/` as build output: only `bin/Debug|Release`, `obj/Debug|Release`, `.speckfish/`, `.claude/`, `.agents/`, `.gitignore`, `CLAUDE.md` and `AGENTS.md` are ignored. Its git check also uses the git that `find_git` validated.
+- `runs --clean --keep -1` no longer deletes an arbitrary run; the Copilot adapter honours the budget it is given; `plan` sends the stack once instead of twice (a `@stack.md` of 12 KB cost double the tokens). *The `plan` prompt change has not been measured with a real agent.*
+
+Security and robustness (see `AUDITORIA.md`, Sprint 1):
+
+- **EGM is pinned.** `init` used to clone the tip of EGM's `main` and load it as an agent plugin with the agent's full permissions. It now checks out tag `v0.1.1` and verifies its commit (`dea7761…`); if the tag has moved it refuses to use it. `speckfish init --egm-ref <tag|sha>` changes the version on purpose. `doctor` shows the commit and whether it is the pinned one.
+- **`.speckfish/` stays out of git.** `init` adds it (and `vendor/egm/` when it cloned EGM) to the project's `.gitignore`; the run logs hold full agent transcripts. `doctor` warns when it is not ignored.
+- The VS Code tasks generated by `editors`/`init` use `"type": "process"` instead of `"shell"`: a description with `$(...)`, backticks or `$VAR` was expanded by the shell. Re-run `speckfish editors` to regenerate `.vscode/tasks.json`.
+- `specify --split --dry-run` (or an inventory that came back empty) no longer overwrites `specs/features.json` with `{}`, which is what `--only` / `--from-feature` continue from.
+- `json_object_with` (recovering the `--split` inventory from a transcript) is linear: a 5 MB log took seconds before and now takes a fraction of a second.
+- A corrupt `config.json` is an environment error (exit 3) naming the file, not a traceback. A non-numeric or negative `SPECKFISH_IDLE_SECONDS` / `SPECKFISH_RESULT_GRACE` falls back to the default. An agent binary that cannot be launched is a failed step with a log. A truncated `state.json` no longer stops the next step or `runs`/`show`.
+- `SPECKFISH_POLL_SECONDS` (default 1 s, it was a fixed 5 s) is how often the timeout and the inactivity rule are checked; the test suite runs in about half the time.
+
+- `speckfish` with no arguments in a terminal opens an interactive console (`speckfish shell` does the same explicitly). In a pipe or in CI it still prints the usage error, so scripts do not change.
+  - First run: a wizard offers to run `init`, lists the installed agent CLIs (claude, copilot, codex) with their version and asks which to use and the document language.
+  - `/command` runs the same subcommand the command line would (`/constitution`, `/specify`, `/plan`, `/review`, `/go`, `/status`, …); a bare line is offered as `/go <idea>`; an empty line runs the suggested next step after asking.
+  - Steps that take free text (`/constitution`, `/specify`, `/plan`, `/go`, `/brainstorm`) open a multi-line editor when no text is given. `@file.md` imports a file.
+  - `/implement` and `/go --implement` ask for confirmation instead of needing `--yes`; selecting codex warns that it runs without a sandbox. `/harness` and `/model` change the agent for the session only.
+  - Ctrl+C stops the running step and returns to the prompt.
+  - Optional extra `pip install "speckfish[tui]"` (prompt_toolkit): a `/` menu that opens as you type with each command's help, `@file.md` path completion limited to the project, history in `.speckfish/history`, a status toolbar with the suggested next step, a multi-line editor and arrow-key pickers. Without it the console works with plain `input()`.
+  - Free-text steps show a preview before sending (Send / edit / cancel). `/feature` picks the active feature (arrows, a number, or `/feature 002`).
+  - The command list, `/help` and the menu are read from the CLI's own parser, so a new subcommand shows up with no second list to maintain.
+  - The wizard also asks for a fallback agent and stores it as `fallback` in `.speckfish/config.json` (`speckfish config fallback=copilot`); every command uses it as `--fallback` when none is given.
+
 ## v0.2.1 — 2026-11-24
 
 - An agent that printed its final event (`result` for Claude/Copilot, `turn.completed` for Codex) but does not exit is closed after 45 s (`SPECKFISH_RESULT_GRACE`), instead of waiting 10 minutes for the idle limit; what the step wrote decides the verdict. Seen with Claude on Windows after an EGM review.

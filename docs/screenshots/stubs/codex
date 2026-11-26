@@ -1,0 +1,4 @@
+#!/bin/sh
+# Stand-in for the Codex CLI, only so the setup wizard has three agents to list.
+[ "$1" = "--version" ] && { echo "codex-cli 0.169.0"; exit 0; }
+echo "stub: this is not the real Codex CLI" >&2; exit 1

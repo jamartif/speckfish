@@ -17,6 +17,32 @@ machine-readable verdict and exit codes you can automate against.
 speckfish pipeline "a task CLI in Python" --stack "stdlib only" --gate
 ```
 
+## Quick start
+
+```bash
+uv tool install "speckfish[tui] @ git+https://github.com/jamartif/speckfish"
+cd my-project
+speckfish
+```
+
+`speckfish` on its own opens a **console that takes the whole terminal** (like `vim` or `less`: when you leave,
+your terminal is exactly as it was). The first time it offers to set the project up (git, Spec Kit and EGM) and
+asks which agent CLI to use:
+
+![The setup wizard lists the installed agent CLIs and asks for a fallback agent](docs/screenshots/01-wizard.png)
+
+When it is done the screen is cleared and you are at the prompt. Type `/` for the menu, or press Enter to run the
+step speckfish suggests next. The bar at the bottom always shows where you are and what comes next:
+
+![A clean console with the setup result and the status bar](docs/screenshots/02-ready.png)
+
+![Typing / opens a menu of every command with a one-line description](docs/screenshots/03-menu.png)
+
+> **About the screenshots.** They are real runs of speckfish in a real terminal (110×32): the wizard, `specify
+> init`, the pinned EGM checkout, the menus and the result parsing are all the real code. The *agent* is a
+> scripted stand-in that plays a short fixed session, so the images cost nothing, need no login and look the same
+> every time. Regenerate them with `python docs/screenshots/capture.py`.
+
 ## The flow at a glance
 
 ```mermaid
@@ -127,13 +153,20 @@ EGM documents its Copilot adapter as **experimental** (reviewer isolation unveri
 ## Install
 
 ```bash
-# with uv (recommended)
-uv tool install git+https://github.com/jamartif/speckfish
+# with uv (recommended). The [tui] extra adds the / menu, completion and the arrow-key pickers
+uv tool install "speckfish[tui] @ git+https://github.com/jamartif/speckfish"
+
+# or with pipx
+pipx install "speckfish[tui] @ git+https://github.com/jamartif/speckfish"
 
 # or from a clone
 git clone https://github.com/jamartif/speckfish && cd speckfish
-uv venv && uv pip install -e .
+uv venv && uv pip install -e ".[tui]"
 ```
+
+Without the `[tui]` extra everything still works with plain prompts (numbered choices instead of arrows). To update,
+run the same command again with `--force`. If `speckfish` runs an old version, `where.exe speckfish` (Windows) or
+`which -a speckfish` shows which copy comes first on your `PATH`.
 
 Prebuilt wheels and sdists are attached to every release:
 see <https://github.com/jamartif/speckfish/releases>.
@@ -214,6 +247,65 @@ EGM is independent of this: it is a single plugin mounted with `--plugin-dir ven
 review works with any of the three agents regardless of which Spec Kit integration you installed.
 
 ## Usage
+
+### Interactive console
+
+`speckfish` with no arguments in a terminal opens the console (`speckfish shell` does the same explicitly). In a
+pipe or in CI it still prints the usage, so scripts do not change.
+
+**Full screen.** The console uses the terminal's alternate screen: you do not see the commands you ran before,
+and on exit the terminal comes back as it was. That screen has no scrollback of its own, so anything longer than
+the window (`/help`, a long report) goes through a small pager (`Enter` for more, `q` to skip) and everything a step
+does is also on disk under `.speckfish/runs/`. `/clear` redraws the screen. Turn it off with
+`speckfish config fullscreen=false` or `SPECKFISH_FULLSCREEN=0`; it is also off when the terminal cannot take
+escape codes.
+
+**Free-text steps open an editor.** `/constitution`, `/specify`, `/plan`, `/go` and `/brainstorm` ask for their text
+when you do not give it: type as many lines as you like, finish with an empty line, or give `@file.md` to import a
+file (completion lists the files of the project). You get a preview before anything is sent:
+
+![Writing the principles in the editor, then the preview and the Send / edit / cancel question](docs/screenshots/04-preview.png)
+
+**You see what it is doing, in words.** While the agent works there is one live line that updates itself (clock,
+step, what it is doing, how many actions), and only the milestones stay on screen. The step then ends with a
+summary of the outcome:
+
+![The live line while the agent works](docs/screenshots/05-running.png)
+
+![The result of a step: what the agent did, the files it wrote, the log paths](docs/screenshots/06-done.png)
+
+A review shows its verdict, the counts and every blocker, in colour when the terminal supports it:
+
+![A review that found a blocker: verdict, counts, the blocker and the report to start with](docs/screenshots/07-review.png)
+
+`OK` means the *step* ran; whether the document passes is the verdict line (`does NOT meet the standard`) and the
+exit code (`1` with blockers in the command line).
+
+**The commands.** Every `/command` is the same subcommand you would type in the shell, so nothing works differently
+inside the console; the menu is generated from the CLI's own parser, so a new subcommand appears there by itself.
+
+| In the console | What it does |
+|---|---|
+| `/constitution` · `/specify` · `/plan` · `/tasks` · `/go` | the Spec Kit steps; `/go` takes an idea all the way to a reviewed design |
+| `/review` · `/revise` · `/drift` · `/analyze` · `/clarify` | verify the design and the code |
+| `/implement` | writes code; asks first and shows what the agent will be allowed to do |
+| `Enter` on an empty line | runs the step speckfish suggests next (it asks first) |
+| `/feature [NAME]` | choose the active feature (a picker, or by name or number) |
+| `/harness [NAME] [--save]` | choose the agent CLI: claude, copilot or codex |
+| `/model [NAME] [--save]` | choose the model (see below) |
+| `/verbose [on\|off]` | keep every action on screen, not only the milestones |
+| `/status` · `/features` · `/runs` · `/report` · `/doctor` · `/config` | inspection |
+| `/clear` · `/help` · `/exit` | housekeeping (`Ctrl+D` also leaves) |
+
+Any line that does not start with `/` is treated as an idea and offered as `/go <idea>` (it asks first).
+`Ctrl+C` stops the running step and returns to the prompt; `/harness` and `/model` last for the session unless you
+add `--save`.
+
+![/model lists what the chosen agent CLI lets speckfish discover, plus "default" and "another name"](docs/screenshots/08-model.png)
+
+**Models.** None of the three CLIs has a command that lists its models, so nothing is invented: Claude offers the
+aliases its own `--help` documents (`fable`, `opus`, `sonnet`), Copilot the `choices` its `--help` prints, Codex the
+model set in `~/.codex/config.toml`; every picker also has `default` (the CLI's own choice) and *another name…*.
 
 ### The short way: `go`
 
@@ -299,17 +391,23 @@ Global flags accepted by every command (before or after the subcommand):
 | `--harness claude\|copilot\|codex` | which agent CLI runs the steps (default: the first installed) |
 | `--model <name>` | forwarded to the agent CLI; otherwise the CLI picks its own |
 | `--json` | machine-readable output on stdout |
+| `--fallback <agent>` | if a step stops for quota or credentials, retry it once with this agent |
 | `--no-progress` / `--quiet` / `--dry-run` | silence the live line / the agent echo / run nothing, print the command |
+| `--verbose` | keep every action the agent takes on screen, not only the milestones |
+| `--unsafe` | accept an agent that runs with no sandbox (codex) for this run |
+| `--allow-outside-root` | let `@file` read files outside the project folder |
 | `--stream` | forward the agent's own output (on by default) |
 
 **Setup and inspection**
 
 | Command | Options | What it does |
 |---|---|---|
-| `init` | `--integration claude\|copilot\|codex\|all\|list` · `--no-egm` · `--no-editors` · `--prefix` | git + `specify init` + EGM in `vendor/` + editor commands |
-| `doctor` | — | versions of specify/EGM/harness and project state |
+| `init` | `--integration claude\|copilot\|codex\|all\|list` · `--no-egm` · `--egm-ref` · `--no-editors` · `--prefix` | git + `specify init` + EGM in `vendor/` + editor commands |
+| `doctor` | — | versions of specify/EGM/harness, whether EGM is the pinned commit and trusted, project state |
+| `trust` | `--path` · `--show` | trust the EGM checkout this project uses (it runs with the agent's permissions) |
+| `shell` | — | the interactive console (what `speckfish` alone opens in a terminal) |
 | `features` | — | every feature under `specs/`, its artifacts and which one is active |
-| `config [key=value]` | e.g. `config timeout.revise=3600` (harness, model, profile, language, egm_root, `timeout.<step>`) | show or store project defaults |
+| `config [key=value]` | e.g. `config timeout.revise=3600`; see [Settings](#settings-and-environment-variables) | show or store project defaults |
 | `runs` / `show` | `runs --clean --keep N` | list runs / detail one run |
 | `editors` | `--targets` · `--command` · `--prefix` · `--codex-home` · `--no-force` | VS Code tasks, Copilot prompts, Claude commands, Codex prompts |
 
@@ -387,42 +485,42 @@ What the console shows while that runs, and what it ends with:
 
 ### Watching it work
 
-A three-minute silent subprocess looks like a hang, so while the agent runs the console shows one
-line that updates itself in place (once a second on a terminal). Harnesses that already stream their
-own prose to the same terminal — `codex` — get the status as standalone lines every 10 s instead, so
-the clock is visible without overwriting the agent's output:
+A three-minute silent subprocess looks like a hang, so while the agent runs there is **one live line** that
+updates itself in place, cut to the width of your terminal so it never wraps. It describes what the agent is
+doing in plain words instead of dumping its commands:
 
 ```
-[review] 01:42 | subagents 5 | tools 31 | last egm:egm-zoom-out
+| constitution  00:21  ·  listing .specify  ·  7 actions
+```
+
+`[System.IO.File]::ReadAllText('C:\\Users\\me\\proj\\.agents\\skills\\speckit-constitution\\SKILL.md')` shows as
+`reading .agents/skills/speckit-constitution/SKILL.md`, `git status --short; git log …` as `git status`,
+`rg --files -g '*.csproj'` as `searching the project`.
+
+Only the **milestones stay on screen**: files written or edited, subagents started, warnings. Reads, listings and
+commands only move the live line. `--verbose` (or `SPECKFISH_VERBOSE=1`, or `/verbose` in the console) keeps every
+action. The activity comes from the CLI's own events, so it is real: which command ran, which file was written,
+which subagent started.
+
+Without a terminal (CI, a pipe) there is no live line: every action is one plain line, easy to grep:
+
+```
 [specify-1] 00:13 | $ Get-Content -Raw .agents/skills/speckit-specify/SKILL.md
 [specify-1] 00:21 | $ Get-ChildItem -Force -Recurse specs
 [specify-1] 02:04 | wrote specs/001-api-v1-platform-foundation/spec.md
-[specify-1] 02:11 | finishing
 ```
 
-The activity lines come from the CLI's own events, so they are real actions, not a spinner: which
-command ran, which file was written, which subagent started. `codex` runs with `--json` precisely so
-those events arrive one by one (measured: events at 0.4 s, 4.9 s, 5.0 s of a 10 s run).
+Agent JSON is never echoed: whole JSON lines and anything over 1200 characters stay in the log. When the step ends
+the line is erased and the summary takes over, including what the agent did (`agent: 14 commands · wrote
+.specify/memory/constitution.md · 2 subagents`). Everything the agent printed is in
+`.speckfish/runs/<id>/logs/<step>.log`, and `<step>.meta.json` next to it records how the step was run (agent and
+version, arguments without the prompt, the prompt's length and hash, permissions, EGM commit and trust, cost).
+Turn the live line off with `--no-progress` (implied by `--quiet` and `--json`). Colour is only used on a terminal;
+`NO_COLOR` turns it off.
 
-Agent JSON is never echoed to the console, even for harnesses that echo prose: whole JSON lines and
-anything over 1200 characters stay in the log. A step ends with the outcome, not a transcript:
-
-```
-7 spec(s) generated
-  specs/001-api-v1-platform-foundation/spec.md
-  specs/002-catalog-configuration-permissions/spec.md
-  …
-
-  run 20261114-125940  ·  6m20s
-```
-
-What it tells you: the step, the elapsed time, how many Goldfish subagents have been spawned, how many
-tool calls ran, and the last subagent — so you can see the review moving through the stage reports
-instead of guessing. Before the first event it reads `starting, usually 3-5 min`, which sets the
-expectation for that step. Turn it off with `--no-progress` (also implied by `--quiet` and `--json`).
-
-When the step ends the line is erased and the summary takes over. Everything the agent printed is
-still written to `.speckfish/runs/<id>/logs/<step>.log`.
+**Ctrl+C.** It prints `Stopping the agent…`, stops the *whole* tree of processes the agent started, and checks
+that it is gone; if it could not, it says so and prints the exact command to do it by hand. A second Ctrl+C
+forces it.
 
 ### Reading the outcome
 
@@ -781,6 +879,14 @@ speckfish review --model claude-opus-4                 # pin the model for one s
 
 Mixing is fine: skills installed for all three, execution with whichever agent you point at.
 
+In the console, `/harness` and `/model` are pickers (arrows with the `[tui]` extra), and `--save` keeps the choice in
+`.speckfish/config.json`; outside it, `speckfish config harness=claude` and `speckfish config model=opus` do the
+same. `config fallback=copilot` sets a second agent that takes over when the first one runs out of quota or
+credentials (`--fallback` for one run).
+
+**Codex needs your consent.** It runs with its sandbox and approvals off, so speckfish refuses it until you say so:
+`speckfish config unsafe=true`, `--unsafe` for one run, or `SPECKFISH_UNSAFE=1`. The console asks when you choose it.
+
 ### Headless vs interactive
 
 | Mode | Command | Behaviour |
@@ -816,7 +922,36 @@ $ speckfish review --interactive
 | `0` | step succeeded / review without blockers |
 | `1` | review with blockers |
 | `2` | execution error (timeout, budget, missing report) |
-| `3` | incomplete environment (`doctor` fails) |
+| `3` | incomplete environment (`doctor` fails), no quota or credentials, a corrupt `config.json`, an EGM that is not trusted, or codex without consent |
+| `130` | interrupted with Ctrl+C |
+
+## Settings and environment variables
+
+`speckfish config` shows the project settings (`.speckfish/config.json`); `speckfish config KEY=VALUE` changes one.
+
+| Key | Default | What it does |
+|---|---|---|
+| `harness` | `auto` | which agent CLI runs the steps: `claude`, `copilot`, `codex` or `auto` (the first installed) |
+| `fallback` | — | second agent for a step that stops on quota or credentials |
+| `model` | — | forwarded to the agent CLI; empty = the CLI's own choice |
+| `language` | `en` | language of the generated documents |
+| `profile` | `speckit` | review criteria profile |
+| `permissions` | `scoped` | `scoped`: read-only steps (`review`, `drift`, the `--split` inventory) get no shell; `open`: every step gets every tool |
+| `unsafe` | `false` | accept an agent that runs with no sandbox (codex) |
+| `env_allowlist` | — | `NAME,PREFIX_*`: the only variables the agent inherits (plus what it needs to start and its provider's) |
+| `keep_runs` | `50` | old run folders deleted after each command (`0` = never); a run `status` or `report` still needs is kept |
+| `fullscreen` | `true` | the console takes the whole terminal |
+| `egm_root` · `specify` · `timeout.<step>` | | where EGM is, how to run Spec Kit, per-step timeouts in seconds |
+
+| Variable | What it does |
+|---|---|
+| `SPECKFISH_HARNESS` · `SPECKFISH_EGM_ROOT` | override `harness` / `egm_root` |
+| `SPECKFISH_UNSAFE=1` | accept an agent with no sandbox (for a disposable CI container) |
+| `SPECKFISH_ENV_ALLOWLIST` | same as `env_allowlist` |
+| `SPECKFISH_TRUST_ALL=1` | skip the EGM trust check (disposable CI container only) |
+| `SPECKFISH_HOME` | where `trusted.json` lives (default `~/.speckfish`) |
+| `SPECKFISH_VERBOSE=1` · `SPECKFISH_FULLSCREEN=0` · `NO_COLOR` | keep every action / no full screen / no colour |
+| `SPECKFISH_IDLE_SECONDS` · `SPECKFISH_RESULT_GRACE` · `SPECKFISH_POLL_SECONDS` | how long a silent agent may run, how long one that printed its final event may linger, how often those are checked |
 
 ## How it works
 
@@ -838,6 +973,23 @@ $ speckfish review --interactive
    and `--print` can hang forever.
 6. **EGM is never installed globally.** `--plugin-dir` points at `vendor/egm`, so user settings are
    untouched and the version is pinned in your repo.
+
+## Security
+
+speckfish runs agent CLIs that can read your repository and run commands as you, so it limits what they get
+and what reaches them. The short version (full model and CI advice in [SECURITY.md](SECURITY.md)):
+
+- **Read-only steps have no shell.** `review`, `drift` and the `--split` inventory run Claude with `Bash` and
+  `PowerShell` denied. Spec Kit steps and `implement` keep a shell: they need it. `config permissions=open`
+  turns the scoping off.
+- **Codex is opt-in** (`config unsafe=true`): it runs with no sandbox.
+- **EGM is pinned and trusted by hash.** `init` installs a verified version and trusts it; an EGM that comes
+  with a repository is not loaded until you run `speckfish trust`.
+- **`@file` stays inside the project** unless you pass `--allow-outside-root`.
+- **Secrets**: `config env_allowlist=NAME,PREFIX_*` makes the agent inherit only what you list.
+- **Logs stay out of git**: `init` adds `.speckfish/` to `.gitignore`.
+- **The prompt travels on stdin** for Claude, so it is not visible in `ps` and has no command-line length limit.
+- For CI or code you do not trust, use a disposable container with no credentials but the agent's own key.
 
 ## Observed cost (~75-line document)
 
@@ -865,9 +1017,13 @@ same way. Always measure with `speckfish show`.
 ## Development
 
 ```bash
-uv venv && uv pip install -e . pytest
-python -m pytest -q
+uv venv && uv pip install -e ".[dev]"      # pytest, pytest-cov, ruff, mypy, prompt_toolkit, pyyaml
+python -m pytest -q --cov=speckfish        # CI requires 80 % coverage
+ruff check src tests && mypy
 ```
+
+The README screenshots are regenerated with `python docs/screenshots/capture.py` (needs `pyte`, Node with
+Playwright, `uv`, `git` and network; see the header of that script for what is real and what is scripted).
 
 The suite is hermetic: no network and no agent CLI is invoked (steps run with `--dry-run`, the harness
 is monkeypatched). CI runs it on Ubuntu and Windows, Python 3.10 and 3.12, on every push. macOS lives in

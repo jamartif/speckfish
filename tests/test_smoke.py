@@ -369,8 +369,8 @@ def test_tasks_json_structure():
     assert "spfish: review" in labels and "spfish: review-interactive" in labels
     assert {i["id"] for i in data["inputs"]} >= {"idea", "stack", "principles"}
     for t in data["tasks"]:
-        assert t["command"] == "python -m speckfish"
-        assert t["type"] == "shell" and t["problemMatcher"] == []
+        assert t["command"] == "python" and t["args"][:2] == ["-m", "speckfish"]
+        assert t["type"] == "process" and t["problemMatcher"] == []
 
 
 def test_copilot_prompt_frontmatter():
@@ -498,7 +498,7 @@ def test_read_input_references_big_files(tmp_path):
     from speckfish.prompts import INLINE_LIMIT, read_input
     f = tmp_path / "grande.md"
     f.write_text("x" * (INLINE_LIMIT + 100), encoding="utf-8")
-    text, src = read_input("@grande.md", tmp_path)
+    text, _src = read_input("@grande.md", tmp_path)
     assert "read that file" in text and "x" * 50 not in text
 
 
@@ -1355,7 +1355,7 @@ def test_activity_does_not_deadlock_the_reader_on_a_tty():
             return True
 
     buf = TTY()
-    p = Progress("specify-4", enabled=True, stream=buf, every=0.01)
+    p = Progress("specify-4", enabled=True, stream=buf, every=0.01, verbose=True)
     p.start()
     time.sleep(0.05)          # the status line must be on screen (_printed > 0) for the bug to bite
     done = threading.Event()
@@ -1712,7 +1712,7 @@ def test_every_feature_step_exposes_the_same_flags():
         # not feature-oriented: setup, inspection, exploration over a material, or split by task
         if cmd in ("init", "doctor", "config", "features", "runs", "show", "report",
                    "editors", "pipeline", "specify", "constitution", "brainstorm", "draft",
-                   "go", "next", "revise", "status"):
+                   "go", "next", "revise", "status", "shell", "trust"):
             continue
         opts = {a.dest for a in subs._actions}
         assert {"all_features", "only", "from_feature", "skip_existing"} <= opts, cmd

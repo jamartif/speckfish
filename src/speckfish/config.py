@@ -9,6 +9,8 @@ import subprocess
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
+from .store import write_json_atomic
+
 STATE_DIR = ".speckfish"
 
 DEFAULTS = {
@@ -26,6 +28,18 @@ DEFAULTS = {
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
                 "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
 }
+
+
+def env_number(name: str, default: float, minimum: float = 0.0) -> float:
+    """A numeric environment variable; anything unusable (text, negative) falls back to the default."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
 
 
 def is_windows() -> bool:
@@ -58,6 +72,13 @@ class Config:
     model: str = ""
     profile: str = "speckit"
     language: str = "en"
+    fallback: str = ""            # second agent CLI for a step that stops on quota/auth
+    permissions: str = "scoped"   # scoped: read-only steps get no shell | open: every step gets every tool
+    unsafe: bool = False          # allow an agent that runs with no sandbox (codex)
+    keep_runs: int = 50           # old run folders deleted after each command (0 = never)
+    fullscreen: bool = True       # the console takes the whole terminal (alternate screen)
+    env_allowlist: str = ""       # comma list (NAME or PREFIX_*): the only variables the agent inherits
+    egm_root_from_env: bool = field(default=False, repr=False)      # runtime only, never saved
     timeouts: dict = field(default_factory=lambda: dict(DEFAULTS["timeouts"]))
     budgets: dict = field(default_factory=lambda: json.loads(json.dumps(DEFAULTS["budgets"])))
 
@@ -74,14 +95,23 @@ class Config:
         p = cls.path(root)
         cfg = cls(root=root)
         if p.exists():
-            data = json.loads(p.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise SystemExit(f"cannot read {p}: {e}. Fix or delete it (`speckfish init` rewrites "
+                                 f"the defaults)") from e
+            if not isinstance(data, dict):
+                raise SystemExit(f"{p} must contain a JSON object, not {type(data).__name__}")
             # configs written by older builds stored every default, so a better timeout default
             # could never reach an existing project: drop that block once and migrate
             if int(data.get("schema") or 1) < cls.SCHEMA:
                 data.pop("timeouts", None)
-            for k in ("harness", "egm_root", "specify", "model", "profile", "language"):
+            for k in ("harness", "egm_root", "specify", "model", "profile", "language", "fallback",
+                  "permissions", "unsafe", "env_allowlist", "fullscreen"):
                 if k in data:
                     setattr(cfg, k, data[k])
+            if isinstance(data.get("keep_runs"), int) and data["keep_runs"] >= 0:
+                cfg.keep_runs = data["keep_runs"]
             for k in ("timeouts", "budgets"):
                 if k in data:
                     merged = dict(getattr(cfg, k))
@@ -93,6 +123,9 @@ class Config:
         env_e = os.environ.get("SPECKFISH_EGM_ROOT")
         if env_e:
             cfg.egm_root = env_e
+            cfg.egm_root_from_env = True       # chosen by the person running speckfish, not by the repo
+        if os.environ.get("SPECKFISH_UNSAFE") == "1":
+            cfg.unsafe = True
         return cfg
 
     def save(self) -> Path:
@@ -100,13 +133,14 @@ class Config:
         p.parent.mkdir(parents=True, exist_ok=True)
         data = asdict(self)
         data.pop("root", None)
+        data.pop("egm_root_from_env", None)
         data["schema"] = self.SCHEMA
         # never write a default back: a stored default would outlive a better one in a later build
         if data.get("timeouts") == DEFAULTS["timeouts"]:
             data.pop("timeouts", None)
         if data.get("budgets") == DEFAULTS["budgets"]:
             data.pop("budgets", None)
-        p.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+        write_json_atomic(p, data)
         return p
 
     # ---------- working paths ----------
@@ -135,6 +169,35 @@ class Config:
 
 
 # ---------- process helpers ----------
+
+# what an agent needs to start and reach its API when the environment is filtered (env_allowlist)
+_BASE_ENV = {"PATH", "HOME", "USER", "USERNAME", "LOGNAME", "SHELL", "TERM", "LANG", "LANGUAGE", "TZ",
+             "TMPDIR", "TEMP", "TMP", "SYSTEMROOT", "SYSTEMDRIVE", "COMSPEC", "PATHEXT", "USERPROFILE",
+             "APPDATA", "LOCALAPPDATA", "PROGRAMFILES", "PROGRAMDATA", "WINDIR", "HOMEDRIVE", "HOMEPATH",
+             "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME", "XDG_RUNTIME_DIR", "SSL_CERT_FILE",
+             "SSL_CERT_DIR", "NODE_EXTRA_CA_CERTS", "REQUESTS_CA_BUNDLE", "HTTP_PROXY", "HTTPS_PROXY",
+             "NO_PROXY", "http_proxy", "https_proxy", "no_proxy", "ALL_PROXY", "all_proxy", "CODEX_HOME"}
+_BASE_PREFIXES = ("LC_", "ANTHROPIC_", "CLAUDE_", "COPILOT_", "CODEX_", "OPENAI_", "SPECKFISH_")
+
+
+def agent_env(extra: dict | None = None, allowlist: str = "") -> dict:
+    """The environment an agent process gets.
+
+    By default it inherits everything (as before). With an allowlist (config `env_allowlist` or the
+    `SPECKFISH_ENV_ALLOWLIST` variable: `NAME,PREFIX_*`) it gets only the basics it needs to start, its own
+    provider's variables, and what the list names: a prompt-injected agent cannot read `AWS_SECRET_ACCESS_KEY`
+    or `GITHUB_TOKEN` from an environment that never had them.
+    """
+    spec = (allowlist or os.environ.get("SPECKFISH_ENV_ALLOWLIST") or "").strip()
+    if not spec:
+        return {**os.environ, **(extra or {})}
+    names = {x.strip() for x in spec.split(",") if x.strip()}
+    prefixes = tuple(n[:-1] for n in names if n.endswith("*"))
+    exact = {n for n in names if not n.endswith("*")} | _BASE_ENV
+    keep = {k: v for k, v in os.environ.items()
+            if k in exact or k.upper() in exact or k.startswith(_BASE_PREFIXES + prefixes)}
+    return {**keep, **(extra or {})}
+
 
 def which(cmd: str) -> str | None:
     return shutil.which(cmd)

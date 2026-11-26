@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -21,8 +22,27 @@ EXIT_OK, EXIT_BLOCKERS, EXIT_ERROR, EXIT_ENV = 0, 1, 2, 3
 def emit(obj, as_json: bool, human: str | None = None) -> None:
     if as_json:
         print(json.dumps(obj, indent=2, ensure_ascii=False))
+    elif human is not None:
+        from .style import colorize_summary, supports_color
+        print(colorize_summary(human) if supports_color(sys.stdout) else human)
     else:
-        print(human if human is not None else json.dumps(obj, indent=2, ensure_ascii=False))
+        print(json.dumps(obj, indent=2, ensure_ascii=False))
+
+
+def _activity_line(act: dict | None) -> str:
+    """`14 commands · wrote 2 files · 3 subagents`: what the agent did, in one line."""
+    if not act:
+        return ""
+    bits = []
+    if act.get("commands"):
+        bits.append(f"{act['commands']} command{'s' if act['commands'] != 1 else ''}")
+    files = act.get("files") or []
+    if files:
+        shown = ", ".join(files[:3]) + (f" (+{len(files) - 3})" if len(files) > 3 else "")
+        bits.append(f"wrote {shown}")
+    if act.get("subagents"):
+        bits.append(f"{len(act['subagents'])} subagent{'s' if len(act['subagents']) != 1 else ''}")
+    return "  agent: " + " · ".join(bits) if bits else ""
 
 
 def _rel(path: str, root: str | None) -> str:
@@ -76,6 +96,10 @@ def summarize(res: dict, root: str | None = None) -> str:
         head += f"  ·  exit {res['exit_code']}"
     lines = [head]
 
+    done = _activity_line(res.get("activity"))
+    if done:
+        lines.append(done)
+
     verdict = (res.get("verdict") or "").strip()
     if verdict:
         # the consolidated verdict is the one thing worth reading first
@@ -108,6 +132,15 @@ def summarize(res: dict, root: str | None = None) -> str:
             if r not in main:
                 lines.append(f"    {r}")
 
+    nested = res.get("review")
+    if nested:
+        state = "OK" if nested.get("ok") else "FAILED"
+        lines.append(f"  review of the spec: {state} · {len(nested.get('blockers') or [])} blocker(s) · "
+                     f"{nested.get('majors', 0)} major(s)")
+        for b in (nested.get("blockers") or [])[:5]:
+            lines.append(f"    BLOCKER  {b}")
+        if nested.get("error"):
+            lines.append(f"    ERROR  {nested['error']}")
     if res.get("error"):
         lines.append(f"  ERROR  {res['error']}")
         hint = ERROR_HINTS.get(res.get("error_kind") or "")
@@ -279,6 +312,11 @@ def doctor_summary(info: dict) -> str:
     if e.get("present"):
         skills = e.get("skills") or []
         lines.append(f"egm:     {e.get('version')} at {e.get('path')}  ({len(skills)} skills)")
+        if e.get("commit"):
+            note = "pinned" if e.get("pinned") else f"NOT the pinned {S.EGM_REF} ({S.EGM_COMMIT[:12]})"
+            lines.append(f"         commit {e['commit'][:12]}  [{note}]")
+        if e.get("trusted") is False:
+            lines.append(f"         NOT TRUSTED: {e.get('trust_note')}")
     else:
         lines.append("egm:     not found — run `speckfish init` (or set egm_root in "
                      ".speckfish/config.json)")
@@ -291,6 +329,9 @@ def doctor_summary(info: dict) -> str:
                  f"agent-skills={yn(p.get('has_claude_skills'))}")
     if p.get("feature"):
         lines.append(f"         latest feature: {p['feature']}")
+    if p.get("state_ignored") is False:
+        lines.append("         WARNING: .speckfish/ is not in .gitignore — its logs hold the agents' "
+                     "full transcripts. Run `speckfish init` or add it")
     tools = info.get("tools") or {}
     missing = [t for t, v in tools.items() if not v.get("installed")]
     if missing:
@@ -308,11 +349,17 @@ def exit_for(res: dict) -> int:
     kind = res.get("kind") or str(res.get("step") or "").split("-")[0]
     if kind in ("review", "drift") and res.get("blockers"):
         return EXIT_BLOCKERS
+    nested = res.get("review") or {}                  # `specify --review`
+    if nested and not nested.get("ok"):
+        return EXIT_ENV if nested.get("error_kind") in ("quota", "auth") else EXIT_ERROR
+    if nested.get("blockers"):
+        return EXIT_BLOCKERS
     return EXIT_OK
 
 
 GLOBAL_FLAGS_VALUE = {"--root", "--harness", "--model", "--fallback"}
-GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run"}
+GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run", "--unsafe", "--allow-outside-root",
+                     "--verbose"}
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -353,10 +400,16 @@ def build_parser() -> argparse.ArgumentParser:
                         help="if a step stops for quota/auth, retry it once with this harness")
     common.add_argument("--model", default=None,
                         help="model passed to the agent CLI (default: the CLI's own choice)")
+    common.add_argument("--unsafe", action="store_true",
+                        help="accept an agent that runs with no sandbox (codex) for this run")
+    common.add_argument("--allow-outside-root", action="store_true",
+                        help="let @file read files outside the project folder")
     common.add_argument("--json", action="store_true", help="JSON output on stdout")
     common.add_argument("--stream", action="store_true", default=True,
                         help="forward agent output to stderr (default)")
     common.add_argument("--quiet", action="store_true", help="do not forward agent output")
+    common.add_argument("--verbose", action="store_true",
+                        help="keep every action the agent takes on screen (default: files written and subagents)")
     common.add_argument("--no-progress", action="store_true",
                         help="do not print the live progress line while an agent works")
     common.add_argument("--dry-run", action="store_true", help="print the command without running it")
@@ -368,12 +421,21 @@ def build_parser() -> argparse.ArgumentParser:
     sp.add_argument("--integration", default=None,
                     help="claude | copilot | codex | all | comma list (default: every installed agent)")
     sp.add_argument("--no-egm", action="store_true", help="do not clone/install EGM")
+    sp.add_argument("--egm-ref", default=None,
+                    help="check out this EGM tag, branch or commit instead of the pinned version "
+                         f"({S.EGM_REF}); use it on purpose, EGM runs with the agent's permissions")
     sp.add_argument("--no-editors", dest="editors", action="store_false", default=True,
                     help="skip the VS Code tasks and agent slash commands (they are generated by default)")
     sp.add_argument("--prefix", default="spfish",
                     help="prefix for the generated slash commands (default: spfish)")
 
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
+
+    sub.add_parser("shell", help="interactive console (also: run `speckfish` alone in a terminal)")
+
+    sp = sub.add_parser("trust", help="trust the EGM checkout of this project (it runs with the agent's permissions)")
+    sp.add_argument("--path", default=None, help="the EGM folder (default: the one this project uses)")
+    sp.add_argument("--show", action="store_true", help="only say whether it is trusted")
 
     sp = sub.add_parser("specify", help="create/update spec.md")
     sp.add_argument("description", nargs="?", default="",
@@ -508,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
-                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language)")
+                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language, fallback, permissions, unsafe, env_allowlist, keep_runs, fullscreen)")
 
     sub.add_parser("features", help="list features under specs/ and which one is active")
 
@@ -600,7 +662,8 @@ def cmd_init(run: Run) -> int:
     args = run.args
     out = S.do_init(run.cfg, args.integration, skip_egm=args.no_egm,
                     editors=getattr(args, "editors", True),
-                    editor_prefix=getattr(args, "prefix", "spfish"))
+                    editor_prefix=getattr(args, "prefix", "spfish"),
+                    egm_ref=getattr(args, "egm_ref", None))
     ok_int = ", ".join(out.get("installed") or []) or "none"
     failed = [a["integration"] for a in out["actions"]
               if a.get("integration") and not a.get("specify_init")]
@@ -608,8 +671,16 @@ def cmd_init(run: Run) -> int:
     if failed:
         human.append(f"failed: {', '.join(failed)}")
     human.append(f"egm: {out.get('egm_root')}")
+    for a in out["actions"]:
+        if a.get("egm"):
+            human.append(f"egm {a['egm']}: {a.get('ref') or ''} {(a.get('commit') or '')[:12]} "
+                         f"{a.get('detail') if a['egm'] == 'failed' else ''}".rstrip())
+        if a.get("gitignore"):
+            human.append(f"added to .gitignore: {', '.join(a['gitignore'])}")
     run.emit(out, "\n".join(human))
-    return EXIT_OK if all(a.get("specify_init", True) for a in out["actions"]) else EXIT_ERROR
+    egm_failed = any(a.get("egm") == "failed" for a in out["actions"])
+    return EXIT_OK if all(a.get("specify_init", True) for a in out["actions"]) and not egm_failed \
+        else EXIT_ERROR
 
 
 def cmd_doctor(run: Run) -> int:
@@ -861,7 +932,8 @@ def cmd_config(run: Run) -> int:
             return EXIT_ENV
         key, value = args.set.split("=", 1)
         key = key.strip()
-        allowed = {"harness", "model", "profile", "egm_root", "specify", "language"}
+        allowed = {"harness", "model", "profile", "egm_root", "specify", "language", "fallback",
+                   "permissions", "unsafe", "env_allowlist", "keep_runs", "fullscreen"}
         if key.startswith("timeout."):
             step = key.split(".", 1)[1]
             if not value.strip().isdigit():
@@ -877,7 +949,28 @@ def cmd_config(run: Run) -> int:
             msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
             run.emit({"error": msg}, f"ERROR: {msg}")
             return EXIT_ENV
-        setattr(cfg, key, value.strip())
+        value = value.strip()
+        if key == "permissions" and value not in ("scoped", "open"):
+            run.emit({"error": "permissions must be scoped or open"}, "ERROR: permissions must be scoped or open")
+            return EXIT_ENV
+        if key == "keep_runs":
+            if not value.isdigit():
+                run.emit({"error": "keep_runs must be a number"}, "ERROR: keep_runs must be a number (0 = never delete)")
+                return EXIT_ENV
+            cfg.keep_runs = int(value)
+            path = cfg.save()
+            run.emit({"saved": norm(path), key: cfg.keep_runs}, f"saved {key}={cfg.keep_runs} → {norm(path)}")
+            return EXIT_OK
+        if key in ("unsafe", "fullscreen"):
+            if value.lower() not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+                run.emit({"error": f"{key} must be true or false"}, f"ERROR: {key} must be true or false")
+                return EXIT_ENV
+            setattr(cfg, key, value.lower() in ("true", "1", "yes", "on"))
+            path = cfg.save()
+            run.emit({"saved": norm(path), key: getattr(cfg, key)},
+                     f"saved {key}={str(getattr(cfg, key)).lower()} → {norm(path)}")
+            return EXIT_OK
+        setattr(cfg, key, value)
         path = cfg.save()
         run.emit({"saved": norm(path), key: value.strip()},
                  f"saved {key}={value.strip()} → {norm(path)}")
@@ -1158,9 +1251,35 @@ def cmd_status(run: Run) -> int:
     return EXIT_OK
 
 
+def cmd_trust(run: Run) -> int:
+    from . import trust
+    cfg = run.cfg
+    egm = Path(run.args.path).resolve() if run.args.path else cfg.egm_path()
+    if egm is None or not (egm / "plugin.json").exists():
+        run.emit({"error": "no EGM found"}, "ERROR: no EGM checkout found (run `speckfish init`, or pass --path)")
+        return EXIT_ENV
+    ok, why = trust.status(cfg, egm)
+    info = {**trust.describe(egm), "trusted": ok, "commit": S.egm_commit(egm)}
+    if run.args.show or ok:
+        run.emit(info, f"egm {info['path']}\n  commit {info['commit'][:12] or '-'}  hash {info['hash'][:16]}…  "
+                       f"{info['files']} files\n  {'trusted' if ok else 'NOT trusted: ' + why}")
+        return EXIT_OK if ok else EXIT_ENV
+    trust.record(egm, info["commit"])
+    info["trusted"] = True
+    run.emit(info, f"trusted: {info['path']}\n  commit {info['commit'][:12] or '-'}  hash {info['hash'][:16]}…  "
+                   f"{info['files']} files — it will run with the agent's permissions. "
+                   f"If you did not read it, `speckfish trust` was not the right answer.")
+    return EXIT_OK
+
+
+def cmd_shell(run: Run) -> int:
+    from .shell import run_shell
+    return run_shell(run.cfg.root)
+
+
 # one handler per subcommand: adding a command is adding a row here and a parser above
 HANDLERS = {
-    "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
+    "shell": cmd_shell, "trust": cmd_trust, "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
     "editors": cmd_editors, "init": cmd_init, "doctor": cmd_doctor, "specify": cmd_specify,
     "plan": cmd_plan, "review": cmd_review, "drift": cmd_drift, "pipeline": cmd_pipeline,
     "features": cmd_features, "config": cmd_config, "runs": cmd_runs, "report": cmd_report,
@@ -1170,21 +1289,47 @@ HANDLERS = {
 }
 
 
+def _prune_runs(cfg: Config) -> None:
+    """Keep the newest `keep_runs` run folders (plus the ones `status` and `report` still depend on)."""
+    if cfg.keep_runs and cfg.keep_runs > 0 and cfg.runs_dir.exists():
+        with contextlib.suppress(OSError):
+            S.clean_runs(cfg, cfg.keep_runs)
+
+
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
+    if not raw:
+        from .shell import is_interactive, run_shell
+        if is_interactive():
+            return run_shell(".")        # no subcommand in a terminal: the console; a pipe keeps the usage error
     args = build_parser().parse_args(normalize_argv(raw))
-    cfg = Config.load(Path(args.root))
+    try:
+        cfg = Config.load(Path(args.root))
+    except SystemExit as e:                    # a broken config.json: say which file, do not traceback
+        msg = str(e) or "environment error"
+        emit({"error": msg}, args.json, f"ERROR: {msg}")
+        return EXIT_ENV
     if args.harness:
         cfg.harness = args.harness
     if args.model:
         cfg.model = args.model
+    if getattr(args, "unsafe", False):
+        cfg.unsafe = True
+    from . import prompts as _prompts
+    _prompts.ALLOW_OUTSIDE_ROOT = bool(getattr(args, "allow_outside_root", False))
+    if not getattr(args, "fallback", None) and cfg.fallback:
+        args.fallback = cfg.fallback           # saved with `config fallback=copilot` or by the console wizard
     from . import progress as _progress
     _progress.ENABLED = not (getattr(args, "no_progress", False) or args.quiet or args.json)
+    _progress.VERBOSE = bool(getattr(args, "verbose", False) or os.environ.get("SPECKFISH_VERBOSE") == "1")
     handler = HANDLERS.get(args.cmd)
     if handler is None:
         return EXIT_ERROR
     try:
-        return handler(Run(cfg, args))
+        code = handler(Run(cfg, args))
+        if args.cmd not in ("runs", "shell"):
+            _prune_runs(cfg)
+        return code
     except KeyboardInterrupt:
         print("\nInterrupted: the agent was stopped. Nothing written so far is lost; run the same "
               "command to continue.", file=sys.stderr)

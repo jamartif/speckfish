@@ -1,0 +1,77 @@
+#!/usr/bin/env python3
+"""Scripted stand-in for the Claude Code CLI, used to make reproducible screenshots.
+
+`--version` is answered by the real CLI. Anything else plays a short, fixed session in Claude's stream-json
+format (the same events the real one prints), writes the files a real step would, and exits. It never calls a
+model, so a screenshot costs nothing and looks the same every time.
+"""
+import json, os, re, subprocess, sys, time
+
+REAL = os.environ.get("REAL_CLAUDE", "/opt/node22/bin/claude")
+if "--version" in sys.argv:
+    sys.exit(subprocess.call([REAL, "--version"]))
+
+prompt = sys.stdin.read()
+PACE = float(os.environ.get("STUB_PACE", "0.9"))
+
+
+def ev(obj):
+    print(json.dumps(obj), flush=True)
+    time.sleep(PACE)
+
+
+def tool(name, **inp):
+    ev({"type": "assistant", "message": {"content": [{"type": "tool_use", "name": name, "input": inp}]}})
+
+
+def result(cost):
+    print(json.dumps({"type": "result", "subtype": "success", "is_error": False, "total_cost_usd": cost,
+                      "usage": {"input_tokens": 1800, "output_tokens": 950}, "result": "done",
+                      "modelUsage": {"claude-sonnet-5-5": {"outputTokens": 950}}}), flush=True)
+
+
+cwd = os.getcwd()
+if "/speckit-constitution" in prompt:
+    tool("Read", file_path=f"{cwd}/.claude/skills/speckit-constitution/SKILL.md")
+    tool("Bash", command="Get-ChildItem -Force .specify; Get-ChildItem .specify/templates")
+    tool("Read", file_path=f"{cwd}/.specify/templates/constitution-template.md")
+    tool("Bash", command="rg --files -g '*.csproj' -g '*.sln' -g 'README*'")
+    tool("Bash", command="git status --short; git log --oneline -5")
+    os.makedirs(".specify/memory", exist_ok=True)
+    text = prompt.split("\n\n")[0]
+    with open(".specify/memory/constitution.md", "w", encoding="utf-8") as f:
+        f.write("# Project constitution\n\nPrinciples given by the team:\n\n" + text + "\n")
+    tool("Write", file_path=f"{cwd}/.specify/memory/constitution.md")
+    result(0.31)
+elif "/egm:egm-review" in prompt:
+    art = re.search(r"EGM artifact directory: (.+)", prompt).group(1).strip()
+    os.makedirs(art, exist_ok=True)
+    tool("Read", file_path=f"{cwd}/specs/001-exception-tickets/plan.md")
+    for sub in ("egm:egm-zoom-out", "egm:egm-comprehension", "egm:egm-design-critic", "egm:egm-structural"):
+        tool("Agent", subagent_type=sub)
+    report = """# Consolidated review
+
+## Verdict
+The plan does not meet the standard yet: authentication towards the ticketing service is not designed.
+
+## Blockers
+| ID | Finding |
+|---|---|
+| B1 | No decision on how the API key for the ticketing service is stored or rotated |
+
+## Majors
+| ID | Finding |
+|---|---|
+| M1 | The retry policy when the service is down is not defined |
+| M2 | No limit on the size of the exception payload that becomes a ticket |
+
+## Nits
+- N1 Use the same name for the endpoint in plan.md and in the contract
+"""
+    with open(os.path.join(art, "consolidated_review_report.md"), "w", encoding="utf-8") as f:
+        f.write(report)
+    tool("Write", file_path=os.path.join(art, "consolidated_review_report.md"))
+    result(1.84)
+else:
+    tool("Read", file_path=f"{cwd}/README.md")
+    result(0.05)
