@@ -503,3 +503,19 @@ def test_the_shell_uses_the_rich_ui_for_the_prompt_the_editor_and_the_toolbar(tm
     assert c.argvs() == [["constitution", "--", "- be kind"]]
     assert ui.toolbar and "next: /constitution" in ui.toolbar[0]
     assert "┌" not in c.screen                                # the toolbar replaces the printed header
+
+
+def test_confirmations_are_asked_in_english_but_still_accept_s_and_si(tmp_path):
+    asked = []
+    answers = iter(["y", "", "n", "s", "sí", "yes", ""])
+    c = Console(tmp_path, [])
+    c.shell.input = lambda prompt="": (asked.append(prompt), next(answers))[1]
+    assert c.shell.confirm("Go?") is True
+    assert c.shell.confirm("Go?") is True                       # Enter takes the default (yes)
+    assert c.shell.confirm("Go?") is False
+    assert c.shell.confirm("Go?", default=False) is True        # "s"
+    assert c.shell.confirm("Go?", default=False) is True        # "sí"
+    assert c.shell.confirm("Go?", default=False) is True        # "yes"
+    assert c.shell.confirm("Go?", default=False) is False       # Enter takes the default (no)
+    assert asked[0].endswith("[Y/n] ") and asked[-1].endswith("[y/N] ")
+    assert not any("S/n" in a or "s/N" in a for a in asked)

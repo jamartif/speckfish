@@ -173,7 +173,7 @@ class Shell:
         return None
 
     def confirm(self, question: str, default: bool = True) -> bool:
-        hint = "[S/n]" if default else "[s/N]"
+        hint = "[Y/n]" if default else "[y/N]"
         answer = self.ask(f"{question} {hint} ").strip().lower()
         if not answer:
             return default
