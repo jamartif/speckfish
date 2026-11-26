@@ -432,7 +432,7 @@ Regresión en `tests/test_sprint1.py` (33 tests). Suite: 344 en verde, de 21 s a
 - [x] **S4**: `.speckfish/` en el `.gitignore` del proyecto durante `init`, más aviso en `doctor`.
 - [x] **S2**: fijar `EGM_REF` (`v0.1.1`) y su commit, verificarlo al clonar y mostrarlo en `doctor`; `init --egm-ref` para cambiarlo a propósito.
 - [x] **B4**: capturar config corrupta, variables de entorno no numéricas y fallo de `Popen`.
-- [x] **P4**: intervalo de sondeo configurable (suite de 21 s a ~2 s).
+- [x] **P4**: intervalo de sondeo configurable (`SPECKFISH_POLL_SECONDS`). La suite baja de 21 s a 11 s, no a ~2 s: los 4 tests de inactividad aún esperan los 2 s del límite que fijan ellos mismos.
 
 ### Sprint 2: estado y rendimiento (~2–3 días)
 - [ ] **B3**: escritura atómica (`os.replace`), `run_id` con sufijo y lock en `record_state`.
