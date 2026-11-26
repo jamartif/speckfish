@@ -570,7 +570,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
-                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language, fallback, permissions, unsafe, env_allowlist, keep_runs)")
+                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language, fallback, permissions, unsafe, env_allowlist, keep_runs, fullscreen)")
 
     sub.add_parser("features", help="list features under specs/ and which one is active")
 
@@ -933,7 +933,7 @@ def cmd_config(run: Run) -> int:
         key, value = args.set.split("=", 1)
         key = key.strip()
         allowed = {"harness", "model", "profile", "egm_root", "specify", "language", "fallback",
-                   "permissions", "unsafe", "env_allowlist", "keep_runs"}
+                   "permissions", "unsafe", "env_allowlist", "keep_runs", "fullscreen"}
         if key.startswith("timeout."):
             step = key.split(".", 1)[1]
             if not value.strip().isdigit():
@@ -961,13 +961,14 @@ def cmd_config(run: Run) -> int:
             path = cfg.save()
             run.emit({"saved": norm(path), key: cfg.keep_runs}, f"saved {key}={cfg.keep_runs} → {norm(path)}")
             return EXIT_OK
-        if key == "unsafe":
+        if key in ("unsafe", "fullscreen"):
             if value.lower() not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
-                run.emit({"error": "unsafe must be true or false"}, "ERROR: unsafe must be true or false")
+                run.emit({"error": f"{key} must be true or false"}, f"ERROR: {key} must be true or false")
                 return EXIT_ENV
             setattr(cfg, key, value.lower() in ("true", "1", "yes", "on"))
             path = cfg.save()
-            run.emit({"saved": norm(path), key: cfg.unsafe}, f"saved {key}={str(cfg.unsafe).lower()} → {norm(path)}")
+            run.emit({"saved": norm(path), key: getattr(cfg, key)},
+                     f"saved {key}={str(getattr(cfg, key)).lower()} → {norm(path)}")
             return EXIT_OK
         setattr(cfg, key, value)
         path = cfg.save()

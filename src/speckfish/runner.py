@@ -6,7 +6,6 @@ import hashlib
 import json
 import os
 import re
-import signal
 import subprocess
 import sys
 import time
@@ -14,6 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
+from . import proctree
 from .config import Config, agent_env, env_number, is_windows, norm
 from .harnesses import Harness, StepInvocation
 from .registry import missing_output
@@ -85,16 +85,24 @@ def run_dir_for(cfg: Config, run_id: str) -> Path:
     return d
 
 
-def _kill_tree(proc: subprocess.Popen) -> None:
+def _kill_tree(proc: subprocess.Popen, job: proctree.Job | None = None) -> tuple[bool, str]:
+    """Stop the agent and everything it started, and say whether that worked (see proctree)."""
+    return proctree.kill_tree(proc, job, windows=is_windows())
+
+
+def _stop_and_report(proc: subprocess.Popen, job: proctree.Job | None) -> bool:
+    """Kill the tree and tell the person if it did not die: a silent failure looks like "Ctrl+C does nothing"."""
     try:
-        if is_windows():
-            subprocess.run(["taskkill", "/F", "/T", "/PID", str(proc.pid)],
-                           capture_output=True)
-        else:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except Exception:
+        ok, how = _kill_tree(proc, job)
+    except KeyboardInterrupt:                       # Ctrl+C again: stop being polite
         with contextlib.suppress(Exception):
             proc.kill()
+        ok, how = proc.poll() is not None, "forced"
+    if not ok:
+        sys.stderr.write(f"WARNING: the agent (pid {proc.pid}) is still running — {how}.\n"
+                         f"  Stop it by hand: {proctree.manual_hint(proc.pid, is_windows())}\n")
+        sys.stderr.flush()
+    return ok
 
 
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
@@ -136,6 +144,8 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         message = f"cannot launch {inv.argv[0]}: {e}"
         log_path.write_text("$ " + " ".join(inv.argv) + "\n\n" + message + "\n", encoding="utf-8")
         return 127, "", message, time.time() - started, False, False
+    # Windows: one job for the whole tree, so a single call can stop it (and the OS does if we die)
+    job = proctree.start(proc) if is_windows() else None
     out_chunks: list[str] = []
     err_chunks: list[str] = []
     log = log_path.open("w", encoding="utf-8")
@@ -185,37 +195,46 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     grace = int(env_number("SPECKFISH_RESULT_GRACE", 45))
     # how often the timeout and the inactivity rule are looked at: it is the latency of both
     poll = env_number("SPECKFISH_POLL_SECONDS", 1.0, minimum=0.01)
+    guard = proctree.ConsoleGuard(enabled=is_windows())
     try:
-        while True:
-            try:
-                proc.wait(timeout=poll)
-                break
-            except subprocess.TimeoutExpired:
-                now = time.time()
-                limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
-                if limit and now - activity["t"] >= limit:
-                    idle_closed = True
-                elif now - started >= timeout:
-                    timed_out = True
-                else:
-                    continue
-                _kill_tree(proc)
-                with contextlib.suppress(subprocess.TimeoutExpired):
-                    proc.wait(timeout=30)
-                break
+        with guard:
+            while True:
+                try:
+                    proc.wait(timeout=poll)
+                    break
+                except subprocess.TimeoutExpired:
+                    guard.tick()                    # an agent that put the console in raw mode kills Ctrl+C
+                    now = time.time()
+                    limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
+                    if limit and now - activity["t"] >= limit:
+                        idle_closed = True
+                    elif now - started >= timeout:
+                        timed_out = True
+                    else:
+                        continue
+                    _stop_and_report(proc, job)
+                    with contextlib.suppress(subprocess.TimeoutExpired):
+                        proc.wait(timeout=30)
+                    break
     except KeyboardInterrupt:
         # Ctrl+C reaches speckfish, not the agent's own process group: stop the whole tree or it
         # keeps running (and writing, with the sandbox off) after the command is gone
-        _kill_tree(proc)
+        meter.stop()
+        sys.stderr.write("\nStopping the agent…  (Ctrl+C again forces it)\n")
+        sys.stderr.flush()
+        _stop_and_report(proc, job)
         with contextlib.suppress(Exception):
             log.close()
-        meter.stop()
+        if job is not None:
+            job.close()
         raise
     t_out.join(timeout=15)
     t_err.join(timeout=5)
     with contextlib.suppress(Exception):
         log.close()
     meter.stop()
+    if job is not None:
+        job.close()                  # anything the agent left running goes with it (the job kills on close)
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
     return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
             idle_closed)

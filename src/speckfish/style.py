@@ -30,13 +30,16 @@ def _windows_vt() -> bool:
     return bool(_WINDOWS_VT)
 
 
-def supports_color(stream=None) -> bool:
+def supports_vt(stream=None) -> bool:
+    """A real terminal that understands escape codes (cursor, screen modes, colour)."""
     stream = stream if stream is not None else sys.stdout
-    if os.environ.get("NO_COLOR") or os.environ.get("TERM") == "dumb":
-        return False
-    if not getattr(stream, "isatty", lambda: False)():
+    if os.environ.get("TERM") == "dumb" or not getattr(stream, "isatty", lambda: False)():
         return False
     return _windows_vt() if os.name == "nt" else True
+
+
+def supports_color(stream=None) -> bool:
+    return not os.environ.get("NO_COLOR") and supports_vt(stream)
 
 
 def paint(text: str, *styles: str, on: bool = True) -> str:

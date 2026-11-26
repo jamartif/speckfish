@@ -13,6 +13,7 @@ The core is stdlib only. With the optional `speckfish[tui]` extra (prompt_toolki
 from __future__ import annotations
 
 import contextlib
+import io
 import shlex
 import sys
 from collections.abc import Callable
@@ -22,6 +23,7 @@ from . import __version__
 from . import steps as S
 from .config import Config, norm
 from .harnesses import REGISTRY, detect_order
+from .screen import AltScreen, page
 
 # steps whose argument is free text: the console offers a multi-line editor when it is left out.
 # value = (what to ask, may be left empty)
@@ -42,6 +44,7 @@ SESSION_COMMANDS = {
     "feature": "choose the active feature (or /feature NAME)",
     "harness": "choose the agent CLI: claude, copilot or codex (--save to keep it)",
     "model": "choose the model the agent uses (--save to keep it)",
+    "clear": "clear the screen",
     "verbose": "show every action the agent takes (on | off), not only the files it writes",
     "help": "show the commands",
     "exit": "leave the console (Ctrl+D also works)",
@@ -118,13 +121,23 @@ def is_interactive() -> bool:
     return bool(sys.stdin and sys.stdin.isatty() and sys.stdout and sys.stdout.isatty())
 
 
+class _Capture(io.StringIO):
+    """Collects what a command prints so it can be paged; still looks like a terminal (colour stays on)."""
+
+    def isatty(self) -> bool:
+        return True
+
+
 class Shell:
     def __init__(self, root: Path, *, input_fn: Callable[[str], str] = input,
-                 out=None, main: Callable[[list[str]], int] | None = None, ui=None):
+                 out=None, main: Callable[[list[str]], int] | None = None, ui=None,
+                 screen: AltScreen | None = None, tip: str = ""):
         self.root = Path(root).resolve()
         self.input = input_fn
         self.ui = ui                          # optional rich front end (tui.PtkUI); None = plain input()
         self._catalog: list[tuple[str, str]] | None = None
+        self.screen = screen                  # the alternate screen, when the console runs full screen
+        self.tip = tip
         self.out = out or sys.stdout
         if main is None:
             from .cli import main as cli_main
@@ -142,6 +155,22 @@ class Shell:
 
     def ask(self, prompt: str) -> str:
         return self.input(prompt)
+
+    @property
+    def fullscreen(self) -> bool:
+        return bool(self.screen and self.screen.active)
+
+    def show(self, text: str) -> None:
+        """Print text; on the alternate screen (no scrollback) a long text goes through a pager."""
+        if self.fullscreen:
+            page(text, write=lambda t: print(t, end="", file=self.out), ask=self.ask)
+        else:
+            self.say(text)
+
+    def banner(self) -> None:
+        self.say(f"🐟 speckfish {__version__} · {norm(self.root)}")
+        if self.tip:
+            self.say(self.tip)
 
     @property
     def catalog(self) -> list[tuple[str, str]]:
@@ -358,8 +387,10 @@ class Shell:
 
     def run_cli(self, argv: list[str]) -> int:
         """Run a subcommand exactly as the command line would. Never lets an exit or Ctrl+C escape."""
+        capture = _Capture() if self.fullscreen else None
         try:
-            code = self._main(self.globals() + argv)
+            with contextlib.redirect_stdout(capture) if capture is not None else contextlib.nullcontext():
+                code = self._main(self.globals() + argv)
         except KeyboardInterrupt:
             self.say("\nStopped. Back at the prompt.")
             code = 130
@@ -368,6 +399,9 @@ class Shell:
             if e.code not in (None, 0, 2):
                 self.say(f"ERROR: {e.code}")
             code = e.code if isinstance(e.code, int) else 2
+        finally:
+            if capture is not None and capture.getvalue():
+                self.show(capture.getvalue())        # after the redirect is undone: it may need to ask
         self.last_code = code
         return code
 
@@ -384,18 +418,23 @@ class Shell:
             self.say(f"cannot parse that line: {e}")
             return True
         if not parts:
-            self.say(help_text(self.catalog))
+            self.show(help_text(self.catalog))
             return True
         name, rest = parts[0].lower(), parts[1:]
         if name in ("exit", "quit", "q"):
             return False
         if name in ("help", "h", "?"):
-            self.say(help_text(self.catalog))
+            self.show(help_text(self.catalog))
             return True
         if name == "feature":
             return self.choose_feature(rest)
         if name in SESSION_ONLY:
             return self.set_session(name, rest)
+        if name == "clear":
+            if self.screen and self.screen.active:
+                self.screen.clear()
+            self.banner()
+            return True
         if name == "verbose":
             self.verbose = (rest[0].lower() not in ("off", "0", "no", "false")) if rest else not self.verbose
             self.say(f"verbose {'on: every action stays on screen' if self.verbose else 'off'} (this session)")
@@ -592,7 +631,7 @@ class Shell:
 
     # ---------- main loop ----------
     def run(self) -> int:
-        self.say(f"🐟 speckfish {__version__} · {norm(self.root)}")
+        self.banner()
         if not self.initialised() and not self.wizard():
             return 0 if self.initialised() else 1
         self.say("Type /help for the commands, or an empty line to run the suggested step. "
@@ -617,15 +656,23 @@ class Shell:
 
 
 def run_shell(root: str | Path = ".") -> int:
+    from . import screen as screen_mod
     ui = None
+    tip = ""
     if is_interactive():
         from . import tui
         if tui.available():
             ui = tui.PtkUI(Path(root).resolve())
         else:
-            print("tip: `pip install 'speckfish[tui]'` adds the / menu, autocompletion and arrow-key pickers.",
-                  file=sys.stderr)
-    shell = Shell(Path(root), ui=ui)
+            tip = "tip: `pip install 'speckfish[tui]'` adds the / menu, autocompletion and arrow-key pickers."
+    try:
+        configured = Config.load(Path(root)).fullscreen
+    except SystemExit:
+        configured = True                      # a broken config.json is reported by the first command
+    screen = AltScreen()
+    use_screen = is_interactive() and screen_mod.wanted(configured) and screen.possible
+    shell = Shell(Path(root), ui=ui, screen=screen if use_screen else None, tip=tip)
     if ui is not None:
         ui.bind(shell)
-    return shell.run()
+    with screen if use_screen else contextlib.nullcontext():
+        return shell.run()

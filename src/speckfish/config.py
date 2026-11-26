@@ -76,6 +76,7 @@ class Config:
     permissions: str = "scoped"   # scoped: read-only steps get no shell | open: every step gets every tool
     unsafe: bool = False          # allow an agent that runs with no sandbox (codex)
     keep_runs: int = 50           # old run folders deleted after each command (0 = never)
+    fullscreen: bool = True       # the console takes the whole terminal (alternate screen)
     env_allowlist: str = ""       # comma list (NAME or PREFIX_*): the only variables the agent inherits
     egm_root_from_env: bool = field(default=False, repr=False)      # runtime only, never saved
     timeouts: dict = field(default_factory=lambda: dict(DEFAULTS["timeouts"]))
@@ -106,7 +107,7 @@ class Config:
             if int(data.get("schema") or 1) < cls.SCHEMA:
                 data.pop("timeouts", None)
             for k in ("harness", "egm_root", "specify", "model", "profile", "language", "fallback",
-                  "permissions", "unsafe", "env_allowlist"):
+                  "permissions", "unsafe", "env_allowlist", "fullscreen"):
                 if k in data:
                     setattr(cfg, k, data[k])
             if isinstance(data.get("keep_runs"), int) and data["keep_runs"] >= 0:

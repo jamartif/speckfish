@@ -5,6 +5,14 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+Ctrl+C while an agent runs (reported with Codex on `implement`):
+
+- **It now says what it is doing and whether it worked.** Ctrl+C prints `Stopping the agent…`, kills the whole process tree and *checks* that it is gone. If it is not, it prints `WARNING: the agent (pid N) is still running` with the exact command to stop it by hand (`taskkill /F /T /PID N`); before, a kill that failed was silent and the agent kept writing code with its sandbox off. A second Ctrl+C forces the kill.
+- **Windows: one job object per agent** (kill-on-close). A single call ends the whole tree — `node`, the native binary and every shell it started — without depending on `taskkill`, which App Control can block; the OS also does it if speckfish dies. The chain is job → `taskkill /T` → `kill`, and each step is verified.
+- **Windows: the console keeps delivering Ctrl+C.** Some agents switch the console input to raw mode, after which Ctrl+C is just a key and never reaches speckfish. While a step runs speckfish puts `ENABLE_PROCESSED_INPUT` back each second and restores the console to how it found it afterwards.
+- Anything an agent leaves running after its step finished is stopped with its job (Windows).
+- Verified on Linux with a real SIGINT (an agent plus a child that outlives it); the Windows paths are covered with a simulated `kernel32` only, since there is no Windows machine in the test setup.
+
 - `/harness` and `/model` in the console are pickers when given no argument. `/harness` lists the agent CLIs that are installed (codex is marked "no sandbox", and choosing it asks for consent); `/model` lists what the chosen CLI lets speckfish discover: the aliases `claude --help` documents (`fable`, `opus`, `sonnet`), the `choices` Copilot prints in its own `--help`, and the model set in `~/.codex/config.toml`. None of the three CLIs has a command that lists its models, so nothing is invented: pick `default` or type any name the CLI accepts. Both take `--save` to keep the choice in `.speckfish/config.json` (saving codex also saves that you accepted it); without it the choice lasts for the session. The header shows the model when one is set.
 
 Cleaner console output:
