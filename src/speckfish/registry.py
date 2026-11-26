@@ -8,9 +8,13 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 from .config import find_report, norm, parse_consolidated
 from .workspace import _git_dirty, task_progress
+
+if TYPE_CHECKING:
+    from .runner import StepResult
 
 
 @dataclass
@@ -22,14 +26,14 @@ class Ctx:
     git_before: dict | None = None
 
 
-Validator = Callable[["object", Ctx], None]      # (StepResult, Ctx) -> None, mutates the result
+Validator = Callable[["StepResult", Ctx], None]      # mutates the result
 
 
-def _md_reports(res, ctx: Ctx) -> None:
+def _md_reports(res: StepResult, ctx: Ctx) -> None:
     res.reports = [norm(p) for p in sorted(ctx.artifact_dir.glob("*.md"))]
 
 
-def validate_review(res, ctx: Ctx) -> None:
+def validate_review(res: StepResult, ctx: Ctx) -> None:
     report = find_report(ctx.artifact_dir, "consolidated_review_report.md")
     if report is None:
         report = find_report(ctx.artifact_dir)
@@ -51,7 +55,7 @@ def validate_review(res, ctx: Ctx) -> None:
         res.ok = False
 
 
-def validate_specify(res, ctx: Ctx) -> None:
+def validate_specify(res: StepResult, ctx: Ctx) -> None:
     # a run that writes no spec.md is a failure, not a success with a nice essay
     root = Path(ctx.root) if ctx.root else None
     if res.ok and root is not None and not list((root / "specs").glob("*/spec.md")):
@@ -60,7 +64,7 @@ def validate_specify(res, ctx: Ctx) -> None:
                      "(read-only sandbox, or it only printed the spec)")
 
 
-def validate_clarify(res, ctx: Ctx) -> None:
+def validate_clarify(res: StepResult, ctx: Ctx) -> None:
     # headless clarify cannot answer: it leaves the questions (and the defaults it assumed)
     _md_reports(res, ctx)
     questions = ctx.artifact_dir / "questions.md"
@@ -77,7 +81,7 @@ def validate_clarify(res, ctx: Ctx) -> None:
 
 
 def make_validate_explore(kind: str) -> Validator:
-    def validate(res, ctx: Ctx) -> None:
+    def validate(res: StepResult, ctx: Ctx) -> None:
         from .prompts import EXPLORE
         _md_reports(res, ctx)
         expected = ctx.artifact_dir / EXPLORE[kind]["writes"]
@@ -88,14 +92,14 @@ def make_validate_explore(kind: str) -> Validator:
     return validate
 
 
-def validate_drift(res, ctx: Ctx) -> None:
+def validate_drift(res: StepResult, ctx: Ctx) -> None:
     _md_reports(res, ctx)
     if not res.reports:
         res.error = res.error or "no drift report was written"
         res.ok = False
 
 
-def validate_implement(res, ctx: Ctx) -> None:
+def validate_implement(res: StepResult, ctx: Ctx) -> None:
     root = ctx.root
     # "preparation finished" is not an implementation: this step must change the repository
     if root is not None and res.exit_code == 0 and not _git_dirty(root, ctx.git_before):
@@ -126,11 +130,14 @@ class StepSpec:
     validate: Validator | None = None
     reports: bool = False                  # the step's output is Markdown reports in its artifact dir
     destructive: bool = False
+    # what the agent may do (see harnesses): "readonly" reads the project and writes its report, with no
+    # shell; "project" is the full toolset (Spec Kit's skills run its scripts from Bash); "code" writes code
+    tools: str = "project"
     optional: bool = False                 # not part of the minimum chain
     notes: str = field(default="", compare=False)
 
 
-def _spec(kind: str, **kw) -> tuple[str, StepSpec]:
+def _spec(kind: str, **kw: Any) -> tuple[str, StepSpec]:
     return kind, StepSpec(kind=kind, **kw)
 
 
@@ -138,20 +145,22 @@ STEPS: dict[str, StepSpec] = dict([
     _spec("constitution", scope="project", produces=".specify/memory/constitution.md"),
     _spec("specify", scope="project", schema="specify", validate=validate_specify),
     # the inventory call of `specify --split`: it writes specs/features.json, never a spec
-    _spec("split", scope="project", timeout_key="specify"),
+    _spec("split", scope="project", timeout_key="specify", tools="readonly"),
     _spec("clarify", requires=("spec.md",), validate=validate_clarify, reports=True, optional=True),
     _spec("plan", requires=("spec.md",), produces="plan.md", schema="plan"),
     _spec("tasks", requires=("plan.md",), produces="tasks.md"),
     _spec("analyze", requires=("spec.md", "plan.md", "tasks.md"), optional=True),
     _spec("checklist", requires=("spec.md",), produces="checklists", optional=True),
     _spec("review", requires=("plan.md|spec.md",), schema="review", validate=validate_review,
-          reports=True),
+          reports=True, tools="readonly"),
     # not a Spec Kit skill: speckfish asks the agent to fix the design after a review
     _spec("revise", requires=("plan.md|spec.md",)),
     # ticks the tasks an implement chunk finished but did not mark: reads code, writes only tasks.md
     _spec("reconcile", requires=("tasks.md",)),
-    _spec("implement", requires=("tasks.md",), validate=validate_implement, destructive=True),
-    _spec("drift", requires=("spec.md",), schema="drift", validate=validate_drift, reports=True),
+    _spec("implement", requires=("tasks.md",), validate=validate_implement, destructive=True,
+          tools="code"),
+    _spec("drift", requires=("spec.md",), schema="drift", validate=validate_drift, reports=True,
+          tools="readonly"),
     _spec("converge", requires=("tasks.md",), optional=True),
     _spec("brainstorm", scope="project", validate=make_validate_explore("brainstorm"),
           reports=True, optional=True),
@@ -169,7 +178,7 @@ def timeout_key(kind: str) -> str:
     return (spec.timeout_key or spec.kind) if spec else kind
 
 
-def missing_output(kind: str, root: Path, res, feature_dir: Path | None) -> str:
+def missing_output(kind: str, root: Path, res: StepResult, feature_dir: Path | None) -> str:
     """After an agent was closed for inactivity: what this step should have written ('' = fine)."""
     spec = STEPS.get(kind)
     if spec is None:
@@ -182,3 +191,9 @@ def missing_output(kind: str, root: Path, res, feature_dir: Path | None) -> str:
         return ""
     # specify and implement already validated their own output in the validator
     return "" if res.ok else (res.error or "the step did not finish")
+
+
+def tools_profile(kind: str) -> str:
+    """`readonly` | `project` | `code` for a kind of step (unknown kinds get the full `project` set)."""
+    spec = STEPS.get(kind)
+    return spec.tools if spec else "project"

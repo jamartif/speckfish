@@ -17,11 +17,12 @@ import os
 import time
 from collections.abc import Iterator
 from pathlib import Path
+from typing import Any
 
-_CACHE: dict[str, tuple[tuple[int, int, int], object]] = {}
+_CACHE: dict[str, tuple[tuple[int, int, int], Any]] = {}
 
 
-def write_json_atomic(path: Path, data: object, **dumps) -> None:
+def write_json_atomic(path: Path, data: object, **dumps: Any) -> None:
     """Write `data` as JSON so that readers see the old file or the new one, never half of it."""
     path = Path(path)
     dumps.setdefault("indent", 2)
@@ -94,7 +95,7 @@ def file_lock(path: Path, timeout: float = 10.0, stale: float = 60.0) -> Iterato
                 lock.unlink()
 
 
-def read_json_cached(path: Path) -> object | None:
+def read_json_cached(path: Path) -> Any:
     """Parsed JSON of `path`, or None when it is missing or unreadable.
 
     The returned object is shared: treat it as read-only (copy it before changing it).

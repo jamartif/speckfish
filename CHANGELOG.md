@@ -5,6 +5,24 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+Permission model and CI hardening (see `AUDITORIA.md`, Sprints 3 and 4, and `SECURITY.md`).
+
+**Changes you will notice when upgrading**
+
+- **Codex needs your consent.** It runs with its sandbox and approvals off, so `get_harness` refuses it until you say so: `speckfish config unsafe=true`, `--unsafe` for one run, or `SPECKFISH_UNSAFE=1`. `harness=auto` never picks it on its own, and a `--fallback codex` without consent is ignored. The console asks when you choose it.
+- **A project's EGM must be trusted.** An EGM checkout inside the project (`vendor/egm`) or named by its `.speckfish/config.json` is only loaded if its content hash is in `~/.speckfish/trusted.json`. `speckfish init` records the pinned checkout it installs; for one you already have, run `speckfish trust` once (it shows what it is trusting). Any changed byte revokes it. `SPECKFISH_TRUST_ALL=1` turns the check off (a disposable CI container).
+- **`@file` only reads inside the project.** `--allow-outside-root` overrides it. The file's text now sits between a random `SPECKFISH-INPUT-…` fence and is labelled as data, so it cannot close the block and add instructions.
+- Old run folders are deleted automatically, keeping the newest 50 (`speckfish config keep_runs=N`, `0` = never). A run is never deleted while it holds the only review/analyze/drift of a feature or the newest report, so `status` and `report` keep working.
+
+**New**
+
+- Read-only steps (`review`, `drift`, the `--split` inventory) run Claude with `Bash` and `PowerShell` **denied** (`--disallowedTools`); they still write their report. Checked against the real CLI: a denied tool is not loaded at all. Spec Kit steps and `implement` keep their shell. `speckfish config permissions=open` restores the old behaviour for every step.
+- Claude receives the prompt on stdin instead of argv (not visible in `ps`, no command-line length limit). The log and `--dry-run` still show it.
+- `env_allowlist` / `SPECKFISH_ENV_ALLOWLIST=NAME,PREFIX_*`: the agent inherits only the basics, its provider's variables and what you list.
+- `logs/<step>.meta.json` per step: agent and version, argv without the prompt, prompt length and SHA-256, permission profile, EGM commit and trust, cost. No environment variables, no prompt text.
+- `/implement` in the console shows what the chosen agent will be allowed to do before asking.
+- `SECURITY.md` (threat model, what is and is not protected, how to run in CI), Dependabot for Actions and pip, release build provenance attestations, least-privilege workflow permissions, every Action pinned to a commit SHA, `ruff` with the bandit/perflint/ruff rule sets, `mypy` (strict for `store`, `trust`, `registry`, `workspace`) and a coverage floor of 80 % in CI.
+
 State integrity and speed (see `AUDITORIA.md`, Sprint 2):
 
 - `state.json`, `*.result.json`, `config.json`, `.specify/feature.json`, `specs/features.json` and the batch/`go`/`pipeline` summaries are written atomically (temp file + replace): an interrupted write leaves the previous file, not a truncated one. `state.json` is updated under a lock, so two steps finishing at once no longer lose each other's entry.

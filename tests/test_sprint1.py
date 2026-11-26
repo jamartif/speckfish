@@ -274,8 +274,8 @@ def test_a_non_numeric_idle_limit_does_not_break_a_step(tmp_path, monkeypatch):
 def test_a_binary_that_cannot_start_is_a_failed_step_with_a_log(tmp_path):
     run_dir = R.run_dir_for(_cfg(tmp_path), "rid")
     inv = NS(argv=[str(tmp_path / "no-such-agent"), "-p", "x"], env=None)
-    code, out, err, _dur, timed_out, idle = R.execute(NS(echo_stdout=False), inv, "x", tmp_path,
-                                                      run_dir, 30, stream=False, progress=False)
+    code, _out, err, _dur, timed_out, idle = R.execute(NS(echo_stdout=False), inv, "x", tmp_path,
+                                                       run_dir, 30, stream=False, progress=False)
     assert code == 127 and not timed_out and not idle
     assert "cannot launch" in err
     assert "cannot launch" in (run_dir / "logs" / "x.log").read_text()

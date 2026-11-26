@@ -291,6 +291,8 @@ def doctor_summary(info: dict) -> str:
         if e.get("commit"):
             note = "pinned" if e.get("pinned") else f"NOT the pinned {S.EGM_REF} ({S.EGM_COMMIT[:12]})"
             lines.append(f"         commit {e['commit'][:12]}  [{note}]")
+        if e.get("trusted") is False:
+            lines.append(f"         NOT TRUSTED: {e.get('trust_note')}")
     else:
         lines.append("egm:     not found — run `speckfish init` (or set egm_root in "
                      ".speckfish/config.json)")
@@ -332,7 +334,7 @@ def exit_for(res: dict) -> int:
 
 
 GLOBAL_FLAGS_VALUE = {"--root", "--harness", "--model", "--fallback"}
-GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run"}
+GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run", "--unsafe", "--allow-outside-root"}
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -373,6 +375,10 @@ def build_parser() -> argparse.ArgumentParser:
                         help="if a step stops for quota/auth, retry it once with this harness")
     common.add_argument("--model", default=None,
                         help="model passed to the agent CLI (default: the CLI's own choice)")
+    common.add_argument("--unsafe", action="store_true",
+                        help="accept an agent that runs with no sandbox (codex) for this run")
+    common.add_argument("--allow-outside-root", action="store_true",
+                        help="let @file read files outside the project folder")
     common.add_argument("--json", action="store_true", help="JSON output on stdout")
     common.add_argument("--stream", action="store_true", default=True,
                         help="forward agent output to stderr (default)")
@@ -399,6 +405,10 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
 
     sub.add_parser("shell", help="interactive console (also: run `speckfish` alone in a terminal)")
+
+    sp = sub.add_parser("trust", help="trust the EGM checkout of this project (it runs with the agent's permissions)")
+    sp.add_argument("--path", default=None, help="the EGM folder (default: the one this project uses)")
+    sp.add_argument("--show", action="store_true", help="only say whether it is trusted")
 
     sp = sub.add_parser("specify", help="create/update spec.md")
     sp.add_argument("description", nargs="?", default="",
@@ -533,7 +543,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
-                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language, fallback)")
+                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language, fallback, permissions, unsafe, env_allowlist, keep_runs)")
 
     sub.add_parser("features", help="list features under specs/ and which one is active")
 
@@ -895,7 +905,8 @@ def cmd_config(run: Run) -> int:
             return EXIT_ENV
         key, value = args.set.split("=", 1)
         key = key.strip()
-        allowed = {"harness", "model", "profile", "egm_root", "specify", "language", "fallback"}
+        allowed = {"harness", "model", "profile", "egm_root", "specify", "language", "fallback",
+                   "permissions", "unsafe", "env_allowlist", "keep_runs"}
         if key.startswith("timeout."):
             step = key.split(".", 1)[1]
             if not value.strip().isdigit():
@@ -911,7 +922,27 @@ def cmd_config(run: Run) -> int:
             msg = f"unknown key '{key}' (allowed: {', '.join(sorted(allowed))})"
             run.emit({"error": msg}, f"ERROR: {msg}")
             return EXIT_ENV
-        setattr(cfg, key, value.strip())
+        value = value.strip()
+        if key == "permissions" and value not in ("scoped", "open"):
+            run.emit({"error": "permissions must be scoped or open"}, "ERROR: permissions must be scoped or open")
+            return EXIT_ENV
+        if key == "keep_runs":
+            if not value.isdigit():
+                run.emit({"error": "keep_runs must be a number"}, "ERROR: keep_runs must be a number (0 = never delete)")
+                return EXIT_ENV
+            cfg.keep_runs = int(value)
+            path = cfg.save()
+            run.emit({"saved": norm(path), key: cfg.keep_runs}, f"saved {key}={cfg.keep_runs} → {norm(path)}")
+            return EXIT_OK
+        if key == "unsafe":
+            if value.lower() not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
+                run.emit({"error": "unsafe must be true or false"}, "ERROR: unsafe must be true or false")
+                return EXIT_ENV
+            setattr(cfg, key, value.lower() in ("true", "1", "yes", "on"))
+            path = cfg.save()
+            run.emit({"saved": norm(path), key: cfg.unsafe}, f"saved {key}={str(cfg.unsafe).lower()} → {norm(path)}")
+            return EXIT_OK
+        setattr(cfg, key, value)
         path = cfg.save()
         run.emit({"saved": norm(path), key: value.strip()},
                  f"saved {key}={value.strip()} → {norm(path)}")
@@ -1192,6 +1223,27 @@ def cmd_status(run: Run) -> int:
     return EXIT_OK
 
 
+def cmd_trust(run: Run) -> int:
+    from . import trust
+    cfg = run.cfg
+    egm = Path(run.args.path).resolve() if run.args.path else cfg.egm_path()
+    if egm is None or not (egm / "plugin.json").exists():
+        run.emit({"error": "no EGM found"}, "ERROR: no EGM checkout found (run `speckfish init`, or pass --path)")
+        return EXIT_ENV
+    ok, why = trust.status(cfg, egm)
+    info = {**trust.describe(egm), "trusted": ok, "commit": S.egm_commit(egm)}
+    if run.args.show or ok:
+        run.emit(info, f"egm {info['path']}\n  commit {info['commit'][:12] or '-'}  hash {info['hash'][:16]}…  "
+                       f"{info['files']} files\n  {'trusted' if ok else 'NOT trusted: ' + why}")
+        return EXIT_OK if ok else EXIT_ENV
+    trust.record(egm, info["commit"])
+    info["trusted"] = True
+    run.emit(info, f"trusted: {info['path']}\n  commit {info['commit'][:12] or '-'}  hash {info['hash'][:16]}…  "
+                   f"{info['files']} files — it will run with the agent's permissions. "
+                   f"If you did not read it, `speckfish trust` was not the right answer.")
+    return EXIT_OK
+
+
 def cmd_shell(run: Run) -> int:
     from .shell import run_shell
     return run_shell(run.cfg.root)
@@ -1199,7 +1251,7 @@ def cmd_shell(run: Run) -> int:
 
 # one handler per subcommand: adding a command is adding a row here and a parser above
 HANDLERS = {
-    "shell": cmd_shell, "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
+    "shell": cmd_shell, "trust": cmd_trust, "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
     "editors": cmd_editors, "init": cmd_init, "doctor": cmd_doctor, "specify": cmd_specify,
     "plan": cmd_plan, "review": cmd_review, "drift": cmd_drift, "pipeline": cmd_pipeline,
     "features": cmd_features, "config": cmd_config, "runs": cmd_runs, "report": cmd_report,
@@ -1207,6 +1259,13 @@ HANDLERS = {
     **{name: cmd_skill for name in SKILL_SPECS},
     "implement": cmd_implement,
 }
+
+
+def _prune_runs(cfg: Config) -> None:
+    """Keep the newest `keep_runs` run folders (plus the ones `status` and `report` still depend on)."""
+    if cfg.keep_runs and cfg.keep_runs > 0 and cfg.runs_dir.exists():
+        with contextlib.suppress(OSError):
+            S.clean_runs(cfg, cfg.keep_runs)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -1226,6 +1285,10 @@ def main(argv: list[str] | None = None) -> int:
         cfg.harness = args.harness
     if args.model:
         cfg.model = args.model
+    if getattr(args, "unsafe", False):
+        cfg.unsafe = True
+    from . import prompts as _prompts
+    _prompts.ALLOW_OUTSIDE_ROOT = bool(getattr(args, "allow_outside_root", False))
     if not getattr(args, "fallback", None) and cfg.fallback:
         args.fallback = cfg.fallback           # saved with `config fallback=copilot` or by the console wizard
     from . import progress as _progress
@@ -1234,7 +1297,10 @@ def main(argv: list[str] | None = None) -> int:
     if handler is None:
         return EXIT_ERROR
     try:
-        return handler(Run(cfg, args))
+        code = handler(Run(cfg, args))
+        if args.cmd not in ("runs", "shell"):
+            _prune_runs(cfg)
+        return code
     except KeyboardInterrupt:
         print("\nInterrupted: the agent was stopped. Nothing written so far is lost; run the same "
               "command to continue.", file=sys.stderr)

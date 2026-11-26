@@ -860,6 +860,22 @@ $ speckfish review --interactive
 6. **EGM is never installed globally.** `--plugin-dir` points at `vendor/egm`, so user settings are
    untouched and the version is pinned in your repo.
 
+## Security
+
+speckfish runs agent CLIs that can read your repository and run commands as you, so it limits what they get
+and what reaches them. The short version (full model and CI advice in [SECURITY.md](SECURITY.md)):
+
+- **Read-only steps have no shell.** `review`, `drift` and the `--split` inventory run Claude with `Bash` and
+  `PowerShell` denied. Spec Kit steps and `implement` keep a shell: they need it. `config permissions=open`
+  turns the scoping off.
+- **Codex is opt-in** (`config unsafe=true`): it runs with no sandbox.
+- **EGM is pinned and trusted by hash.** `init` installs a verified version and trusts it; an EGM that comes
+  with a repository is not loaded until you run `speckfish trust`.
+- **`@file` stays inside the project** unless you pass `--allow-outside-root`.
+- **Secrets**: `config env_allowlist=NAME,PREFIX_*` makes the agent inherit only what you list.
+- **Logs stay out of git**: `init` adds `.speckfish/` to `.gitignore`.
+- For CI or code you do not trust, use a disposable container with no credentials but the agent's own key.
+
 ## Observed cost (~75-line document)
 
 | Step | Claude Code | Copilot CLI |

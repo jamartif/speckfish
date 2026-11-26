@@ -10,7 +10,7 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6", "prompt_toolkit>=3"]
+dev = ["pytest>=8", "pytest-cov>=5", "ruff>=0.6", "mypy>=1.10", "pyyaml>=6", "prompt_toolkit>=3"]
 tui = ["prompt_toolkit>=3"]
 
 [project.scripts]
@@ -23,15 +23,56 @@ where = ["src"]
 testpaths = ["tests"]
 pythonpath = ["src"]
 
+[tool.coverage.run]
+source = ["speckfish"]
+branch = false
+
+[tool.coverage.report]
+show_missing = false
+exclude_lines = ["pragma: no cover", "if __name__ == .__main__.:"]
+
 [tool.ruff]
 line-length = 110
 target-version = "py310"
 extend-exclude = ["build", "dist"]
 
 [tool.ruff.lint]
-select = ["E", "F", "W", "I", "B", "UP", "SIM"]
-# E501: long lines are fine in prompt templates; S/SIM114 noise in small CLI branches
-ignore = ["E501"]
+select = ["E", "F", "W", "I", "B", "UP", "SIM", "S", "PERF", "RUF"]
+ignore = [
+    "E501",     # long lines are fine in prompt templates
+    "S603",     # every agent/git/specify call is a subprocess with an argv *list* and no shell: that is the product
+    "S607",     # ... found through PATH on purpose (claude, copilot, codex, git, uv); `find_git` validates git
+    "RUF001", "RUF002", "RUF003",   # the console and the status line use real glyphs (› ✔ ❯ …) on purpose
+    "PERF203",  # try/except inside a loop is how a bad file is skipped without stopping the rest
+    "PERF401",  # building the human summaries line by line reads better than a comprehension
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S101", "S105", "S108", "S110", "S112"]     # asserts, fake secrets and /tmp paths are what tests are made of
 
 [tool.ruff.lint.isort]
 known-first-party = ["speckfish"]
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
+warn_unused_ignores = true
+files = ["src/speckfish"]
+
+# Gradual: the small modules are checked strictly and must stay clean; the big ones (cli, steps, flow,
+# runner, harnesses, shell, progress, editors, config) still have untyped helpers and are checked only
+# where they are annotated. Move a module into this list when its errors are fixed.
+[[tool.mypy.overrides]]
+module = ["speckfish.store", "speckfish.trust", "speckfish.registry", "speckfish.workspace"]
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+warn_return_any = true
+no_implicit_optional = true
+
+# Not yet typed: every error here is pre-existing (untyped helpers, argparse internals). Remove a module from
+# this list once `mypy` is clean for it; the strict list above only grows.
+[[tool.mypy.overrides]]
+module = ["speckfish.cli", "speckfish.steps", "speckfish.flow", "speckfish.runner", "speckfish.harnesses",
+          "speckfish.shell", "speckfish.tui", "speckfish.progress", "speckfish.editors", "speckfish.config",
+          "speckfish.prompts"]
+ignore_errors = true

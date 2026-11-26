@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
 import re
@@ -13,7 +14,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import Config, env_number, is_windows, norm
+from .config import Config, agent_env, env_number, is_windows, norm
 from .harnesses import Harness, StepInvocation
 from .registry import missing_output
 from .store import file_lock, write_json_atomic
@@ -98,7 +99,8 @@ def _kill_tree(proc: subprocess.Popen) -> None:
 def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
             run_dir: Path, timeout: int, stream: bool = True,
             progress: bool = True,
-            label: str | None = None) -> tuple[int, str, str, float, bool, bool]:
+            label: str | None = None,
+            env_allowlist: str = "") -> tuple[int, str, str, float, bool, bool]:
     """Launch the subprocess, write the log and honour the timeout by killing the tree.
 
     stdout is read on a thread so the timeout does not depend on the child
@@ -115,9 +117,11 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     meter = Progress(step, enabled=progress, plain_only=echo_lines, root=str(cwd))
     started = time.time()
     meter.start()
+    has_stdin = getattr(inv, "stdin", None) is not None
     popen_kwargs = dict(cwd=str(cwd), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-                        stdin=subprocess.DEVNULL, text=True, encoding="utf-8",
-                        errors="replace", env={**os.environ, **(inv.env or {})})
+                        stdin=subprocess.PIPE if has_stdin else subprocess.DEVNULL, text=True,
+                        encoding="utf-8", errors="replace",
+                        env=agent_env(inv.env, env_allowlist))
     if is_windows():
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
@@ -135,6 +139,18 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     err_chunks: list[str] = []
     log = log_path.open("w", encoding="utf-8")
     log.write("$ " + " ".join(inv.argv) + "\n\n")
+    if has_stdin:
+        log.write("--- prompt (sent on stdin) ---\n" + inv.stdin + "\n--- end of prompt ---\n\n")
+    if has_stdin:
+        def feed() -> None:
+            # a thread: a prompt bigger than the pipe buffer must not block us while the agent writes output
+            try:
+                proc.stdin.write(inv.stdin)
+                proc.stdin.close()
+            except (OSError, ValueError):
+                pass                             # the agent exited before reading it all
+
+        threading.Thread(target=feed, daemon=True).start()
 
     activity = {"t": time.time(), "final": False}
 
@@ -151,7 +167,7 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
                 if echo and stream and not is_noise_line(line):
                     sys.stderr.write(line if line.endswith("\n") else line + "\n")
                     sys.stderr.flush()
-        except Exception:
+        except Exception:  # noqa: S110  a reader thread must never raise: the step result is the product
             pass
 
     t_out = threading.Thread(target=pump, args=(proc.stdout, out_chunks, echo_lines), daemon=True)
@@ -403,6 +419,51 @@ def _base_step(cfg: Config, step: str) -> str:
     return step
 
 
+_VERSIONS: dict[str, str] = {}
+
+
+def _agent_version(harness: Harness) -> str:
+    """`claude --version` and friends, asked once per process (it costs a subprocess)."""
+    name = getattr(harness, "name", "")
+    if name not in _VERSIONS:
+        try:
+            _VERSIONS[name] = str(harness.doctor().get("version") or "")
+        except Exception:                         # a fake or broken adapter: the metadata is a courtesy
+            _VERSIONS[name] = ""
+    return _VERSIONS[name]
+
+
+def write_meta(cfg: Config, harness: Harness, inv: StepInvocation, prompt: str, res: StepResult,
+               kind: str, label: str, started_at: str, egm_root: Path | None, run_dir: Path) -> None:
+    """`logs/<label>.meta.json`: what is needed to understand or repeat this step, with no secrets in it.
+
+    The prompt itself stays in the log; here only its length and hash. Long arguments (the prompt, a JSON
+    schema) are replaced by their size, and environment variables are never listed, only whether the
+    allowlist was on.
+    """
+    from . import __version__, trust
+    argv = [a if len(a) <= 300 else f"<{len(a)} chars>" for a in inv.argv]
+    egm: dict | None = None
+    if egm_root:
+        from .steps import egm_commit
+        egm = {"path": norm(egm_root), "commit": egm_commit(Path(egm_root)),
+               "trusted": trust.status(cfg, Path(egm_root))[0]}
+    describe = getattr(harness, "permissions", None)
+    meta = {
+        "label": label, "kind": kind, "speckfish": __version__, "started_at": started_at,
+        "ok": res.ok, "exit_code": res.exit_code, "duration_s": res.duration_s,
+        "cost": res.cost, "cost_unit": res.cost_unit, "model": res.model,
+        "harness": harness.name, "harness_version": _agent_version(harness),
+        "argv": argv, "prompt_via": "stdin" if getattr(inv, "stdin", None) is not None else "argv",
+        "prompt_chars": len(prompt), "prompt_sha256": hashlib.sha256(prompt.encode("utf-8")).hexdigest(),
+        "permissions": describe(kind) if callable(describe) else "",
+        "permissions_setting": cfg.permissions,
+        "env_filtered": bool(cfg.env_allowlist or os.environ.get("SPECKFISH_ENV_ALLOWLIST")),
+        "egm": egm,
+    }
+    write_json_atomic(run_dir / "logs" / f"{label}.meta.json", meta)
+
+
 def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
              run_id: str, egm_root: Path | None, timeout: int | None = None,
              budget: float | None = None, schema: dict | None = None,
@@ -415,8 +476,10 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     The label (`artifact_name`, else `step`) is *which run of it* (`review-001-foo`): folders, logs
     and state follow that. Callers that do not pass `kind` get it derived from the label.
     """
+    from . import trust
     from .registry import timeout_key
 
+    trust.require(cfg, egm_root)             # before anything is created or launched
     run_dir = run_dir_for(cfg, run_id)
     # a batch runs the same step once per feature: each one needs its own folder and log or they overwrite
     label = artifact_name or step
@@ -428,15 +491,17 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     inv = harness.build(kind=kind, prompt=prompt, cwd=cwd, artifact_dir=artifact_dir,
                         egm_root=egm_root, budget=budget, timeout=timeout, schema=schema)
     if dry_run:
+        stdin = getattr(inv, "stdin", None)
+        shown = " ".join(inv.argv) + (f"\n--- prompt (stdin) ---\n{stdin}" if stdin else "")
         return StepResult(step=step, kind=kind, ok=True, exit_code=0, duration_s=0.0,
-                          log=" ".join(inv.argv), artifact_dir=norm(artifact_dir),
-                          error="dry-run")
+                          log=shown, artifact_dir=norm(artifact_dir), error="dry-run")
     started_at = datetime.now().isoformat(timespec="seconds")
     is_implement = kind == "implement"
     before_tasks = task_progress(Path(cwd)) if is_implement else None
     before_git = git_snapshot(Path(cwd)) if is_implement else None
     code, out, err, duration, timed_out, idle_closed = execute(
-        harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label)
+        harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label,
+        env_allowlist=cfg.env_allowlist)
     idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     if idle_closed and not timed_out:
         # the agent was stopped by us after going quiet, so the exit code is ours, not its verdict:
@@ -477,6 +542,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
                          f"kept what it had already written")
     # keyed by label: a batch runs `plan` once per feature and each needs its own entry
     record_state(cfg, run_dir, run_id, res, label, harness, started_at)
+    with contextlib.suppress(Exception):          # metadata must never fail a step that already ran
+        write_meta(cfg, harness, inv, prompt, res, kind, label, started_at, egm_root, run_dir)
     return res
 
 
@@ -488,6 +555,8 @@ def run_interactive(cfg: Config, harness: Harness, step: str, prompt: str, cwd: 
     stdio is inherited (no capture, no timeout). The prompt tells the agent it is an
     interactive session and that it must ask every open question.
     """
+    from . import trust
+    trust.require(cfg, egm_root)
     run_dir = run_dir_for(cfg, run_id)
     artifact_dir = run_dir / "artifacts" / step
     artifact_dir.mkdir(parents=True, exist_ok=True)

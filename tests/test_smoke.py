@@ -498,7 +498,7 @@ def test_read_input_references_big_files(tmp_path):
     from speckfish.prompts import INLINE_LIMIT, read_input
     f = tmp_path / "grande.md"
     f.write_text("x" * (INLINE_LIMIT + 100), encoding="utf-8")
-    text, src = read_input("@grande.md", tmp_path)
+    text, _src = read_input("@grande.md", tmp_path)
     assert "read that file" in text and "x" * 50 not in text
 
 
@@ -1712,7 +1712,7 @@ def test_every_feature_step_exposes_the_same_flags():
         # not feature-oriented: setup, inspection, exploration over a material, or split by task
         if cmd in ("init", "doctor", "config", "features", "runs", "show", "report",
                    "editors", "pipeline", "specify", "constitution", "brainstorm", "draft",
-                   "go", "next", "revise", "status", "shell"):
+                   "go", "next", "revise", "status", "shell", "trust"):
             continue
         opts = {a.dest for a in subs._actions}
         assert {"all_features", "only", "from_feature", "skip_existing"} <= opts, cmd

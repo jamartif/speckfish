@@ -1,6 +1,7 @@
 """What a step changed in the project: task checkboxes, git working tree, the current feature."""
 from __future__ import annotations
 
+import itertools
 import json
 import re
 from pathlib import Path
@@ -69,7 +70,7 @@ def _is_noise(path: str) -> bool:
         return False
     if parts[-1] in _NOISE_FILES or any(p in _NOISE_DIRS for p in parts[:-1]):
         return True
-    return any(p in _BUILD_DIRS and nxt in ("Debug", "Release") for p, nxt in zip(parts, parts[1:], strict=False))
+    return any(p in _BUILD_DIRS and nxt in ("Debug", "Release") for p, nxt in itertools.pairwise(parts))
 
 
 def _git_porcelain(root: Path) -> list[str] | None:

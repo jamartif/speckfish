@@ -59,7 +59,7 @@ def specify_argv(cfg: Config) -> list[str]:
         return ["specify"]
     exe = which("specify")
     if exe:
-        code, out, err = run_cmd([exe, "version"], timeout=120)
+        code, out, _err = run_cmd([exe, "version"], timeout=120)
         if code == 0 and ("Specify" in out or "Version" in out):
             return [exe]
     if which("uv"):
@@ -134,7 +134,7 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
         h = harness_for_integration(cfg, name)
         sk_integration, extra = h.spec_kit_integration()
         args = ["init", "--here", "--force", "--non-interactive",
-                "--integration", sk_integration] + extra
+                "--integration", sk_integration, *extra]
         if not which(name):
             # Spec Kit aborts when the agent CLI is missing; the skills are still useful
             args.append("--ignore-agent-tools")
@@ -221,6 +221,10 @@ def install_egm(cfg: Config, repo: str = EGM_REPO, ref: str | None = None) -> di
                 "detail": f"{wanted} is at {commit[:12]}, expected {EGM_COMMIT[:12]}: refusing to use it. "
                           f"Check upstream, then `speckfish init --egm-ref {wanted}` to accept it."}
     ok = ok and (dest / "plugin.json").exists()
+    if ok:
+        # the pin was verified (or the person chose this ref on purpose): that is the consent
+        from . import trust
+        trust.record(dest, commit)
     return {"egm": ("updated" if present else "cloned") if ok else "failed", "path": norm(dest),
             "ref": wanted, "commit": commit, "detail": detail}
 
@@ -276,7 +280,7 @@ def do_doctor(cfg: Config) -> dict:
         info["specify"] = {"error": str(e)}
         argv = None
     if argv:
-        code, o, e = run_cmd(argv + ["version"], timeout=180)
+        code, o, e = run_cmd([*argv, "version"], timeout=180)
         out = o or e
         info["specify"] = {"argv": argv, "ok": code == 0,
                            "version": parse_specify_version(out),
@@ -290,6 +294,8 @@ def do_doctor(cfg: Config) -> dict:
         info["egm"]["skills"] = sorted(p.name for p in (egm / "skills").iterdir() if p.is_dir())
         info["egm"]["commit"] = egm_commit(egm)
         info["egm"]["pinned"] = info["egm"]["commit"] == EGM_COMMIT
+        from . import trust
+        info["egm"]["trusted"], info["egm"]["trust_note"] = trust.status(cfg, egm)
         if info["harness"] and info["harness"].get("binary") == which("copilot"):
             code, o, e = run_cmd([which("copilot"), "--plugin-dir", norm(egm),
                                   "plugin", "list"], timeout=120,
@@ -970,14 +976,35 @@ def run_summary(cfg: Config, run_id: str) -> dict:
     return state
 
 
+def protected_runs(cfg: Config) -> set[str]:
+    """Runs that hold the only copy of something a later command reads.
+
+    `status` / `next` take a feature's last review, analyze and drift from the run that recorded them, and
+    `report` prints the newest run's report: deleting that run would make a reviewed feature look
+    "never reviewed" and cost a second review. Age alone must not decide.
+    """
+    from . import flow
+    keep = {rec["run"] for rec in flow.run_index(cfg).records.values() if rec.get("run")}
+    for run in sorted((p for p in cfg.runs_dir.iterdir() if p.is_dir()), reverse=True) \
+            if cfg.runs_dir.exists() else []:
+        if any((run / "artifacts").glob("*/*.md")):
+            keep.add(run.name)                    # the newest run with a report
+            break
+    return keep
+
+
 def clean_runs(cfg: Config, keep: int = 10) -> dict:
-    """Delete old run directories, keeping the newest `keep`."""
+    """Delete old run directories, keeping the newest `keep` and any run something still depends on."""
     import shutil as _shutil
     runs = sorted([p for p in cfg.runs_dir.iterdir() if p.is_dir()]) if cfg.runs_dir.exists() else []
     keep = max(0, int(keep))             # `runs[:-(-1)]` would delete one run and mean nothing
-    doomed = runs[:-keep] if keep > 0 else runs
+    candidates = runs[:-keep] if keep > 0 else runs
+    protected = protected_runs(cfg) if candidates else set()
+    doomed = [p for p in candidates if p.name not in protected]
     removed = []
     for p in doomed:
         _shutil.rmtree(p, ignore_errors=True)
         removed.append(p.name)
-    return {"kept": [p.name for p in runs[-keep:]] if keep > 0 else [], "removed": removed}
+    kept = [p.name for p in runs if p.name not in removed]
+    return {"kept": kept, "removed": removed,
+            "protected": [p.name for p in candidates if p.name in protected]}

@@ -90,7 +90,7 @@ class PtkUI:
                 if may_be_empty:
                     buf.validate_and_handle()
                 return                                  # nothing typed and text is required: ignore
-            if text.endswith("\n") or "\n" not in text and text.startswith("@"):
+            if text.endswith("\n") or ("\n" not in text and text.startswith("@")):
                 buf.validate_and_handle()               # empty line after content, or a lone @file
             else:
                 buf.insert_text("\n")

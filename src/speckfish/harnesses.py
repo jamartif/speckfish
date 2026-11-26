@@ -13,8 +13,10 @@ import json
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
+from typing import ClassVar
 
 from .config import Config, agent_prefix, norm, run_cmd
+from .registry import tools_profile
 
 
 @dataclass
@@ -74,6 +76,11 @@ class Harness:
                           artifact_dir: Path, egm_root: Path | None) -> StepInvocation:
         raise NotImplementedError
 
+    # ---- what the agent is allowed to do ----
+    def permissions(self, kind: str) -> str:
+        """One line a person can read before approving a step: what this agent gets for this kind of step."""
+        return "the agent's default permissions"
+
     # ---- output parsing ----
     def parse_output(self, stdout: str, stderr: str, exit_code: int) -> dict:
         return {"raw_tail": (stdout or stderr or "")[-1500:]}
@@ -97,12 +104,30 @@ class ClaudeHarness(Harness):
     def spec_kit_integration(self):
         return "claude", []
 
+    ALL_TOOLS: ClassVar[list[str]] = ["Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep", "Agent"]
+    # tools removed (not merely "not pre-approved"): checked against the real CLI, a denied Bash is not
+    # even loaded for the agent, while an allow-list only auto-approves and leaves other rules in force
+    DENIED: ClassVar[dict[str, list[str]]] = {"readonly": ["Bash", "PowerShell"]}
+
+    def tool_rules(self, kind: str) -> tuple[list[str], list[str]]:
+        """(allowed, denied) tool names for a kind of step, per the `permissions` setting."""
+        profile = "project" if self.cfg.permissions == "open" else tools_profile(kind)
+        denied = list(self.DENIED.get(profile, []))
+        return [t for t in self.ALL_TOOLS if t not in denied], denied
+
+    def permissions(self, kind: str) -> str:
+        allowed, denied = self.tool_rules(kind)
+        text = "tools: " + ", ".join(allowed)
+        return text + (f" (no {', '.join(denied)})" if denied else " (includes a shell: it can run any command)")
+
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
-        argv = (self.prefix() or ["claude"]) + ["-p", prompt,
-                "--permission-mode", "acceptEdits",
-                "--allowedTools", "Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep",
-                "Agent",
-                "--output-format", "stream-json", "--verbose"]
+        allowed, denied = self.tool_rules(kind)
+        # the prompt goes on stdin, not in argv: argv is visible to every user in `ps` and Windows caps it
+        argv = (self.prefix() or ["claude"]) + ["-p",
+                "--permission-mode", "acceptEdits", "--allowedTools", *allowed]
+        if denied:
+            argv += ["--disallowedTools", *denied]
+        argv += ["--output-format", "stream-json", "--verbose"]
         if egm_root:
             argv += ["--plugin-dir", norm(egm_root)]
         if schema:
@@ -113,7 +138,7 @@ class ClaudeHarness(Harness):
             argv += ["--max-budget-usd", str(amount)]
         if self.cfg.model:
             argv += ["--model", self.cfg.model]
-        return StepInvocation(argv=argv, schema_supported=bool(schema))
+        return StepInvocation(argv=argv, stdin=prompt, schema_supported=bool(schema))
 
     def build_interactive(self, kind, prompt, cwd, artifact_dir, egm_root):
         argv = (self.prefix() or ["claude"]) + [
@@ -177,6 +202,9 @@ class CopilotHarness(Harness):
     def spec_kit_integration(self):
         return "copilot", []
 
+    def permissions(self, kind: str) -> str:
+        return "all tools and all paths (--allow-all-tools --allow-all-paths); this CLI has no per-step scoping here"
+
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
         argv = (self.prefix() or ["copilot"]) + ["-p", prompt, "--output-format", "json",
                 "--allow-all-tools", "--allow-all-paths"]
@@ -217,8 +245,8 @@ class CopilotHarness(Harness):
                 continue
             try:
                 ev = json.loads(line)
-            except Exception:
-                continue
+            except ValueError:
+                continue                 # not an event: copilot interleaves plain log lines
             t = ev.get("type")
             data = ev.get("data") or {}
             if t == "assistant.message_delta":
@@ -235,7 +263,7 @@ class CopilotHarness(Harness):
                 by_msg[mid] = [data["content"]]
             elif t == "subagent.started":
                 subagents += 1
-            elif t == "model.call_final_result" and isinstance(data.get("model"), str) or t == "session.model_change" and isinstance(data.get("model"), str):
+            elif (t == "model.call_final_result" and isinstance(data.get("model"), str)) or (t == "session.model_change" and isinstance(data.get("model"), str)):
                 models[data["model"]] = models.get(data["model"], 0) + 1
             elif t == "session.usage_checkpoint":
                 nano = data.get("totalNanoAiu")
@@ -282,6 +310,7 @@ CODEX_FILE_HINT = (
 
 
 class CodexHarness(Harness):
+    unsafe = True              # runs with the sandbox and the approvals off: needs explicit consent
     name = "codex"
     echo_stdout = False        # `codex exec --json` prints NDJSON: translated into activity lines
     supports_schema = False
@@ -300,6 +329,9 @@ class CodexHarness(Harness):
 
     def spec_kit_integration(self):
         return "codex", ["--integration-options=--skills"]
+
+    def permissions(self, kind: str) -> str:
+        return "NO sandbox and NO approvals: it can read and write the whole filesystem and run anything"
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
         # Measured on codex-cli 0.169: `--sandbox workspace-write` and
@@ -380,6 +412,17 @@ def detect_order() -> list[str]:
     return order
 
 
+UNSAFE_HELP = ("`{name}` runs with its sandbox and approvals switched off, so it can read and write anything "
+               "on this machine. Say you accept that: `speckfish config unsafe=true`, or `--unsafe` for one run "
+               "(or SPECKFISH_UNSAFE=1 in CI, inside a disposable container).")
+
+
+def _checked(cfg: Config, h: Harness) -> Harness:
+    if getattr(h, "unsafe", False) and not cfg.unsafe:
+        raise SystemExit(UNSAFE_HELP.format(name=h.name))
+    return h
+
+
 def get_harness(cfg: Config, name: str | None = None) -> Harness:
     want = name or cfg.harness or "auto"
     if want != "auto":
@@ -388,7 +431,7 @@ def get_harness(cfg: Config, name: str | None = None) -> Harness:
         h = REGISTRY[want](cfg)
         if not h.binary():
             raise SystemExit(f"harness '{want}' is not installed (binary not found on PATH)")
-        return h
+        return _checked(cfg, h)
     for cand in detect_order():
-        return REGISTRY[cand](cfg)
+        return _checked(cfg, REGISTRY[cand](cfg))
     raise SystemExit("no agent CLI is installed (claude, copilot or codex)")

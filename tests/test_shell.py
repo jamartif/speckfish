@@ -136,7 +136,7 @@ def test_codex_asks_before_it_is_selected(tmp_path):
     c = Console(tmp_path, ["/harness codex", "n", "/status", "/exit"])
     c.shell.run()
     assert "--harness" not in c.calls[0]
-    assert "without sandbox" in c.screen
+    assert "NO sandbox" in c.screen
 
 
 def test_unknown_commands_and_bad_harness_are_reported(tmp_path):

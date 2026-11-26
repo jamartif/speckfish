@@ -131,6 +131,7 @@ class Shell:
         self._main = main
         self.harness: str | None = None      # session overrides; the saved config is not touched
         self.model: str | None = None
+        self.unsafe = False                  # the person accepted an agent with no sandbox this session
         self.last_code = 0
 
     # ---------- io ----------
@@ -258,6 +259,14 @@ class Shell:
             return None, why + ": /specify <idea>", feat
         return [kind], why, feat
 
+    def agent_name(self) -> str:
+        """The agent CLI a step would use right now (the session choice, else the saved one, else auto)."""
+        name = self.harness or self.cfg().harness
+        if name == "auto":
+            order = detect_order()
+            return order[0] if order else "the agent"
+        return name
+
     def header_text(self) -> str:
         cfg = self.cfg()
         agent = self.harness or cfg.harness
@@ -299,6 +308,12 @@ class Shell:
             tag = "verified" if info.get("verified") else "not verified"
             options.append((name, f"{name:<8} {info.get('version') or '?':<24} {tag}"))
         choice = self.pick("Which agent CLI do you want to use?", options) or agents[0]
+        if getattr(REGISTRY[choice], "unsafe", False):
+            self.say(f"{choice}: {REGISTRY[choice](cfg).permissions('implement')}.")
+            if not self.confirm(f"Use {choice} anyway?", default=False):
+                self.say("Run the wizard again and choose another agent.")
+                return False
+            cfg.unsafe = True
         fallback = ""
         if len(agents) > 1:
             others = [(n, label) for n, label in options if n != choice] + [("", "none")]
@@ -332,6 +347,8 @@ class Shell:
             argv += ["--harness", self.harness]
         if self.model:
             argv += ["--model", self.model]
+        if self.unsafe:
+            argv += ["--unsafe"]
         return argv
 
     def run_cli(self, argv: list[str]) -> int:
@@ -422,9 +439,10 @@ class Shell:
             self.say(f"unknown harness {value!r} (claude | copilot | codex | auto)")
             return True
         if name == "harness" and value == "codex":
-            self.say("codex runs without sandbox or approvals: it can touch the whole filesystem.")
+            self.say(f"codex: {REGISTRY['codex'](self.cfg()).permissions('implement')}.")
             if not self.confirm("Use it anyway?", default=False):
                 return True
+            self.unsafe = True
         setattr(self, name, None if value == "auto" else value)
         self.say(f"{name} = {value} (this session only; `speckfish config {name}=…` saves it)")
         return True
@@ -446,13 +464,15 @@ class Shell:
             rest = options + (["--", body] if body.startswith("-") else [body] if body else [])
         writes_code = name in CONFIRM or (name == "go" and "--implement" in rest)
         if writes_code and "--yes" not in rest and "--dry-run" not in rest:
-            self.say(f"/{name} lets the agent write code and run commands in this project "
-                     f"without asking (permissions of the {self.harness or 'configured'} agent).")
+            agent = self.agent_name()
+            self.say(f"/{name} lets {agent} write code and run commands in this project without asking.")
+            if agent in REGISTRY:
+                self.say(f"  {agent} gets {REGISTRY[agent](self.cfg()).permissions('implement')}")
             if not self.confirm("Continue?", default=False):
                 self.say("cancelled.")
                 return True
-            rest = ["--yes"] + rest          # before any `--`: after it everything is free text
-        self.run_cli([name] + rest)
+            rest = ["--yes", *rest]          # before any `--`: after it everything is free text
+        self.run_cli([name, *rest])
         return True
 
     VALUE_FLAGS = frozenset({"--stack", "--max-features", "--budget", "--chunk", "--max-chunks",
@@ -468,16 +488,16 @@ class Shell:
         words: list[str] = []
         i = 0
         while i < len(rest):
-            token = rest[i]
-            if token == "--":
+            word = rest[i]
+            if word == "--":
                 words += rest[i + 1:]
                 break
-            if token.startswith("--"):
-                take = 2 if token in cls.VALUE_FLAGS else 1
+            if word.startswith("--"):
+                take = 2 if word in cls.VALUE_FLAGS else 1
                 options += rest[i:i + take]
                 i += take
                 continue
-            words.append(token)
+            words.append(word)
             i += 1
         return options, " ".join(words)
 

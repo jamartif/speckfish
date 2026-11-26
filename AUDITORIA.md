@@ -442,20 +442,26 @@ Regresión en `tests/test_sprint2.py` (37 tests). Suite: 381 en verde.
 - [~] **B2**: `Budget` cuenta una sola moneda y muestra la otra aparte. **No hecho:** pasar el presupuesto restante como `--max-budget-usd` al paso siguiente (hay que llevarlo por todos los `do_*`); el tope se sigue comprobando solo entre pasos.
 - [~] **P6** y **B5**: hechos todos salvo `CODEX_FILE_HINT` solo en Windows: el prompt está medido con ejecuciones reales y varios tests lo fijan, así que cambiarlo exige volver a medir con codex. El cambio de P6 en el prompt de `plan` tampoco está medido con un agente real.
 
-### Sprint 3: modelo de permisos (~3–5 días, requiere probar con agentes reales)
-- [ ] **S1**: `StepSpec.tools` por *kind*, perfiles de solo lectura para review/drift/analyze, Codex con
-      `--unsafe` explícito y allowlist de variables de entorno.
-- [ ] **S5**: confianza en `vendor/egm` y `config.json` por hash (`speckfish trust`).
-- [ ] **S6**: `@fichero` limitado a `cfg.root` y delimitador con nonce.
-- [ ] **S8**: prompt por stdin o fichero temporal.
-- [ ] Verificar de extremo a extremo con claude, copilot y codex (`--dry-run` y una ejecución real),
-      siguiendo el checklist de `pr-review.yml`.
+### Sprint 3: modelo de permisos — HECHO, con límites que están en `SECURITY.md`
+Regresión en `tests/test_sprint3.py` (40 tests). Se probó con el `claude` real (5 llamadas, ~0,5 USD):
+el prompt por stdin funciona, `--disallowedTools Bash PowerShell` quita la herramienta por completo y el
+informe se sigue escribiendo; un paso `review` completo por `run_step` termina bien y parsea el veredicto.
+**Hallazgo que cambió el diseño:** `--allowedTools` solo pre-aprueba y no restringe (`Bash(git config *)` no
+impidió un `echo`); lo que de verdad restringe son las reglas de denegación. Por eso solo `review`, `drift`
+y `split` pierden el shell, que es lo que la evidencia de las skills de EGM justifica.
+- [x] **S1**: perfil de herramientas por tipo de paso (`StepSpec.tools`), `permissions=scoped|open`, Codex solo con consentimiento (`unsafe`), lista de variables de entorno, y `/implement` muestra qué permisos recibe el agente.
+- [~] **S1, límites:** los pasos de Spec Kit (`specify`, `plan`, `tasks`, `analyze`…) e `implement` conservan Bash: las skills de Spec Kit ejecutan sus scripts con él y no hay forma verificada de acotarlo. Brainstorm/draft lo necesitan para `git config user.name`. Copilot y Codex no se acotan por paso: no están instalados aquí para probar flags.
+- [x] **S5**: confianza en EGM por hash (`trust.py`, `speckfish trust`, `~/.speckfish/trusted.json`); `init` confía en lo que verifica; un repo no puede darse confianza a sí mismo.
+- [x] **S6**: `@fichero` confinado al proyecto (symlinks resueltos), `--allow-outside-root`, delimitador aleatorio y contenido marcado como datos.
+- [x] **S8**: prompt por stdin para Claude. **No hecho para Codex ni Copilot:** no los pude probar; siguen con el prompt en argv.
 
-### Sprint 4: CI y calidad (~1–2 días)
-- [ ] **S7**: acciones fijadas a SHA, Dependabot, permisos mínimos, `inputs.tag` por `env` y attestations.
-- [ ] Ruff `S`/`PERF`/`RUF`, `pytest-cov` con umbral y `mypy` gradual.
-- [ ] `SECURITY.md` y la sección de seguridad del README (cómo ejecutar en CI de forma aislada).
-- [ ] Retención automática de runs (**P5**) y `.meta.json` por paso.
+### Sprint 4: CI y calidad — HECHO, salvo lo que solo puede comprobar GitHub
+Regresión en `tests/test_sprint4.py` (18 tests). Suite: 439 en verde, cobertura 86 %, mypy y ruff limpios.
+- [x] **S7**: acciones fijadas a SHA (en la última versión de su mismo major, para no cambiar su comportamiento sin poder probarlo), Dependabot, permisos mínimos por job, `TAG` por `env`, attestations de procedencia. **No verificado:** los workflows no se pueden ejecutar fuera de GitHub; el primer PR los ejercitará, y la attestation solo en la próxima release.
+- [x] Ruff con `S`, `PERF`, `RUF` (ignores justificados en `pyproject.toml`), `pytest-cov` con umbral 80 % (hoy 86 %), mypy gradual. **mypy:** estricto en `store`, `trust`, `registry`, `workspace`; los otros 11 módulos tienen 68 errores previos y quedan en una lista explícita (`ignore_errors`) para ir sacándolos.
+- [x] `SECURITY.md` y sección de seguridad en el README.
+- [x] **P5**: retención automática (`keep_runs`, 50 por defecto) que nunca borra una run de la que dependen `status` o `report`. **No hecho:** comprimir logs antiguos.
+- [x] `.meta.json` por paso (sin prompt, sin variables de entorno).
 
 ### Sprint 5: CLI interactiva (§6) (~4–6 días; conviene después de P2 y de S1)
 **MVP hecho** (`src/speckfish/shell.py`) y **experiencia completa hecha** (`src/speckfish/tui.py`, extra
