@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import contextlib
 import json
+import os
+import re
 import shutil
 from dataclasses import dataclass
 from pathlib import Path
@@ -81,6 +83,15 @@ class Harness:
         """One line a person can read before approving a step: what this agent gets for this kind of step."""
         return "the agent's default permissions"
 
+    # ---- models ----
+    def known_models(self) -> list[tuple[str, str]]:
+        """[(name, where it comes from)] for `--model`. Only what this CLI lets us find out: no guessing.
+
+        None of the three has a command that lists its models, so each adapter reads what it does expose; an
+        empty list means "type the name yourself".
+        """
+        return []
+
     # ---- output parsing ----
     def parse_output(self, stdout: str, stderr: str, exit_code: int) -> dict:
         return {"raw_tail": (stdout or stderr or "")[-1500:]}
@@ -103,6 +114,14 @@ class ClaudeHarness(Harness):
 
     def spec_kit_integration(self):
         return "claude", []
+
+    # the aliases `claude --help` documents for --model; they follow the newest model of each family
+    MODEL_ALIASES: ClassVar[list[tuple[str, str]]] = [
+        ("fable", "alias: the latest Fable"), ("opus", "alias: the latest Opus"),
+        ("sonnet", "alias: the latest Sonnet")]
+
+    def known_models(self) -> list[tuple[str, str]]:
+        return list(self.MODEL_ALIASES)
 
     ALL_TOOLS: ClassVar[list[str]] = ["Bash", "PowerShell", "Write", "Edit", "Read", "Glob", "Grep", "Agent"]
     # tools removed (not merely "not pre-approved"): checked against the real CLI, a denied Bash is not
@@ -204,6 +223,22 @@ class CopilotHarness(Harness):
 
     def permissions(self, kind: str) -> str:
         return "all tools and all paths (--allow-all-tools --allow-all-paths); this CLI has no per-step scoping here"
+
+    def known_models(self) -> list[tuple[str, str]]:
+        """The `choices` its own `--help` prints for --model, when it prints them."""
+        argv = (self.prefix() or []) + ["--help"]
+        if len(argv) < 2:
+            return []
+        try:
+            _code, out, err = run_cmd(argv, timeout=30)
+        except Exception:
+            return []
+        text = out or err
+        m = re.search(r"--model\s+<[^>]*>(.{0,600}?)\(choices:\s*([^)]*)\)", text, re.S)
+        if not m:
+            return []
+        names = [n.strip().strip("\"'") for n in m.group(2).replace("\n", " ").split(",")]
+        return [(n, "listed by `copilot --help`") for n in names if n]
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
         argv = (self.prefix() or ["copilot"]) + ["-p", prompt, "--output-format", "json",
@@ -332,6 +367,16 @@ class CodexHarness(Harness):
 
     def permissions(self, kind: str) -> str:
         return "NO sandbox and NO approvals: it can read and write the whole filesystem and run anything"
+
+    def known_models(self) -> list[tuple[str, str]]:
+        """The model set in `~/.codex/config.toml` (codex has no command that lists them)."""
+        home = Path(os.environ.get("CODEX_HOME") or (Path.home() / ".codex"))
+        try:
+            text = (home / "config.toml").read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            return []
+        found = re.findall(r'^\s*model\s*=\s*"([^"]+)"', text, re.M)
+        return [(n, "set in your Codex config") for n in dict.fromkeys(found)]
 
     def build(self, kind, prompt, cwd, artifact_dir, egm_root, budget, timeout, schema):
         # Measured on codex-cli 0.169: `--sandbox workspace-write` and

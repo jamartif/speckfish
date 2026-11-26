@@ -5,6 +5,8 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+- `/harness` and `/model` in the console are pickers when given no argument. `/harness` lists the agent CLIs that are installed (codex is marked "no sandbox", and choosing it asks for consent); `/model` lists what the chosen CLI lets speckfish discover: the aliases `claude --help` documents (`fable`, `opus`, `sonnet`), the `choices` Copilot prints in its own `--help`, and the model set in `~/.codex/config.toml`. None of the three CLIs has a command that lists its models, so nothing is invented: pick `default` or type any name the CLI accepts. Both take `--save` to keep the choice in `.speckfish/config.json` (saving codex also saves that you accepted it); without it the choice lasts for the session. The header shows the model when one is set.
+
 Cleaner console output:
 
 - While an agent works there is **one live line** (spinner, step, clock, what it is doing in words, how many actions) cut to the real width of the terminal, so it never wraps. Commands are described instead of dumped: `[System.IO.File]::ReadAllText('C:\\Users\\…\\SKILL.md')` shows as `reading .agents/skills/speckit-constitution/SKILL.md`, `Get-ChildItem -Force .specify; …` as `listing .specify`, `git status --short; …` as `git status`.

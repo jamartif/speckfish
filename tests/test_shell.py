@@ -519,3 +519,107 @@ def test_confirmations_are_asked_in_english_but_still_accept_s_and_si(tmp_path):
     assert c.shell.confirm("Go?", default=False) is False       # Enter takes the default (no)
     assert asked[0].endswith("[Y/n] ") and asked[-1].endswith("[y/N] ")
     assert not any("S/n" in a or "s/N" in a for a in asked)
+
+
+# ---- /harness and /model pickers ----
+
+COPILOT_HELP = """Usage: copilot [options]
+
+Options:
+  --model <model>        Set the AI model to use (choices: "gpt-5", "claude-sonnet-4.5",
+                         "o3")
+  --allow-all-tools      Allow all tools
+"""
+
+
+def test_each_cli_lists_only_what_it_really_exposes(tmp_path, monkeypatch):
+    from speckfish import harnesses as H
+    cfg = Config(root=tmp_path.resolve())
+    claude = [m for m, _w in H.ClaudeHarness(cfg).known_models()]
+    assert {"opus", "sonnet"} <= set(claude)
+    # copilot: whatever its own --help lists as choices
+    monkeypatch.setattr(H, "run_cmd", lambda argv, **k: (0, COPILOT_HELP, ""))
+    monkeypatch.setattr(H.CopilotHarness, "prefix", lambda self: ["copilot"])
+    assert [m for m, _w in H.CopilotHarness(cfg).known_models()] == ["gpt-5", "claude-sonnet-4.5", "o3"]
+    monkeypatch.setattr(H, "run_cmd", lambda argv, **k: (0, "Usage: copilot\n  --model <model>  Set the model\n", ""))
+    assert H.CopilotHarness(cfg).known_models() == []                   # no choices printed: say nothing
+    monkeypatch.setattr(H, "run_cmd", lambda argv, **k: (_ for _ in ()).throw(OSError("boom")))
+    assert H.CopilotHarness(cfg).known_models() == []
+    # codex: the model in its own config
+    (tmp_path / "config.toml").write_text('model = "gpt-5-codex"\n[profiles.x]\nmodel = "o3"\n')
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path))
+    assert [m for m, _w in H.CodexHarness(cfg).known_models()] == ["gpt-5-codex", "o3"]
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "nowhere"))
+    assert H.CodexHarness(cfg).known_models() == []
+
+
+def test_model_without_an_argument_offers_a_list_and_applies_it_to_the_session(tmp_path):
+    c = Console(tmp_path, ["/harness claude", "/model", "3", "/status", "/exit"])
+    c.shell.run()
+    assert "Which model for claude?" in c.screen and "default: the CLI's own choice" in c.screen
+    assert "model = opus" in c.screen and "this session only" in c.screen
+    status_call = c.calls[-1]
+    assert status_call[status_call.index("--model") + 1] == "opus"
+    assert Config.load(tmp_path).model == ""                                  # not saved
+
+
+def test_model_can_be_saved_reset_or_typed(tmp_path):
+    c = Console(tmp_path, ["/harness claude", "/model sonnet --save", "/exit"])
+    c.shell.run()
+    assert Config.load(tmp_path).model == "sonnet" and "saved in .speckfish/config.json" in c.screen
+    c = Console(tmp_path, ["/model default --save", "/exit"], initialised=False)
+    (tmp_path / ".specify").mkdir(exist_ok=True)
+    c.shell.run()
+    assert Config.load(tmp_path).model == ""
+    c = Console(tmp_path, ["/harness claude", "/model", "5", "my-own-model", "/status", "/exit"])
+    c.shell.run()
+    assert "model = my-own-model" in c.screen
+
+
+def test_model_picker_says_so_when_the_cli_has_no_list(tmp_path, monkeypatch):
+    from speckfish import harnesses as H
+    monkeypatch.setattr(H.CodexHarness, "known_models", lambda self: [])
+    c = Console(tmp_path, ["/harness codex", "y", "/model", "", "/exit"])
+    c.shell.run()
+    assert "does not expose a list of its models" in c.screen
+
+
+def test_harness_without_an_argument_is_a_picker_of_what_is_installed(tmp_path, monkeypatch):
+    monkeypatch.setattr(SH.Shell, "installed_agents", lambda self, cfg: ["claude", "copilot", "codex"])
+    c = Console(tmp_path, ["/harness", "2", "/status", "/exit"])
+    c.shell.run()
+    assert "Which agent CLI?" in c.screen and "codex  (no sandbox)" in c.screen
+    assert "harness = copilot" in c.screen
+    assert "--harness" in c.calls[-1] and c.calls[-1][c.calls[-1].index("--harness") + 1] == "copilot"
+    assert Config.load(tmp_path).harness == "auto"
+
+
+def test_choosing_codex_from_the_picker_asks_and_saving_keeps_the_consent(tmp_path, monkeypatch):
+    monkeypatch.setattr(SH.Shell, "installed_agents", lambda self, cfg: ["claude", "codex"])
+    c = Console(tmp_path, ["/harness", "2", "n", "/exit"])
+    c.shell.run()
+    assert "NO sandbox" in c.screen and Config.load(tmp_path).unsafe is False
+    c = Console(tmp_path, ["/harness codex --save", "y", "/exit"])
+    c.shell.run()
+    cfg = Config.load(tmp_path)
+    assert (cfg.harness, cfg.unsafe) == ("codex", True) and "including that you accept it" in c.screen
+
+
+def test_harness_auto_goes_back_to_the_first_installed_and_unknown_is_refused(tmp_path):
+    c = Console(tmp_path, ["/harness claude", "/harness auto", "/harness gemini", "/status", "/exit"])
+    c.shell.run()
+    assert "unknown harness 'gemini'" in c.screen
+    assert "--harness" not in c.calls[-1]
+
+
+def test_the_header_shows_the_model_and_the_start_message_mentions_the_commands(tmp_path):
+    c = Console(tmp_path, ["/model fable", "/exit"])
+    c.shell.run()
+    assert "(fable)" in c.screen and "/harness changes the agent CLI, /model the model" in c.screen
+
+
+def test_a_cancelled_picker_changes_nothing(tmp_path):
+    c = Console(tmp_path, ["/harness claude", "/model", "zzz", "/status", "/exit"])
+    c.shell.run()
+    assert "cancelled." in c.screen
+    assert "--model" not in c.calls[-1]

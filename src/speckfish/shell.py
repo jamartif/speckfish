@@ -40,8 +40,8 @@ SESSION_ONLY = {"harness", "model"}
 SESSION_COMMANDS = {
     "next": "run the step the current feature needs",
     "feature": "choose the active feature (or /feature NAME)",
-    "harness": "change the agent CLI for this session (claude | copilot | codex | auto)",
-    "model": "change the model for this session",
+    "harness": "choose the agent CLI: claude, copilot or codex (--save to keep it)",
+    "model": "choose the model the agent uses (--save to keep it)",
     "verbose": "show every action the agent takes (on | off), not only the files it writes",
     "help": "show the commands",
     "exit": "leave the console (Ctrl+D also works)",
@@ -277,8 +277,9 @@ class Shell:
             agent = f"auto ({order[0]})" if order else "auto (none installed)"
         argv, why, feat = self.suggestion()
         nxt = f"/{argv[0]}" if argv else "-"
-        return (f"{self.root.name} · agent: {agent} · feature: {feat.name if feat else '-'} "
-                f"· next: {nxt} ({why})")
+        model = self.model or cfg.model
+        return (f"{self.root.name} · agent: {agent}{f' ({model})' if model else ''} · "
+                f"feature: {feat.name if feat else '-'} · next: {nxt} ({why})")
 
     def header(self) -> None:
         text = self.header_text()
@@ -439,20 +440,75 @@ class Shell:
         return True
 
     def set_session(self, name: str, rest: list[str]) -> bool:
-        if not rest:
-            self.say(f"{name}: {getattr(self, name) or '(the saved config)'}")
+        """/harness and /model: a picker with no argument, or the value; `--save` keeps it for next time."""
+        save = "--save" in rest
+        rest = [r for r in rest if r != "--save"]
+        value = rest[0] if rest else self.pick_session_value(name)
+        if value is None:
+            self.say("cancelled.")
             return True
-        value = rest[0]
-        if name == "harness" and value not in REGISTRY and value != "auto":
+        if name == "harness":
+            return self.use_harness(value, save)
+        return self.use_model(value, save)
+
+    def pick_session_value(self, name: str) -> str | None:
+        cfg = self.cfg()
+        if name == "harness":
+            current = self.harness or cfg.harness
+            options = [(n, f"{n}{'  (current)' if n == current else ''}"
+                        f"{'  (no sandbox)' if getattr(REGISTRY[n], 'unsafe', False) else ''}")
+                       for n in self.installed_agents(cfg)]
+            options.append(("auto", f"auto: the first installed{'  (current)' if current == 'auto' else ''}"))
+            default = next((i for i, (v, _l) in enumerate(options) if v == current), 0)
+            return self.pick("Which agent CLI?", options, default)
+        agent = self.agent_name()
+        models = REGISTRY[agent](cfg).known_models() if agent in REGISTRY else []
+        current = self.model or cfg.model
+        options = [("default", f"default: the CLI's own choice{'  (current)' if not current else ''}")]
+        options += [(m, f"{m}  — {where}{'  (current)' if m == current else ''}") for m, where in models]
+        if current and current not in [m for m, _w in models]:
+            options.append((current, f"{current}  (current)"))
+        options.append(("__other__", "another name…  (any model name the CLI accepts)"))
+        default = next((i for i, (v, _l) in enumerate(options) if v == (current or "default")), 0)
+        if not models:
+            self.say(f"{agent} does not expose a list of its models; pick the default or type a name.")
+        chosen = self.pick(f"Which model for {agent}?", options, default)
+        if chosen == "__other__":
+            chosen = self.ask("Model name: ").strip() or None
+        return chosen
+
+    def use_harness(self, value: str, save: bool) -> bool:
+        if value not in REGISTRY and value != "auto":
             self.say(f"unknown harness {value!r} (claude | copilot | codex | auto)")
             return True
-        if name == "harness" and value == "codex":
-            self.say(f"codex: {REGISTRY['codex'](self.cfg()).permissions('implement')}.")
+        unsafe_accepted = False
+        if value != "auto" and getattr(REGISTRY[value], "unsafe", False):
+            self.say(f"{value}: {REGISTRY[value](self.cfg()).permissions('implement')}.")
             if not self.confirm("Use it anyway?", default=False):
                 return True
-            self.unsafe = True
-        setattr(self, name, None if value == "auto" else value)
-        self.say(f"{name} = {value} (this session only; `speckfish config {name}=…` saves it)")
+            self.unsafe = unsafe_accepted = True
+        self.harness = None if value == "auto" else value
+        where = "this session only"
+        if save:
+            cfg = self.cfg()
+            cfg.harness = value
+            if unsafe_accepted:
+                cfg.unsafe = True                 # they just confirmed it: do not ask again next time
+            cfg.save()
+            where = "saved in .speckfish/config.json" + (" (including that you accept it)" if unsafe_accepted else "")
+        self.say(f"harness = {value}  ({where}{'' if save else '; add --save to keep it'})")
+        return True
+
+    def use_model(self, value: str, save: bool) -> bool:
+        self.model = None if value in ("default", "auto") else value
+        where = "this session only"
+        if save:
+            cfg = self.cfg()
+            cfg.model = self.model or ""
+            cfg.save()
+            where = "saved in .speckfish/config.json"
+        shown = value if self.model else "default (the CLI's own choice)"
+        self.say(f"model = {shown}  ({where}{'' if save else '; add --save to keep it'})")
         return True
 
     def command(self, name: str, rest: list[str]) -> bool:
@@ -539,7 +595,8 @@ class Shell:
         self.say(f"🐟 speckfish {__version__} · {norm(self.root)}")
         if not self.initialised() and not self.wizard():
             return 0 if self.initialised() else 1
-        self.say("Type /help for the commands, or an empty line to run the suggested step.")
+        self.say("Type /help for the commands, or an empty line to run the suggested step. "
+                 "/harness changes the agent CLI, /model the model.")
         while True:
             self.header()
             try:
