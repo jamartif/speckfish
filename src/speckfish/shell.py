@@ -5,7 +5,10 @@ run through `cli.main`, so the console and the command line cannot drift apart. 
 first-run wizard (init + choosing the agent CLI), a status header with the next suggested step, and
 multi-line input for the steps that take free text (constitution, specify, ...).
 
-Input is injectable (`input_fn`, `out`) so the console is testable without a TTY. Stdlib only.
+The core is stdlib only. With the optional `speckfish[tui]` extra (prompt_toolkit) the same console gets a
+`/` menu with autocompletion, `@file` path completion, history, a multi-line editor and a feature picker
+(see `tui.py`); without it everything still works with plain `input()`. Input is injectable (`input_fn`,
+`ui`, `out`) so the console is testable without a TTY.
 """
 from __future__ import annotations
 
@@ -33,18 +36,81 @@ TEXT_STEPS: dict[str, tuple[str, bool]] = {
 CONFIRM = {"implement"}          # writes code: always confirm in the console
 SESSION_ONLY = {"harness", "model"}
 
-HELP = """\
-Commands (type / and the name; a bare name works too):
-  /constitution   write or update the project principles
-  /specify        describe a new feature          /go     idea -> spec -> plan -> tasks -> review
-  /plan /tasks /analyze /review /revise /drift /implement
-  /next           run the step the current feature needs      /status   where everything stands
-  /features /runs /report /show /doctor /config /init
-  /harness NAME   change the agent CLI for this session       /model NAME   same, for the model
-  /help           this text                                   /exit     leave (Ctrl+D also works)
-Anything else you type is treated as an idea (I will ask before spending anything).
-Empty line: run the suggested next step.  Ctrl+C stops the running step and returns here.
-Free-text steps open a small editor: finish with an empty line, or give @file.md to import a file."""
+# commands that exist only in the console, with the text the menu shows for them
+SESSION_COMMANDS = {
+    "next": "run the step the current feature needs",
+    "feature": "choose the active feature (or /feature NAME)",
+    "harness": "change the agent CLI for this session (claude | copilot | codex | auto)",
+    "model": "change the model for this session",
+    "help": "show the commands",
+    "exit": "leave the console (Ctrl+D also works)",
+}
+# the order people use them in; whatever else the CLI has follows alphabetically
+ORDER = ("constitution", "specify", "go", "plan", "tasks", "analyze", "clarify", "checklist", "review",
+         "revise", "implement", "converge", "drift", "next", "feature", "status")
+HIDDEN = {"shell", "editors", "pipeline"}
+TEXT_EXTENSIONS = (".md", ".markdown", ".txt", ".rst")
+
+
+def command_catalog() -> list[tuple[str, str]]:
+    """[(name, one-line help)] for the menu and /help, read from the CLI's own parser.
+
+    A subcommand added to `cli.build_parser` shows up here with no second list to keep in sync.
+    """
+    from .cli import build_parser
+    action = build_parser()._subparsers._group_actions[0]
+    rows = {a.dest: (a.help or "").strip() for a in action._choices_actions if a.dest not in HIDDEN}
+    rows.update(SESSION_COMMANDS)
+    names = sorted(rows, key=lambda n: (ORDER.index(n) if n in ORDER else len(ORDER), n))
+    return [(n, rows[n]) for n in names]
+
+
+def help_text(catalog: list[tuple[str, str]] | None = None) -> str:
+    rows = catalog or command_catalog()
+    width = max(len(n) for n, _ in rows) + 1
+    lines = ["Commands (type / to open the menu):"]
+    lines += [f"  /{n:<{width}} {h}" for n, h in rows]
+    lines += ["",
+              "Anything that is not a /command is treated as an idea (I ask before spending anything).",
+              "Empty line: run the suggested next step.  Ctrl+C stops the running step and returns here.",
+              "Free-text steps open an editor: an empty line sends, `@file.md` imports a file,",
+              "/cancel aborts.  You see a preview before anything is sent."]
+    return "\n".join(lines)
+
+
+def complete_commands(catalog: list[tuple[str, str]], text: str) -> list[tuple[str, str]]:
+    """Menu entries for a line that is still just `/par…` (no space yet): [(/name, help)]."""
+    if not text.startswith("/") or " " in text:
+        return []
+    word = text[1:].lower()
+    return [(f"/{n}", h) for n, h in catalog if n.startswith(word)]
+
+
+def complete_paths(root: Path, fragment: str, limit: int = 40) -> list[str]:
+    """Files and folders for `@frag`, relative to the project and never outside it."""
+    root = Path(root).resolve()
+    dirpart, _, namepart = fragment.rpartition("/")
+    base = (root / dirpart).resolve()
+    try:
+        base.relative_to(root)
+    except ValueError:
+        return []
+    if not base.is_dir():
+        return []
+    found: list[str] = []
+    for entry in sorted(base.iterdir(), key=lambda p: (not p.is_dir(), p.name.lower())):
+        name = entry.name
+        if name.startswith(".") and not namepart.startswith("."):
+            continue
+        if name in ("__pycache__", "node_modules") or not name.lower().startswith(namepart.lower()):
+            continue
+        if entry.is_dir():
+            found.append(f"{dirpart + '/' if dirpart else ''}{name}/")
+        elif entry.suffix.lower() in TEXT_EXTENSIONS:
+            found.append(f"{dirpart + '/' if dirpart else ''}{name}")
+        if len(found) >= limit:
+            break
+    return found
 
 
 def is_interactive() -> bool:
@@ -53,9 +119,11 @@ def is_interactive() -> bool:
 
 class Shell:
     def __init__(self, root: Path, *, input_fn: Callable[[str], str] = input,
-                 out=None, main: Callable[[list[str]], int] | None = None):
+                 out=None, main: Callable[[list[str]], int] | None = None, ui=None):
         self.root = Path(root).resolve()
         self.input = input_fn
+        self.ui = ui                          # optional rich front end (tui.PtkUI); None = plain input()
+        self._catalog: list[tuple[str, str]] | None = None
         self.out = out or sys.stdout
         if main is None:
             from .cli import main as cli_main
@@ -72,6 +140,35 @@ class Shell:
     def ask(self, prompt: str) -> str:
         return self.input(prompt)
 
+    @property
+    def catalog(self) -> list[tuple[str, str]]:
+        if self._catalog is None:
+            self._catalog = command_catalog()
+        return self._catalog
+
+    def pick(self, title: str, options: list[tuple[str, str]], default: int = 0) -> str | None:
+        """Choose one of [(value, label)]: arrows with the rich UI, a number or a name otherwise.
+
+        None means the user backed out. An empty answer takes the default.
+        """
+        if not options:
+            return None
+        if self.ui is not None:
+            return self.ui.pick(title, options, default)
+        self.say(title)
+        for i, (_value, label) in enumerate(options, start=1):
+            self.say(f"  {i}) {label}")
+        answer = self.ask(f"Number or name [{default + 1}]: ").strip().lower()
+        if not answer:
+            return options[default][0]
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return options[int(answer) - 1][0]
+        for value, _label in options:
+            if value.lower() == answer:
+                return value
+        self.say(f"  unknown choice {answer!r}")
+        return None
+
     def confirm(self, question: str, default: bool = True) -> bool:
         hint = "[S/n]" if default else "[s/N]"
         answer = self.ask(f"{question} {hint} ").strip().lower()
@@ -79,8 +176,10 @@ class Shell:
             return default
         return answer in ("s", "si", "sí", "y", "yes")
 
-    def read_text(self, title: str, may_be_empty: bool) -> str | None:
-        """Multi-line editor: lines until an empty one. None = cancelled."""
+    def read_text(self, title: str, may_be_empty: bool, initial: str = "") -> str | None:
+        """One pass of the multi-line editor. None = cancelled."""
+        if self.ui is not None:
+            return self.ui.editor(title, may_be_empty, initial)
         self.say(f"{title} (empty line to send, `@file.md` to import"
                  f"{', empty = let the agent propose' if may_be_empty else ''}; /cancel to abort):")
         lines: list[str] = []
@@ -98,6 +197,40 @@ class Shell:
                 continue
             lines.append(line.rstrip())
         return "\n".join(lines)
+
+    def preview(self, body: str) -> None:
+        if not body:
+            self.say("── preview: (empty) the agent will propose one ──")
+            return
+        if body.startswith("@") and "\n" not in body:
+            target = Path(body[1:].strip().strip('"'))
+            target = target if target.is_absolute() else self.root / target
+            size = f"{target.stat().st_size} bytes" if target.is_file() else "NOT FOUND"
+            self.say(f"── preview: imports {target} ({size}) ──")
+            return
+        shown = body.splitlines()
+        self.say("── preview ──")
+        for line in shown[:15]:
+            self.say(f"  {line[:110]}")
+        if len(shown) > 15:
+            self.say(f"  … {len(shown) - 15} more line(s)")
+        self.say(f"── {len(body)} characters ──")
+
+    def compose(self, title: str, may_be_empty: bool) -> str | None:
+        """Editor + preview: Send / edit again / cancel. None = nothing to send."""
+        body = ""
+        while True:
+            edited = self.read_text(title, may_be_empty, body)
+            if edited is None:
+                return None
+            body = edited
+            self.preview(body)
+            answer = self.ask("Send? [S]end / [e]dit / [c]ancel: ").strip().lower()
+            if answer in ("", "s", "send", "y", "yes", "si", "sí"):
+                return body
+            if answer in ("c", "cancel", "n", "no"):
+                return None
+            # anything else (e): open the editor again with what was written
 
     # ---------- project state ----------
     def cfg(self) -> Config:
@@ -125,7 +258,7 @@ class Shell:
             return None, why + ": /specify <idea>", feat
         return [kind], why, feat
 
-    def header(self) -> None:
+    def header_text(self) -> str:
         cfg = self.cfg()
         agent = self.harness or cfg.harness
         if agent == "auto":
@@ -133,9 +266,21 @@ class Shell:
             agent = f"auto ({order[0]})" if order else "auto (none installed)"
         argv, why, feat = self.suggestion()
         nxt = f"/{argv[0]}" if argv else "-"
-        self.say("")
-        self.say(f"┌ {self.root.name} · agent: {agent} · feature: {feat.name if feat else '-'} "
-                 f"· next: {nxt} ({why})")
+        return (f"{self.root.name} · agent: {agent} · feature: {feat.name if feat else '-'} "
+                f"· next: {nxt} ({why})")
+
+    def header(self) -> None:
+        text = self.header_text()
+        if self.ui is not None:
+            self.ui.set_toolbar(text)         # computed once per prompt: a toolbar redraws on every key
+        else:
+            self.say("")
+            self.say(f"┌ {text}")
+
+    def read_command(self) -> str:
+        if self.ui is not None:
+            return self.ui.command()
+        return self.ask("speckfish › ")
 
     # ---------- wizard ----------
     def wizard(self) -> bool:
@@ -148,22 +293,19 @@ class Shell:
         if not agents:
             self.say("No agent CLI found on PATH (claude, copilot, codex). Install one and run speckfish again.")
             return False
-        self.say("Which agent CLI do you want to use?")
-        for i, name in enumerate(agents, start=1):
+        options = []
+        for name in agents:
             info = REGISTRY[name](cfg).doctor()
             tag = "verified" if info.get("verified") else "not verified"
-            self.say(f"  {i}) {name:<8} {info.get('version') or '?':<24} {tag}")
-        choice = agents[0]
+            options.append((name, f"{name:<8} {info.get('version') or '?':<24} {tag}"))
+        choice = self.pick("Which agent CLI do you want to use?", options) or agents[0]
+        fallback = ""
         if len(agents) > 1:
-            answer = self.ask(f"Number or name [1 = {agents[0]}]: ").strip().lower()
-            if answer.isdigit() and 1 <= int(answer) <= len(agents):
-                choice = agents[int(answer) - 1]
-            elif answer in agents:
-                choice = answer
-            elif answer:
-                self.say(f"  unknown choice {answer!r}, using {agents[0]}")
+            others = [(n, label) for n, label in options if n != choice] + [("", "none")]
+            fallback = self.pick("Fallback when it runs out of quota or credentials?",
+                                 others, default=len(others) - 1) or ""
         language = self.ask(f"Language of the documents [{cfg.language}]: ").strip().lower() or cfg.language
-        cfg.harness, cfg.language = choice, language
+        cfg.harness, cfg.language, cfg.fallback = choice, language, fallback
         cfg.save()
         self.say(f"Initialising with {choice}…")
         try:
@@ -220,19 +362,56 @@ class Shell:
             self.say(f"cannot parse that line: {e}")
             return True
         if not parts:
-            self.say(HELP)
+            self.say(help_text(self.catalog))
             return True
         name, rest = parts[0].lower(), parts[1:]
         if name in ("exit", "quit", "q"):
             return False
         if name in ("help", "h", "?"):
-            self.say(HELP)
+            self.say(help_text(self.catalog))
             return True
+        if name == "feature":
+            return self.choose_feature(rest)
         if name in SESSION_ONLY:
             return self.set_session(name, rest)
         if name == "next":
             return self.run_suggestion()
         return self.command(name, rest)
+
+    def choose_feature(self, rest: list[str]) -> bool:
+        """/feature NAME, or a list to pick from: the active feature is the one every step works on."""
+        from . import flow
+        cfg = self.cfg()
+        if rest:
+            try:
+                feat = S.find_feature(cfg, rest[0])
+            except SystemExit as e:
+                self.say(f"ERROR: {e}")
+                return True
+        else:
+            feats = S.features_with_spec(cfg)
+            if not feats:
+                self.say("no features yet: /specify <idea> or /go <idea>")
+                return True
+            active = S.active_feature(cfg)
+            options, default = [], 0
+            for i, f in enumerate(feats):
+                st = flow.feature_state(cfg, f)
+                arts = "".join(m if st[k] else "-" for k, m in (("spec", "s"), ("plan", "p"), ("tasks", "t")))
+                review = (f"{st['blockers']} blocker(s)" if st["blockers"] is not None
+                          else "review stale" if st["review"] else "not reviewed")
+                tasks = f"{st['tasks_done']}/{st['tasks_total']}" if st["tasks_total"] else "-"
+                options.append((f.name, f"{f.name:<34} [{arts}] tasks {tasks:<6} {review}"))
+                if active and active.name == f.name:
+                    default = i
+            chosen = self.pick("Which feature do you want to work on?", options, default)
+            if chosen is None:
+                self.say("cancelled.")
+                return True
+            feat = next(f for f in feats if f.name == chosen)
+        S.set_active_feature(cfg, feat)
+        self.say(f"active feature: {feat.name}")
+        return True
 
     def set_session(self, name: str, rest: list[str]) -> bool:
         if not rest:
@@ -259,7 +438,7 @@ class Shell:
             options, body = self.split_text(rest)
             if not body:
                 title, may_be_empty = TEXT_STEPS[name]
-                body = self.read_text(title, may_be_empty)
+                body = self.compose(title, may_be_empty)
                 if body is None:
                     self.say("cancelled.")
                     return True
@@ -335,7 +514,7 @@ class Shell:
         while True:
             self.header()
             try:
-                line = self.ask("speckfish › ")
+                line = self.read_command()
             except EOFError:
                 self.say("")
                 return 0
@@ -352,4 +531,15 @@ class Shell:
 
 
 def run_shell(root: str | Path = ".") -> int:
-    return Shell(Path(root)).run()
+    ui = None
+    if is_interactive():
+        from . import tui
+        if tui.available():
+            ui = tui.PtkUI(Path(root).resolve())
+        else:
+            print("tip: `pip install 'speckfish[tui]'` adds the / menu, autocompletion and arrow-key pickers.",
+                  file=sys.stderr)
+    shell = Shell(Path(root), ui=ui)
+    if ui is not None:
+        ui.bind(shell)
+    return shell.run()

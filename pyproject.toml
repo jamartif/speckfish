@@ -10,7 +10,8 @@ requires-python = ">=3.10"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["pytest>=8", "ruff>=0.6"]
+dev = ["pytest>=8", "ruff>=0.6", "prompt_toolkit>=3"]
+tui = ["prompt_toolkit>=3"]
 
 [project.scripts]
 speckfish = "speckfish.cli:main"

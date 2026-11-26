@@ -228,7 +228,10 @@ speckfish › (Enter)              # run the suggested next step, after confirmi
 speckfish › /harness copilot     # change the agent for this session only
 ```
 
-`/help` lists them all. Every `/command` is the same subcommand you would type in the shell, so nothing
+`/help` lists them all. With `pip install "speckfish[tui]"` typing `/` opens a menu with every command and its
+help, `@` completes files of the project, the arrows pick the agent or the feature (`/feature`), and a status
+bar shows the suggested next step; without the extra the same things work with plain prompts. Text steps
+(`/constitution`, `/specify`, `/plan`, `/go`) show a preview before anything is sent. Every `/command` is the same subcommand you would type in the shell, so nothing
 works differently inside the console. Outside a terminal (pipes, CI) `speckfish` with no arguments keeps
 printing the usage.
 

@@ -58,6 +58,7 @@ class Config:
     model: str = ""
     profile: str = "speckit"
     language: str = "en"
+    fallback: str = ""            # second agent CLI for a step that stops on quota/auth
     timeouts: dict = field(default_factory=lambda: dict(DEFAULTS["timeouts"]))
     budgets: dict = field(default_factory=lambda: json.loads(json.dumps(DEFAULTS["budgets"])))
 
@@ -79,7 +80,7 @@ class Config:
             # could never reach an existing project: drop that block once and migrate
             if int(data.get("schema") or 1) < cls.SCHEMA:
                 data.pop("timeouts", None)
-            for k in ("harness", "egm_root", "specify", "model", "profile", "language"):
+            for k in ("harness", "egm_root", "specify", "model", "profile", "language", "fallback"):
                 if k in data:
                     setattr(cfg, k, data[k])
             for k in ("timeouts", "budgets"):

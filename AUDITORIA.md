@@ -456,17 +456,16 @@ speckfish ›
 - [ ] Retención automática de runs (**P5**) y `.meta.json` por paso.
 
 ### Sprint 5: CLI interactiva (§6) (~4–6 días; conviene después de P2 y de S1)
-**MVP hecho** (`src/speckfish/shell.py`, `tests/test_shell.py`): consola con stdlib, asistente de init,
-`/comandos` sobre `HANDLERS`, editor multilínea, confirmación de `/implement`, Ctrl+C y Enter = siguiente
-paso. Quedan sin marcar las partes de la experiencia completa.
+**MVP hecho** (`src/speckfish/shell.py`) y **experiencia completa hecha** (`src/speckfish/tui.py`, extra
+`speckfish[tui]`, `tests/test_shell.py` con 48 tests). Lo que queda sin marcar depende de S1.
 - [ ] Extraer `render.py` desde `cli.py` (formato compartido entre CLI y consola).
 - [x] `shell.py`: `speckfish` sin argumentos y con TTY abre la consola; sin TTY, comportamiento actual.
-- [x] Asistente de init: detectar CLIs instaladas, elegir agente e idioma, y luego `do_init` (falta el agente de respaldo).
-- [ ] Comandos `/` generados desde `registry.STEPS` y `SKILL_SPECS`, que llaman a `HANDLERS` (el MVP llama a `HANDLERS`, pero la ayuda y `TEXT_STEPS` están escritas a mano).
-- [x] `/constitution` (y el resto de pasos con entrada) con editor multilínea y `@fichero` (falta la vista previa).
+- [x] Asistente de init: detectar CLIs instaladas, elegir agente e idioma, y luego `do_init` y agente de respaldo (se guarda como `fallback` en la config y la CLI lo usa como `--fallback`).
+- [x] Comandos `/` generados desde el parser de la CLI (`command_catalog`), que llaman a `HANDLERS`. Solo `TEXT_STEPS` (qué pasos abren el editor) sigue escrito a mano.
+- [x] `/constitution` (y el resto de pasos con entrada) con editor multilínea y `@fichero` con vista previa antes de enviar (enviar / editar / cancelar).
 - [x] Cabecera de estado y "Enter = siguiente paso" a partir de `next_step`.
 - [x] Ctrl+C cancela el paso sin salir de la consola, y `/implement` pide confirmación (falta mostrar los permisos concretos, depende de S1).
-- [ ] Extra `speckfish[tui]` con `prompt_toolkit` (menú, autocompletado, selector de feature).
+- [x] Extra `speckfish[tui]` con `prompt_toolkit` (menú `/`, autocompletado de comandos y de `@ficheros`, historial, barra de estado, editor multilínea, selectores con flechas, `/feature`).
 - [x] Tests con entrada simulada (27) y documentación en README y CHANGELOG. Falta una captura del flujo.
 
 ### Criterios de aceptación globales

@@ -11,6 +11,10 @@ Every release is published with the wheel, the source distribution and `SHA256SU
   - Steps that take free text (`/constitution`, `/specify`, `/plan`, `/go`, `/brainstorm`) open a multi-line editor when no text is given. `@file.md` imports a file.
   - `/implement` and `/go --implement` ask for confirmation instead of needing `--yes`; selecting codex warns that it runs without a sandbox. `/harness` and `/model` change the agent for the session only.
   - Ctrl+C stops the running step and returns to the prompt.
+  - Optional extra `pip install "speckfish[tui]"` (prompt_toolkit): a `/` menu that opens as you type with each command's help, `@file.md` path completion limited to the project, history in `.speckfish/history`, a status toolbar with the suggested next step, a multi-line editor and arrow-key pickers. Without it the console works with plain `input()`.
+  - Free-text steps show a preview before sending (Send / edit / cancel). `/feature` picks the active feature (arrows, a number, or `/feature 002`).
+  - The command list, `/help` and the menu are read from the CLI's own parser, so a new subcommand shows up with no second list to maintain.
+  - The wizard also asks for a fallback agent and stores it as `fallback` in `.speckfish/config.json` (`speckfish config fallback=copilot`); every command uses it as `--fallback` when none is given.
 
 ## v0.2.1 — 2026-11-24
 

@@ -510,7 +510,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     sp = sub.add_parser("config", help="show or change the project defaults")
     sp.add_argument("set", nargs="?", default=None,
-                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language)")
+                    help="KEY=VALUE to store (harness, model, profile, egm_root, specify, language, fallback)")
 
     sub.add_parser("features", help="list features under specs/ and which one is active")
 
@@ -863,7 +863,7 @@ def cmd_config(run: Run) -> int:
             return EXIT_ENV
         key, value = args.set.split("=", 1)
         key = key.strip()
-        allowed = {"harness", "model", "profile", "egm_root", "specify", "language"}
+        allowed = {"harness", "model", "profile", "egm_root", "specify", "language", "fallback"}
         if key.startswith("timeout."):
             step = key.split(".", 1)[1]
             if not value.strip().isdigit():
@@ -1189,6 +1189,8 @@ def main(argv: list[str] | None = None) -> int:
         cfg.harness = args.harness
     if args.model:
         cfg.model = args.model
+    if not getattr(args, "fallback", None) and cfg.fallback:
+        args.fallback = cfg.fallback           # saved with `config fallback=copilot` or by the console wizard
     from . import progress as _progress
     _progress.ENABLED = not (getattr(args, "no_progress", False) or args.quiet or args.json)
     handler = HANDLERS.get(args.cmd)
