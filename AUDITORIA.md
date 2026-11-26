@@ -294,7 +294,135 @@ Acción: un `try/except (OSError, ValueError)` en esos puntos, con un mensaje cl
 
 ---
 
-## 6. Plan de acción
+## 6. Nueva CLI interactiva (`speckfish` sin argumentos)
+
+**Hoy:** `speckfish` sin subcomando falla con `error: the following arguments are required: cmd`
+(`cli.py:365`, `required=True`). Para empezar hay que saber de antemano `init`, `--harness`, `constitution`,
+`specify`, etc.
+
+**Objetivo:** ejecutar `speckfish` dentro de un directorio y entrar en una consola al estilo de Claude Code.
+Si el proyecto no está inicializado, la consola lo inicializa, pregunta qué CLI de agente usar y deja elegir
+la acción siguiente desde un menú, como escribir la constitución allí mismo.
+
+### 6.1 Flujo propuesto
+
+```
+$ cd mi-proyecto && speckfish
+
+🐟 speckfish 0.3.0 · /home/me/mi-proyecto
+Este directorio no está inicializado. ¿Lo preparo? (git + Spec Kit + EGM)  [S/n]
+
+¿Qué agente quieres usar?
+  › claude   2.1.x   ✔ verificado   (instalado)
+    copilot  1.0.x   ✔ verificado   (instalado)
+    codex    —       no instalado
+Idioma de los documentos: [es] en fr …
+
+✔ git init · ✔ Spec Kit (claude) · ✔ EGM @ v1.4.0 · ✔ .speckfish/ en .gitignore
+
+┌ proyecto: mi-proyecto · agente: claude · feature: — · siguiente: constitución ┐
+speckfish › /
+  /constitution  Escribir o actualizar los principios del proyecto
+  /specify       Describir una feature nueva (o @brief.md)
+  /go            Idea → spec → plan → tasks → review, en un paso
+  /plan /tasks /review /revise /implement /drift
+  /status /next /feature /harness /model /config /runs /report
+  /help /exit
+speckfish › /constitution
+Escribe los principios (Esc+Enter para enviar, @fichero para importar, vacío = proponer uno):
+│ - Python 3.12, solo stdlib
+│ - Tests obligatorios en cada PR
+╰ enviar ⏎
+[constitution] 00:42 | read .specify/templates/constitution-template.md …
+✔ .specify/memory/constitution.md (1,2 KB · 0,08 USD)   → siguiente: /specify
+speckfish ›
+```
+
+### 6.2 Comportamiento
+
+1. **Arranque:**
+   - `speckfish` sin argumentos y con TTY abre la consola.
+   - Sin TTY (CI, tuberías) o con `--json`, se mantiene el comportamiento actual: ayuda y código de salida
+     2. Así no se rompen los scripts.
+   - `speckfish shell` es la forma explícita de abrir la consola.
+2. **Asistente de `init`:**
+   - Se lanza si faltan `.specify/` o `.speckfish/config.json`.
+   - Detecta las CLIs instaladas con `detect_order()` y `doctor()`, y muestra versión y estado de
+     verificación.
+   - Pregunta agente, integraciones adicionales, idioma y, opcionalmente, un agente de respaldo
+     (`--fallback`).
+   - Guarda todo con `Config.save()` y luego llama a `do_init`.
+   - Si `uv`/`specify` o git no están instalados, explica cómo instalarlos en vez de lanzar `SystemExit`.
+3. **Cabecera de estado:**
+   - Muestra proyecto, agente, feature activa, fase y el siguiente paso sugerido, sacados de
+     `flow.feature_state`/`next_step` (por eso P2 conviene hacerlo antes).
+   - Al terminar cada paso, ofrece **Enter = ejecutar el siguiente paso sugerido**.
+4. **Comandos `/`:**
+   - El menú y el autocompletado se generan desde `registry.STEPS` y `prompts.SKILL_SPECS`, con su `hint`
+     y descripción. No se mantiene una lista aparte: la tabla `editors.STEPS` y la consola deben salir de la
+     misma fuente.
+   - Por debajo, cada comando construye un `argparse.Namespace` y llama al mismo `HANDLERS[cmd]` que la CLI.
+     Así hay una sola implementación y la consola no se aparta de la CLI.
+5. **Editor de texto para los pasos con entrada** (constitution, specify, plan, clarify, brainstorm):
+   - Edición multilínea con historial.
+   - `@fichero` con autocompletado de rutas, limitado a `cfg.root` (ver S6).
+   - Vista previa antes de enviar.
+   - Entrada vacía equivale al valor por defecto (`default_args`).
+6. **Texto sin `/`:** se interpreta como una idea y se ofrece `/go "<texto>"` o `/specify "<texto>"`, con
+   confirmación.
+7. **Selección de feature:** `/feature` abre una lista navegable con `list_features` (marcas spec/plan/tasks
+   y blockers) y llama a `set_active_feature`.
+8. **Ejecución de pasos:**
+   - Se reutilizan `Progress` y `execute`.
+   - **Ctrl+C cancela el paso en curso** (`_kill_tree`) y vuelve al prompt, sin salir de la consola.
+   - Ctrl+D o `/exit` cierran la consola.
+9. **Seguridad dentro de la consola:**
+   - `/implement` y cualquier perfil con Bash abierto (S1) piden confirmación explícita, que sustituye a
+     `--yes`. La confirmación muestra qué permisos tendrá el agente y el presupuesto.
+   - `/harness codex` avisa de que se ejecuta sin sandbox.
+10. **Comandos de consulta sin coste:** `/status`, `/report`, `/runs`, `/show`, `/doctor` y `/config` se
+    muestran formateados dentro de la consola.
+11. **Persistencia:**
+    - El historial se guarda en `.speckfish/history`, que ya queda ignorado por git gracias a S4.
+    - La sesión recuerda agente y modelo mediante `config`.
+    - `/harness` y `/model` cambian el valor solo para la sesión, salvo con `--save`.
+12. **Modo interactivo del agente:** `/review -i` y `/clarify -i` ceden el terminal con `run_interactive`
+    y, al terminar, se vuelve a la consola de speckfish.
+
+### 6.3 Decisiones técnicas
+
+- **Dependencia:** hoy `dependencies = []`. Propuesta:
+  - `prompt_toolkit` como extra opcional `speckfish[tui]`. Aporta menú `/` con autocompletado, editor
+    multilínea, selector con flechas y buen soporte de Windows.
+  - Sin el extra, se usa la stdlib (`cmd` + `readline`): menú numerado y entrada con `input()`.
+  - El README recomienda `pipx install "speckfish[tui]"`.
+  - Alternativa: `rich` para la presentación (tablas y paneles), pero no es imprescindible.
+- **Módulo nuevo `shell.py`** con tres partes:
+  - `Shell` (bucle y estado de la sesión).
+  - `Wizard` (asistente de init).
+  - `CommandSpec` (comandos derivados del registro).
+
+  `cli.main` solo decide si abre la consola: `not raw and sys.stdin.isatty() and sys.stdout.isatty()`.
+- **Salida:** los `*_summary` de `cli.py` pasan a `render.py` (mejora 3 de §5), para que la CLI y la
+  consola usen el mismo formato.
+- **Tests:**
+  - Motor de entrada inyectable. Con `prompt_toolkit`, usar `create_pipe_input`; con el motor de la stdlib,
+    un iterador de líneas.
+  - Tests con un harness falso para: asistente → init, `/constitution` con texto → paso ejecutado,
+    Ctrl+C durante un paso → vuelta al prompt, sin TTY → comportamiento actual.
+
+### 6.4 Entregables por fases
+1. **MVP:** `speckfish` abre una consola con la stdlib, el asistente de init (agente e idioma) y los
+   comandos `/constitution`, `/specify`, `/plan`, `/tasks`, `/review`, `/status`, `/help` y `/exit`, todos
+   sobre `HANDLERS`.
+2. **Experiencia completa:** extra `[tui]` con `prompt_toolkit` (menú `/`, autocompletado, editor
+   multilínea, selector de feature), cabecera de estado y "Enter = siguiente paso".
+3. **Integración:** confirmaciones de permisos (S1), presupuesto visible, historial y `/harness`/`/model`
+   por sesión. Las tareas de VS Code (`editors.py`) pueden abrir `speckfish` directamente.
+
+---
+
+## 7. Plan de acción
 
 ### Sprint 1: correcciones rápidas de alto impacto (1–2 PRs, ~1 día)
 - [ ] **B1**: no sobrescribir `features.json` en dry-run, con test.
@@ -326,6 +454,17 @@ Acción: un `try/except (OSError, ValueError)` en esos puntos, con un mensaje cl
 - [ ] Ruff `S`/`PERF`/`RUF`, `pytest-cov` con umbral y `mypy` gradual.
 - [ ] `SECURITY.md` y la sección de seguridad del README (cómo ejecutar en CI de forma aislada).
 - [ ] Retención automática de runs (**P5**) y `.meta.json` por paso.
+
+### Sprint 5: CLI interactiva (§6) (~4–6 días; conviene después de P2 y de S1)
+- [ ] Extraer `render.py` desde `cli.py` (formato compartido entre CLI y consola).
+- [ ] `shell.py`: `speckfish` sin argumentos y con TTY abre la consola; sin TTY, comportamiento actual.
+- [ ] Asistente de init: detectar CLIs instaladas, elegir agente, idioma y respaldo, y luego `do_init`.
+- [ ] Comandos `/` generados desde `registry.STEPS` y `SKILL_SPECS`, que llaman a `HANDLERS`.
+- [ ] `/constitution` (y el resto de pasos con entrada) con editor multilínea, `@fichero` y vista previa.
+- [ ] Cabecera de estado y "Enter = siguiente paso" a partir de `next_step`.
+- [ ] Ctrl+C cancela el paso sin salir de la consola, y `/implement` pide confirmación con los permisos visibles.
+- [ ] Extra `speckfish[tui]` con `prompt_toolkit` (menú, autocompletado, selector de feature).
+- [ ] Tests con entrada simulada y harness falso, y documentación en el README (GIF o captura del flujo).
 
 ### Criterios de aceptación globales
 - Todos los hallazgos 🔴 tienen un test de regresión.
