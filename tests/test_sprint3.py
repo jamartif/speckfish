@@ -369,7 +369,8 @@ def test_trust_command_records_shows_and_refuses_when_there_is_nothing(tmp_path,
     assert C.main(["--root", root, "--json", "trust", "--show"]) == C.EXIT_OK
     data = json.loads(capsys.readouterr().out)
     assert data["trusted"] is True and data["path"].endswith("vendor/egm") and len(data["hash"]) == 64
-    assert str(egm.resolve()) in trust.dump_store()
+    # compare the parsed store: as JSON text a Windows path has every backslash doubled, so `in` never matches
+    assert str(egm.resolve()) in json.loads(trust.dump_store())
 
 
 def test_doctor_reports_an_untrusted_egm(tmp_path, real_trust):
