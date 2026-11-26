@@ -215,6 +215,24 @@ review works with any of the three agents regardless of which Spec Kit integrati
 
 ## Usage
 
+### Interactive console
+
+Run `speckfish` alone inside a project directory (in a terminal) to open the console. The first time it
+offers to initialise the project and asks which agent CLI to use; after that you work with `/commands`:
+
+```
+speckfish › /constitution        # opens a small editor: write the principles, empty line to send
+speckfish › /specify a task CLI  # or without text to open the editor, or @brief.md
+speckfish › /go                  # idea -> spec -> plan -> tasks -> review
+speckfish › (Enter)              # run the suggested next step, after confirming
+speckfish › /harness copilot     # change the agent for this session only
+```
+
+`/help` lists them all. Every `/command` is the same subcommand you would type in the shell, so nothing
+works differently inside the console. Outside a terminal (pipes, CI) `speckfish` with no arguments keeps
+printing the usage.
+
+
 ### The short way: `go`
 
 ```bash

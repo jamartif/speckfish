@@ -456,15 +456,18 @@ speckfish ›
 - [ ] Retención automática de runs (**P5**) y `.meta.json` por paso.
 
 ### Sprint 5: CLI interactiva (§6) (~4–6 días; conviene después de P2 y de S1)
+**MVP hecho** (`src/speckfish/shell.py`, `tests/test_shell.py`): consola con stdlib, asistente de init,
+`/comandos` sobre `HANDLERS`, editor multilínea, confirmación de `/implement`, Ctrl+C y Enter = siguiente
+paso. Quedan sin marcar las partes de la experiencia completa.
 - [ ] Extraer `render.py` desde `cli.py` (formato compartido entre CLI y consola).
-- [ ] `shell.py`: `speckfish` sin argumentos y con TTY abre la consola; sin TTY, comportamiento actual.
-- [ ] Asistente de init: detectar CLIs instaladas, elegir agente, idioma y respaldo, y luego `do_init`.
-- [ ] Comandos `/` generados desde `registry.STEPS` y `SKILL_SPECS`, que llaman a `HANDLERS`.
-- [ ] `/constitution` (y el resto de pasos con entrada) con editor multilínea, `@fichero` y vista previa.
-- [ ] Cabecera de estado y "Enter = siguiente paso" a partir de `next_step`.
-- [ ] Ctrl+C cancela el paso sin salir de la consola, y `/implement` pide confirmación con los permisos visibles.
+- [x] `shell.py`: `speckfish` sin argumentos y con TTY abre la consola; sin TTY, comportamiento actual.
+- [x] Asistente de init: detectar CLIs instaladas, elegir agente e idioma, y luego `do_init` (falta el agente de respaldo).
+- [ ] Comandos `/` generados desde `registry.STEPS` y `SKILL_SPECS`, que llaman a `HANDLERS` (el MVP llama a `HANDLERS`, pero la ayuda y `TEXT_STEPS` están escritas a mano).
+- [x] `/constitution` (y el resto de pasos con entrada) con editor multilínea y `@fichero` (falta la vista previa).
+- [x] Cabecera de estado y "Enter = siguiente paso" a partir de `next_step`.
+- [x] Ctrl+C cancela el paso sin salir de la consola, y `/implement` pide confirmación (falta mostrar los permisos concretos, depende de S1).
 - [ ] Extra `speckfish[tui]` con `prompt_toolkit` (menú, autocompletado, selector de feature).
-- [ ] Tests con entrada simulada y harness falso, y documentación en el README (GIF o captura del flujo).
+- [x] Tests con entrada simulada (27) y documentación en README y CHANGELOG. Falta una captura del flujo.
 
 ### Criterios de aceptación globales
 - Todos los hallazgos 🔴 tienen un test de regresión.

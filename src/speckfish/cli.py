@@ -375,6 +375,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("doctor", help="check environment, harness, specify and EGM")
 
+    sub.add_parser("shell", help="interactive console (also: run `speckfish` alone in a terminal)")
+
     sp = sub.add_parser("specify", help="create/update spec.md")
     sp.add_argument("description", nargs="?", default="",
                     help="feature description, or @path/to/brief.md (omit with --only/--from-feature)")
@@ -1158,9 +1160,14 @@ def cmd_status(run: Run) -> int:
     return EXIT_OK
 
 
+def cmd_shell(run: Run) -> int:
+    from .shell import run_shell
+    return run_shell(run.cfg.root)
+
+
 # one handler per subcommand: adding a command is adding a row here and a parser above
 HANDLERS = {
-    "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
+    "shell": cmd_shell, "go": cmd_go, "next": cmd_next, "revise": cmd_revise, "status": cmd_status,
     "editors": cmd_editors, "init": cmd_init, "doctor": cmd_doctor, "specify": cmd_specify,
     "plan": cmd_plan, "review": cmd_review, "drift": cmd_drift, "pipeline": cmd_pipeline,
     "features": cmd_features, "config": cmd_config, "runs": cmd_runs, "report": cmd_report,
@@ -1172,6 +1179,10 @@ HANDLERS = {
 
 def main(argv: list[str] | None = None) -> int:
     raw = list(sys.argv[1:] if argv is None else argv)
+    if not raw:
+        from .shell import is_interactive, run_shell
+        if is_interactive():
+            return run_shell(".")        # no subcommand in a terminal: the console; a pipe keeps the usage error
     args = build_parser().parse_args(normalize_argv(raw))
     cfg = Config.load(Path(args.root))
     if args.harness:

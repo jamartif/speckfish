@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## Unreleased
+
+- `speckfish` with no arguments in a terminal opens an interactive console (`speckfish shell` does the same explicitly). In a pipe or in CI it still prints the usage error, so scripts do not change.
+  - First run: a wizard offers to run `init`, lists the installed agent CLIs (claude, copilot, codex) with their version and asks which to use and the document language.
+  - `/command` runs the same subcommand the command line would (`/constitution`, `/specify`, `/plan`, `/review`, `/go`, `/status`, …); a bare line is offered as `/go <idea>`; an empty line runs the suggested next step after asking.
+  - Steps that take free text (`/constitution`, `/specify`, `/plan`, `/go`, `/brainstorm`) open a multi-line editor when no text is given. `@file.md` imports a file.
+  - `/implement` and `/go --implement` ask for confirmation instead of needing `--yes`; selecting codex warns that it runs without a sandbox. `/harness` and `/model` change the agent for the session only.
+  - Ctrl+C stops the running step and returns to the prompt.
+
 ## v0.2.1 — 2026-11-24
 
 - An agent that printed its final event (`result` for Claude/Copilot, `turn.completed` for Codex) but does not exit is closed after 45 s (`SPECKFISH_RESULT_GRACE`), instead of waiting 10 minutes for the idle limit; what the step wrote decides the verdict. Seen with Claude on Windows after an EGM review.
