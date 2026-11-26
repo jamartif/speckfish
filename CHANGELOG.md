@@ -3,7 +3,19 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
-## Unreleased
+## v0.3.0 — 2026-11-26
+
+This release adds an interactive console, a permission model and a security and CI audit's worth of fixes. Five
+changes need an action when you upgrade (the first block below); everything else is additive.
+
+**Upgrading from 0.2.x**
+
+- Codex needs your consent (`config unsafe=true`, `--unsafe`, or `SPECKFISH_UNSAFE=1`).
+- An EGM checkout that comes with a project (`vendor/egm`) is not loaded until `speckfish trust`.
+- `@file` only reads inside the project (`--allow-outside-root` overrides it).
+- Old run folders are deleted automatically, keeping the newest 50 (`config keep_runs=N`, `0` = never).
+- Regenerate the VS Code tasks with `speckfish editors`: they no longer go through a shell.
+
 
 Full-screen console and README:
 
