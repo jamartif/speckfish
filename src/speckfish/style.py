@@ -20,7 +20,7 @@ def _windows_vt() -> bool:
     if _WINDOWS_VT is None:
         try:
             import ctypes
-            kernel32 = ctypes.windll.kernel32           # type: ignore[attr-defined]
+            kernel32 = ctypes.windll.kernel32           # type: ignore[attr-defined,unused-ignore]
             handle = kernel32.GetStdHandle(-11)         # STD_OUTPUT_HANDLE
             mode = ctypes.c_uint32()
             ok = bool(kernel32.GetConsoleMode(handle, ctypes.byref(mode)))

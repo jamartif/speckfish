@@ -296,8 +296,10 @@ def do_doctor(cfg: Config) -> dict:
         info["egm"]["pinned"] = info["egm"]["commit"] == EGM_COMMIT
         from . import trust
         info["egm"]["trusted"], info["egm"]["trust_note"] = trust.status(cfg, egm)
-        if info["harness"] and info["harness"].get("binary") == which("copilot"):
-            code, o, e = run_cmd([which("copilot"), "--plugin-dir", norm(egm),
+        copilot = which("copilot")
+        # `binary` is absent when no agent is installed: None == None must not look like "this is copilot"
+        if copilot and info["harness"] and info["harness"].get("binary") == copilot:
+            code, o, e = run_cmd([copilot, "--plugin-dir", norm(egm),
                                   "plugin", "list"], timeout=120,
                                  env={"COPILOT_OFFLINE": "true"})
             info["egm"]["copilot_registration"] = (o or e).strip()[-400:]

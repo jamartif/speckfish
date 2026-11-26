@@ -404,3 +404,18 @@ def test_installing_the_pinned_egm_trusts_it(tmp_path, real_trust, monkeypatch):
     (proj / "vendor" / "egm" / "plugin.json").write_text("{}")
     trust.forget_cache()
     assert trust.status(_cfg(proj), proj / "vendor" / "egm")[0] is False
+
+
+def test_doctor_with_no_agent_installed_does_not_try_to_run_copilot(tmp_path, monkeypatch):
+    """`binary` is missing from the harness info when nothing is installed: None == which("copilot") is None."""
+    from speckfish import steps as S
+    _egm(tmp_path / "vendor" / "egm")
+    monkeypatch.setattr(S, "which", lambda name: None)
+    monkeypatch.setattr(S, "get_harness", lambda cfg, name=None: (_ for _ in ()).throw(SystemExit("none installed")))
+    def only_not_copilot(argv, **kw):
+        assert argv[0] is not None and "copilot" not in str(argv[0]), f"ran copilot: {argv}"
+        return 1, "", ""                                       # git rev-parse and friends: nothing to report
+
+    monkeypatch.setattr(S, "run_cmd", only_not_copilot)
+    info = S.do_doctor(_cfg(tmp_path))
+    assert "error" in info["harness"] and info["egm"]["present"] is True

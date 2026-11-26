@@ -30,7 +30,7 @@ JOB_OBJECT_EXTENDED_LIMIT_INFORMATION = 9
 
 
 def _kernel32() -> Any:
-    return ctypes.windll.kernel32           # type: ignore[attr-defined]
+    return ctypes.windll.kernel32           # type: ignore[attr-defined,unused-ignore]
 
 
 # ---------------------------------------------------------------- job object
@@ -139,9 +139,9 @@ def kill_tree(proc: subprocess.Popen, job: Job | None = None, wait: float = 8.0,
         if _dead(proc, 3.0):
             return True, "stopped (taskkill)"
     else:
-        tried.append("process group")
+        tried.append("process group")                      # POSIX only: Windows takes the branch above
         with contextlib.suppress(Exception):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)   # type: ignore[attr-defined,unused-ignore]
     tried.append("kill")
     with contextlib.suppress(Exception):
         proc.kill()

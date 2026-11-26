@@ -181,7 +181,9 @@ def test_the_real_cli_handles_the_commands_the_console_offers(tmp_path):
         assert name in C.HANDLERS and name in parser._subparsers._group_actions[0].choices
 
 
-def test_ctrl_d_leaves_and_header_shows_the_next_step(tmp_path):
+def test_ctrl_d_leaves_and_header_shows_the_next_step(tmp_path, monkeypatch):
+    # the header is cut at the terminal width: a long temp folder name must not decide the test
+    monkeypatch.setattr(SH.shutil, "get_terminal_size", lambda fallback=None: type("S", (), {"columns": 300, "lines": 30})())
     c = Console(tmp_path, [])
     assert c.shell.run() == 0
     assert "next: /constitution" in c.screen
