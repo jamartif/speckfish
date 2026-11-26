@@ -184,6 +184,7 @@ def test_keep_runs_is_validated_and_saved(tmp_path):
 
 def test_a_step_leaves_a_meta_file_with_no_prompt_and_no_secrets(tmp_path, monkeypatch):
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "s3cr3t-value")
+    monkeypatch.setattr(R, "_VERSIONS", {})            # empty: this test fakes `doctor` and wants it asked
     cfg = _cfg(tmp_path)
     prompt = "PRIVATE-BRIEF " + "x" * 400
 

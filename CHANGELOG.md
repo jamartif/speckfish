@@ -5,6 +5,14 @@ Every release is published with the wheel, the source distribution and `SHA256SU
 
 ## Unreleased
 
+Cleaner console output:
+
+- While an agent works there is **one live line** (spinner, step, clock, what it is doing in words, how many actions) cut to the real width of the terminal, so it never wraps. Commands are described instead of dumped: `[System.IO.File]::ReadAllText('C:\\Users\\…\\SKILL.md')` shows as `reading .agents/skills/speckit-constitution/SKILL.md`, `Get-ChildItem -Force .specify; …` as `listing .specify`, `git status --short; …` as `git status`.
+- Only **milestones stay on screen**: files written or edited, subagents, warnings. `--verbose` (or `SPECKFISH_VERBOSE=1`, or `/verbose` in the console) keeps every action, in plain words. Without a terminal (CI, a pipe) every action is still one plain line, now without the JSON escaping.
+- Each step's summary says what the agent did (`agent: 14 commands · wrote .specify/memory/constitution.md · 2 subagents`) and is coloured (OK green, FAILED/BLOCKER/ERROR red, WARNING yellow). Colour is only used on a terminal; `NO_COLOR` turns it off, and JSON output is never touched.
+- The console leaves a blank line between a step's result and the next prompt.
+- `workspace` and the tests no longer depend on which test happened to cache `git` first.
+
 Permission model and CI hardening (see `AUDITORIA.md`, Sprints 3 and 4, and `SECURITY.md`).
 
 **Changes you will notice when upgrading**

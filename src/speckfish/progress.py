@@ -14,11 +14,23 @@ from __future__ import annotations
 import contextlib
 import json
 import re
+import shutil
 import sys
 import threading
 import time
 
+from .style import paint, supports_color
+
 ENABLED = True          # the CLI clears this for --no-progress / --json / --quiet
+VERBOSE = False         # --verbose / SPECKFISH_VERBOSE=1: every action stays on screen, not only the milestones
+_LAST: dict | None = None
+
+
+def take_last() -> dict | None:
+    """What the step that just stopped did (actions, files, subagents); read once, then cleared."""
+    global _LAST
+    last, _LAST = _LAST, None
+    return last
 
 
 # tools worth naming in the status line, in the order we prefer to show them
@@ -69,14 +81,101 @@ def _short(text: str, limit: int = _MAX_ACTIVITY) -> str:
     return text if len(text) <= limit else text[: limit - 1] + "…"
 
 
+# ---------- turning a shell command into what a person would say ----------
+
+_QUOTED = re.compile(r"""['"]([^'"\n]*(?:[\\/][^'"\n]*|\.[A-Za-z0-9]{1,6}))['"]""")
+_WRITE = re.compile(r"WriteAllText|WriteAllLines|Set-Content|Add-Content|Out-File|New-Item|Move-Item|Copy-Item|"
+                    r"Remove-Item|\bsed\s+-i|\btee\b|>>?\s*[\w./\\$'\"]", re.I)
+_READ = re.compile(r"ReadAllText|ReadAllLines|Get-Content|\bcat\b|\btype\b|\bsed\s+-n|\bhead\b|\btail\b|"
+                   r"Select-String\s+-Path", re.I)
+_LIST = re.compile(r"Get-ChildItem|\bls\b|\bdir\b|\btree\b|\bfind\b|Test-Path|Resolve-Path", re.I)
+_SEARCH = re.compile(r"\brg\b|\bgrep\b|Select-String|findstr|Get-ChildItem[^;|]*-Recurse[^;|]*-Filter", re.I)
+_TOOLS = ("dotnet", "npm", "pnpm", "yarn", "pytest", "python", "python3", "node", "cargo", "go", "make", "uv",
+          "pip", "mvn", "gradle", "tsc", "ruff", "mypy")
+
+
+def clean_command(text: str) -> str:
+    """The command as a person would type it: no shell wrapper, no JSON escaping, no quoting leftovers.
+
+    Codex reports `powershell.exe -Command "...\\..."` as an escaped string, so a path arrives as
+    `C:\\\\Users\\\\x` and a quote as `\\"`; both read as noise in a status line.
+    """
+    out = str(text or "").replace("'\"'", "'").replace('"\'"', "'")
+    out = out.replace('\\"', '"').replace("\\\\", "\\")
+    out = _short(out, 100000).strip()
+    # `_short` strips a quote at each end, which also eats the closing quote of a quoted last argument
+    for quote in ('"', "'"):
+        if out.count(quote) % 2 and out.rstrip().endswith(("\\", ".md", ".cs", ".json", ".ps1", ".py", ".txt")):
+            out += quote
+    return out
+
+
+def describe_command(command: str, root: str = "") -> str:
+    """`reading specs/001/spec.md`, `listing .specify`, `git status`, `running dotnet build`..."""
+    text = clean_command(command)
+    rel = lambda p: _rel_to(root, p)                       # noqa: E731
+
+    def first_path() -> str:
+        for m in _QUOTED.finditer(text):
+            return rel(m.group(1))
+        m = re.search(r"(?:^|\s)([\w.\-]+(?:[/\\][\w.\- /\\]*)+)", text)
+        return rel(m.group(1)) if m else ""
+
+    if _WRITE.search(text):
+        target = first_path()
+        return f"writing {target}" if target else "writing files"
+    first = re.split(r"[;\n|]", text.strip(), maxsplit=1)[0].strip()
+    word = first.split(None, 1)[0].lower() if first else ""
+    if word == "git":
+        parts = first.split()
+        sub = next((p for p in parts[1:] if not p.startswith("-")), "")
+        return f"git {sub}".strip()
+    if _SEARCH.search(first) and word not in ("get-childitem", "ls", "dir"):
+        return "searching the project"
+    if _READ.search(text):
+        target = first_path()
+        return f"reading {target}" if target else "reading a file"
+    if _LIST.search(first):
+        target = first_path()
+        m = re.search(r"(?:Get-ChildItem|\bls\b|\bdir\b)\s+(?:-\w+\s+)*([^\s;|-][^\s;|]*)", first, re.I)
+        where = rel(m.group(1).strip("'\"")) if m and m.group(1) not in ("-Force",) else target
+        return f"listing {where}" if where else "listing files"
+    script = re.search(r"-File\s+['\"]?([^\s'\"]+)", first)
+    if script:
+        return f"running {script.group(1).replace(chr(92), '/').rsplit('/', 1)[-1]}"
+    if word in _TOOLS:
+        parts = [p for p in first.split() if not p.startswith("-")][:2]
+        return "running " + " ".join(parts)
+    return "running " + _short(first, 50)
+
+
+def _slashes(path: str) -> str:
+    """`C:\\\\Users\\x` and `C:\\Users\\x` both become `C:/Users/x`."""
+    return re.sub(r"/{2,}", "/", str(path or "").replace("\\", "/"))
+
+
+def _rel_to(root: str, path: str) -> str:
+    text = _slashes(path).strip("'\"")
+    base = str(root or "").replace("\\", "/").rstrip("/")
+    if base and text.lower() == base.lower():
+        return "."
+    if base and text.lower().startswith(base.lower() + "/"):
+        text = text[len(base) + 1:]
+    return _short(text, 70)
+
+
+# the live line cycles through these on a plain ASCII spinner: it renders in every console font
+_SPINNER = "|/-\\"
+
+
 class Progress:
     """Thread-safe, best-effort status line for one running step."""
 
     def __init__(self, label: str, enabled: bool = True, stream=None, every: float = 1.0,
                  plain_every: float = 10.0, hint: str | None = None, plain_only: bool = False,
-                 root: str = ""):
+                 root: str = "", verbose: bool | None = None, color: bool | None = None):
         self.label = label
-        self.root = str(root or "").replace("\\", "/")
+        self.root = _slashes(root)
         self.hint = hint if hint is not None else EXPECTED.get(label, "")
         self.enabled = bool(enabled and ENABLED)
         self.stream = stream if stream is not None else sys.stderr
@@ -99,6 +198,12 @@ class Progress:
         self.done = False
         self.finished = False
         self.tokens = 0
+        self.verbose = VERBOSE if verbose is None else verbose
+        self.color = supports_color(self.stream) if color is None else color
+        self.current = ""                  # what the agent is doing right now, in words
+        self.commands = 0
+        self.files: list[str] = []
+        self._spin = 0
 
     # ---------- lifecycle ----------
     def __enter__(self) -> Progress:
@@ -124,6 +229,12 @@ class Progress:
         self.done = True
         if self.is_tty:
             self._clear()
+        global _LAST
+        _LAST = self.summary()
+
+    def summary(self) -> dict:
+        return {"actions": self.tools, "commands": self.commands, "files": list(self.files),
+                "subagents": list(self.subagents)}
 
     # ---------- feeding ----------
     def feed(self, line: str) -> None:
@@ -175,22 +286,23 @@ class Progress:
             if not started:
                 self.tools += 1
                 self.last_tool = "shell"
-                cmd = _short(item.get("command") or "")
+                cmd = clean_command(item.get("command") or "")
                 if cmd:
-                    self.activity(f"$ {cmd}")
+                    self.commands += 1
+                    self.activity(f"$ {_short(cmd)}", human=describe_command(cmd, self.root))
         elif kind == "file_change":
             changes = item.get("changes") or []
             for change in (changes if isinstance(changes, list) else []):
                 path = str((change or {}).get("path") or "")
                 if path:
-                    self.activity(f"wrote {self.relpath(path)}")
+                    self._wrote("wrote", path)
         elif kind in ("agent_message", "reasoning") and not started:
             if str(item.get("text") or item.get("reasoning") or "").strip():
                 self.last_tool = "thinking"
         elif kind == "error" and not started:
             msg = _short(item.get("message") or "", 100)
             if msg and "Model metadata" not in msg:      # harmless provider warning
-                self.activity(f"warning: {msg}")
+                self.activity(f"warning: {msg}", milestone=True, style="yellow")
 
     def _tool(self, name: str, payload: dict) -> None:
         if not name:
@@ -201,42 +313,62 @@ class Progress:
             sub = str(payload.get("subagent_type") or payload.get("description") or "").strip()
             if sub and sub not in self.subagents:
                 self.subagents.append(sub)
-                self.activity(f"subagent {_short(sub, 60)}")
+                self.activity(f"subagent {_short(sub, 60)}", milestone=True, style="cyan")
         elif name in ("Write", "Edit"):
             path = str(payload.get("file_path") or payload.get("path") or "")
             if path:
-                verb = "wrote" if name == "Write" else "edited"
-                self.activity(f"{verb} {self.relpath(path)}")
+                self._wrote("wrote" if name == "Write" else "edited", path)
         elif name == "Read":
             path = str(payload.get("file_path") or payload.get("path") or "")
             if path:
-                self.activity(f"read {self.relpath(path)}")
+                self.activity(f"read {self.relpath(path)}", human=f"reading {self.relpath(path)}")
         elif name in ("Bash", "PowerShell"):
-            cmd = str(payload.get("command") or "")
+            cmd = clean_command(str(payload.get("command") or ""))
             if cmd:
-                self.activity(f"$ {_short(cmd)}")
+                self.commands += 1
+                self.activity(f"$ {_short(cmd)}", human=describe_command(cmd, self.root))
+
+    def _wrote(self, verb: str, path: str) -> None:
+        rel = self.relpath(path)
+        if rel not in self.files:
+            self.files.append(rel)
+        self.activity(f"{verb} {rel}", milestone=True, style="green")
 
     def relpath(self, path: str) -> str:
         """Show paths relative to the project: absolute ones add nothing readable."""
-        text = str(path or "").replace("\\", "/")
+        text = _slashes(path)
         if self.root and text.lower().startswith(self.root.lower().rstrip("/") + "/"):
             text = text[len(self.root.rstrip("/")) + 1:]
         return _short(text, 70)
 
     # ---------- activity ----------
-    def activity(self, text: str) -> None:
-        """Permanent line for something that actually happened."""
+    def activity(self, text: str, *, human: str | None = None, milestone: bool = False,
+                  style: str = "") -> None:
+        """Something the agent did.
+
+        On a terminal only milestones (files written, subagents, warnings) stay on screen; every other action
+        just updates the live line, so a run is a handful of lines instead of a scrolling log (`--verbose`
+        keeps them all). Without a terminal (CI, a pipe) every action is one plain line, as before.
+        """
         if not self.enabled or not text:
             return
         with self._lock:
             if text == self._last_activity:      # a repeated action is noise
                 return
             self._last_activity = text
+            self.current = human or text
+            if self.is_tty and not (milestone or self.verbose):
+                return
             stamp = _mmss(time.monotonic() - self._t0)
             if self.is_tty:
                 self._clear()
                 self._printed = 0
-            self.stream.write(f"[{self.label}] {stamp} | {text}" + "\n")
+                shown = human or text
+                line = f"  {paint(stamp, 'grey', on=self.color)}  {paint(shown, style, on=self.color)}" \
+                    if style else f"  {paint(stamp, 'grey', on=self.color)}  {shown}"
+            else:
+                line = f"[{self.label}] {stamp} | {text}"
+            self.stream.write(line + "\n")
             self.stream.flush()
 
     # ---------- rendering ----------
@@ -257,16 +389,42 @@ class Progress:
             extra.append(f"starting, {self.hint}")
         return head + ((" | " + " | ".join(extra)) if extra else "")
 
+    def width(self) -> int:
+        return max(20, shutil.get_terminal_size((100, 24)).columns - 1)
+
+    def live_line(self) -> str:
+        """One line that never wraps: spinner, step, clock, what it is doing, how much it has done."""
+        self._spin = (self._spin + 1) % len(_SPINNER)
+        parts = [f"{_SPINNER[self._spin]} {self.label}  {_mmss(time.monotonic() - self._t0)}"]
+        if self.current:
+            parts.append(self.current)
+        elif self.hint:
+            parts.append(f"starting, {self.hint}")
+        extra = []
+        if self.subagents:
+            extra.append(f"{len(self.subagents)} subagent(s)")
+        if self.tools:
+            extra.append(f"{self.tools} actions")
+        if self.finished:
+            extra.append("finishing")
+        if extra:
+            parts.append(" ".join(extra))
+        text = "  ·  ".join(parts)
+        width = self.width()
+        return text if len(text) <= width else text[:width - 1] + "…"
+
     def _tick(self) -> None:
         while not self._stop.wait(self.every):
             self._draw()
 
     def _draw(self, force: bool = False) -> None:
-        text = self.status()
         if self.is_tty:
-            self._write(f"\r{text}{' ' * max(0, self._printed - len(text))}")
+            text = self.live_line()
+            shown = paint(text, "dim", on=self.color)
+            self._write(f"\r{shown}{' ' * max(0, self._printed - len(text))}")
             self._printed = len(text)
             return
+        text = self.status()
         now = time.monotonic()
         if force or now - self._last_plain >= self.plain_every:
             self._last_plain = now

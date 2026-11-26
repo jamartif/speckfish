@@ -42,6 +42,7 @@ SESSION_COMMANDS = {
     "feature": "choose the active feature (or /feature NAME)",
     "harness": "change the agent CLI for this session (claude | copilot | codex | auto)",
     "model": "change the model for this session",
+    "verbose": "show every action the agent takes (on | off), not only the files it writes",
     "help": "show the commands",
     "exit": "leave the console (Ctrl+D also works)",
 }
@@ -132,6 +133,7 @@ class Shell:
         self.harness: str | None = None      # session overrides; the saved config is not touched
         self.model: str | None = None
         self.unsafe = False                  # the person accepted an agent with no sandbox this session
+        self.verbose = False
         self.last_code = 0
 
     # ---------- io ----------
@@ -349,6 +351,8 @@ class Shell:
             argv += ["--model", self.model]
         if self.unsafe:
             argv += ["--unsafe"]
+        if self.verbose:
+            argv += ["--verbose"]
         return argv
 
     def run_cli(self, argv: list[str]) -> int:
@@ -391,6 +395,10 @@ class Shell:
             return self.choose_feature(rest)
         if name in SESSION_ONLY:
             return self.set_session(name, rest)
+        if name == "verbose":
+            self.verbose = (rest[0].lower() not in ("off", "0", "no", "false")) if rest else not self.verbose
+            self.say(f"verbose {'on: every action stays on screen' if self.verbose else 'off'} (this session)")
+            return True
         if name == "next":
             return self.run_suggestion()
         return self.command(name, rest)
@@ -473,6 +481,7 @@ class Shell:
                 return True
             rest = ["--yes", *rest]          # before any `--`: after it everything is free text
         self.run_cli([name, *rest])
+        self.say("")                         # air between a step's result and the next prompt
         return True
 
     VALUE_FLAGS = frozenset({"--stack", "--max-features", "--budget", "--chunk", "--max-chunks",

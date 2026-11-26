@@ -52,6 +52,7 @@ class StepResult:
     interactive: bool = False
     raw_tail: str = ""
     review: dict | None = None     # `specify --review`: the spec's review, as a result dict
+    activity: dict | None = None   # what the agent did: actions, commands, files written, subagents
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if k not in ("raw_tail",)}
@@ -499,9 +500,12 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     is_implement = kind == "implement"
     before_tasks = task_progress(Path(cwd)) if is_implement else None
     before_git = git_snapshot(Path(cwd)) if is_implement else None
+    from . import progress as _progress
+    _progress.take_last()                       # forget what an earlier step left
     code, out, err, duration, timed_out, idle_closed = execute(
         harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label,
         env_allowlist=cfg.env_allowlist)
+    activity = _progress.take_last()
     idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     if idle_closed and not timed_out:
         # the agent was stopped by us after going quiet, so the exit code is ours, not its verdict:
@@ -529,6 +533,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error = human_error(out, err, code)
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
+    res.activity = activity
     postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git, kind=kind)
     if idle_closed:
         # the work landed but the CLI never exited: keep it when the step's own output is there

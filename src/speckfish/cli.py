@@ -4,6 +4,7 @@ from __future__ import annotations
 import argparse
 import contextlib
 import json
+import os
 import sys
 import textwrap
 from pathlib import Path
@@ -21,8 +22,27 @@ EXIT_OK, EXIT_BLOCKERS, EXIT_ERROR, EXIT_ENV = 0, 1, 2, 3
 def emit(obj, as_json: bool, human: str | None = None) -> None:
     if as_json:
         print(json.dumps(obj, indent=2, ensure_ascii=False))
+    elif human is not None:
+        from .style import colorize_summary, supports_color
+        print(colorize_summary(human) if supports_color(sys.stdout) else human)
     else:
-        print(human if human is not None else json.dumps(obj, indent=2, ensure_ascii=False))
+        print(json.dumps(obj, indent=2, ensure_ascii=False))
+
+
+def _activity_line(act: dict | None) -> str:
+    """`14 commands · wrote 2 files · 3 subagents`: what the agent did, in one line."""
+    if not act:
+        return ""
+    bits = []
+    if act.get("commands"):
+        bits.append(f"{act['commands']} command{'s' if act['commands'] != 1 else ''}")
+    files = act.get("files") or []
+    if files:
+        shown = ", ".join(files[:3]) + (f" (+{len(files) - 3})" if len(files) > 3 else "")
+        bits.append(f"wrote {shown}")
+    if act.get("subagents"):
+        bits.append(f"{len(act['subagents'])} subagent{'s' if len(act['subagents']) != 1 else ''}")
+    return "  agent: " + " · ".join(bits) if bits else ""
 
 
 def _rel(path: str, root: str | None) -> str:
@@ -75,6 +95,10 @@ def summarize(res: dict, root: str | None = None) -> str:
     if not ok and res.get("exit_code"):
         head += f"  ·  exit {res['exit_code']}"
     lines = [head]
+
+    done = _activity_line(res.get("activity"))
+    if done:
+        lines.append(done)
 
     verdict = (res.get("verdict") or "").strip()
     if verdict:
@@ -334,7 +358,8 @@ def exit_for(res: dict) -> int:
 
 
 GLOBAL_FLAGS_VALUE = {"--root", "--harness", "--model", "--fallback"}
-GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run", "--unsafe", "--allow-outside-root"}
+GLOBAL_FLAGS_BOOL = {"--json", "--stream", "--quiet", "--dry-run", "--unsafe", "--allow-outside-root",
+                     "--verbose"}
 
 
 def normalize_argv(argv: list[str]) -> list[str]:
@@ -383,6 +408,8 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--stream", action="store_true", default=True,
                         help="forward agent output to stderr (default)")
     common.add_argument("--quiet", action="store_true", help="do not forward agent output")
+    common.add_argument("--verbose", action="store_true",
+                        help="keep every action the agent takes on screen (default: files written and subagents)")
     common.add_argument("--no-progress", action="store_true",
                         help="do not print the live progress line while an agent works")
     common.add_argument("--dry-run", action="store_true", help="print the command without running it")
@@ -1293,6 +1320,7 @@ def main(argv: list[str] | None = None) -> int:
         args.fallback = cfg.fallback           # saved with `config fallback=copilot` or by the console wizard
     from . import progress as _progress
     _progress.ENABLED = not (getattr(args, "no_progress", False) or args.quiet or args.json)
+    _progress.VERBOSE = bool(getattr(args, "verbose", False) or os.environ.get("SPECKFISH_VERBOSE") == "1")
     handler = HANDLERS.get(args.cmd)
     if handler is None:
         return EXIT_ERROR

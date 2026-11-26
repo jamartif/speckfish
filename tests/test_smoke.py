@@ -1355,7 +1355,7 @@ def test_activity_does_not_deadlock_the_reader_on_a_tty():
             return True
 
     buf = TTY()
-    p = Progress("specify-4", enabled=True, stream=buf, every=0.01)
+    p = Progress("specify-4", enabled=True, stream=buf, every=0.01, verbose=True)
     p.start()
     time.sleep(0.05)          # the status line must be on screen (_printed > 0) for the bug to bite
     done = threading.Event()
