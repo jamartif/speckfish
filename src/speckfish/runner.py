@@ -13,7 +13,7 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 
-from .config import Config, is_windows, norm
+from .config import Config, env_number, is_windows, norm
 from .harnesses import Harness, StepInvocation
 from .registry import missing_output
 from .workspace import _git_dirty, feature_dir, git_snapshot, task_progress  # noqa: F401  (re-exported)
@@ -104,7 +104,15 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         popen_kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP
     else:
         popen_kwargs["start_new_session"] = True
-    proc = subprocess.Popen(inv.argv, **popen_kwargs)
+    try:
+        proc = subprocess.Popen(inv.argv, **popen_kwargs)
+    except OSError as e:
+        # the binary vanished, is not executable or is a Windows shim: a failed step, not a traceback,
+        # and the progress line must not be left running
+        meter.stop()
+        message = f"cannot launch {inv.argv[0]}: {e}"
+        log_path.write_text("$ " + " ".join(inv.argv) + "\n\n" + message + "\n", encoding="utf-8")
+        return 127, "", message, time.time() - started, False, False
     out_chunks: list[str] = []
     err_chunks: list[str] = []
     log = log_path.open("w", encoding="utf-8")
@@ -136,14 +144,16 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     idle_closed = False
     # an agent can finish its work and never exit (EGM's final pass does this): a long silence with
     # the process still alive is a finished run, not a hang worth burning the whole timeout on
-    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     # once the agent has printed its final event ("result" / "turn.completed") a process that does not
     # exit is only hanging on its way out (seen with Claude on Windows: 10 minutes after the last report)
-    grace = int(os.environ.get("SPECKFISH_RESULT_GRACE", "45"))
+    grace = int(env_number("SPECKFISH_RESULT_GRACE", 45))
+    # how often the timeout and the inactivity rule are looked at: it is the latency of both
+    poll = env_number("SPECKFISH_POLL_SECONDS", 1.0, minimum=0.01)
     try:
         while True:
             try:
-                proc.wait(timeout=5)
+                proc.wait(timeout=poll)
                 break
             except subprocess.TimeoutExpired:
                 now = time.time()
@@ -287,6 +297,8 @@ def _best_payload(payloads: list[dict]) -> dict:
 
 def human_error(out: str, err: str, code: int) -> str:
     """A message a human can act on — never the agent's JSON payload."""
+    if (err or "").startswith("cannot launch"):
+        return err.strip()[:300]            # ours, complete: the tail logic below would cut the path
     payloads = _json_payloads(out) or _json_payloads(err)
     obj = _best_payload(payloads)
     message = str(obj.get("result") or obj.get("error") or "").strip()
@@ -335,7 +347,12 @@ def postprocess(res: StepResult, step: str, artifact_dir: Path, root: Path | Non
 def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
                  step: str, harness: Harness, started_at: str) -> None:
     state_path = run_dir / "state.json"
-    state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8")) if state_path.exists() else {}
+    except (OSError, ValueError):
+        state = {}                       # a truncated state.json (an interrupted write) must not stop the run
+    if not isinstance(state, dict):
+        state = {}
     state.setdefault("run_id", run_id)
     state.setdefault("steps", {})
     entry = state["steps"].get(step, {})
@@ -398,7 +415,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     before_git = git_snapshot(Path(cwd)) if is_implement else None
     code, out, err, duration, timed_out, idle_closed = execute(
         harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label)
-    idle_limit = int(os.environ.get("SPECKFISH_IDLE_SECONDS", "600"))
+    idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     if idle_closed and not timed_out:
         # the agent was stopped by us after going quiet, so the exit code is ours, not its verdict:
         # what the step wrote decides (postprocess below), not the signal that ended the process

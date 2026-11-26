@@ -7,7 +7,7 @@ from datetime import datetime
 from pathlib import Path
 
 from . import prompts
-from .config import Config, find_git, norm, run_cmd, which
+from .config import STATE_DIR, Config, find_git, norm, run_cmd, which
 from .harnesses import Harness, get_harness
 from .runner import StepResult, new_run_id, run_dir_for, run_interactive, run_step
 
@@ -122,7 +122,7 @@ def harness_for_integration(cfg: Config, integration: str) -> Harness:
 
 def do_init(cfg: Config, integration: str | None, force_git: bool = True,
             skip_egm: bool = False, editors: bool = True,
-            editor_prefix: str = "spfish") -> dict:
+            editor_prefix: str = "spfish", egm_ref: str | None = None) -> dict:
     root = cfg.root
     out: dict = {"root": norm(root), "actions": []}
     if not (root / ".git").exists() and force_git:
@@ -141,8 +141,16 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
         out["actions"].append({"integration": name, "specify_init": code == 0,
                                "argv": specify_argv(cfg) + args,
                                "detail": banner_free_tail(o or e, keep=2)})
-    if not skip_egm and not cfg.egm_path():
-        out["actions"].append(install_egm(cfg))
+    if not skip_egm and (egm_ref or not cfg.egm_path()):
+        out["actions"].append(install_egm(cfg, ref=egm_ref))
+    # the run logs are full agent transcripts (command output, file contents): they must not reach git
+    ignore = [f"{STATE_DIR}/"]
+    if any(a.get("egm") in ("cloned", "updated", "already_present") and a.get("path", "").endswith("vendor/egm")
+           for a in out["actions"]):
+        ignore.append("vendor/egm/")
+    added = ensure_gitignore(root, ignore)
+    if added:
+        out["actions"].append({"gitignore": added})
     egm = cfg.egm_path()
     out["egm_root"] = norm(egm) if egm else None
     out["integrations"] = integrations
@@ -160,17 +168,94 @@ def do_init(cfg: Config, integration: str | None, force_git: bool = True,
     return out
 
 
-def install_egm(cfg: Config, repo: str = "google/elephant-goldfish-model") -> dict:
-    """Clone EGM into vendor/egm (leaves the user global config untouched)."""
+# EGM is loaded as an agent plugin with the agent's full permissions, so it is pinned: the tag is the
+# human-readable name, the commit is what is verified (a tag can be moved). Bump both on purpose with
+# `speckfish init --egm-ref <tag|sha>` after reading what changed upstream.
+EGM_REPO = "google/elephant-goldfish-model"
+EGM_REF = "v0.1.1"
+EGM_COMMIT = "dea7761de06ce5b51c177ebb9bba0469f24af5a4"
+
+
+def egm_commit(path: Path) -> str:
+    """The commit a checkout is on ('' when it is not a git checkout)."""
+    code, out, _ = run_cmd([find_git(), "-C", str(path), "rev-parse", "HEAD"], timeout=30)
+    return out.strip() if code == 0 else ""
+
+
+def _checkout_ref(dest: Path, ref: str) -> tuple[bool, str]:
+    """Fetch exactly `ref` (tag, branch or commit) at depth 1 and check it out."""
+    git = find_git()
+    code, o, e = run_cmd([git, "-C", str(dest), "fetch", "--depth", "1", "origin", ref], timeout=300)
+    if code != 0:
+        return False, (e or o)[-300:]
+    code, o, e = run_cmd([git, "-C", str(dest), "checkout", "--quiet", "FETCH_HEAD"], timeout=120)
+    return code == 0, (e or o)[-300:]
+
+
+def install_egm(cfg: Config, repo: str = EGM_REPO, ref: str | None = None) -> dict:
+    """Put EGM in vendor/egm at a pinned version (leaves the user global config untouched).
+
+    Without `ref` an existing checkout is left alone and a fresh one gets EGM_REF, whose commit must be
+    EGM_COMMIT. An explicit `ref` is the user choosing another version: it is checked out and reported,
+    not compared with the default pin.
+    """
     dest = cfg.root / "vendor" / "egm"
-    if (dest / "plugin.json").exists():
-        return {"egm": "already_present", "path": norm(dest)}
-    dest.parent.mkdir(parents=True, exist_ok=True)
-    code, o, e = run_cmd([find_git(), "clone", "--depth", "1",
-                          f"https://github.com/{repo}", str(dest)], timeout=300)
-    ok = code == 0 and (dest / "plugin.json").exists()
-    return {"egm": "cloned" if ok else "failed", "path": norm(dest),
-            "detail": (e or o)[-400:]}
+    present = (dest / "plugin.json").exists()
+    if present and ref is None:
+        return {"egm": "already_present", "path": norm(dest), "commit": egm_commit(dest)}
+    git = find_git()
+    if not present:
+        dest.mkdir(parents=True, exist_ok=True)
+        code, o, e = run_cmd([git, "-C", str(dest), "init", "--quiet"], timeout=60)
+        if code == 0:
+            code, o, e = run_cmd([git, "-C", str(dest), "remote", "add", "origin",
+                                  f"https://github.com/{repo}"], timeout=60)
+        if code != 0:
+            return {"egm": "failed", "path": norm(dest), "detail": (e or o)[-400:]}
+    wanted = ref or EGM_REF
+    ok, detail = _checkout_ref(dest, wanted)
+    commit = egm_commit(dest) if ok else ""
+    if ok and ref is None and commit != EGM_COMMIT:
+        # the tag points somewhere else than when it was pinned: do not trust it silently
+        return {"egm": "failed", "path": norm(dest), "commit": commit,
+                "detail": f"{wanted} is at {commit[:12]}, expected {EGM_COMMIT[:12]}: refusing to use it. "
+                          f"Check upstream, then `speckfish init --egm-ref {wanted}` to accept it."}
+    ok = ok and (dest / "plugin.json").exists()
+    return {"egm": ("updated" if present else "cloned") if ok else "failed", "path": norm(dest),
+            "ref": wanted, "commit": commit, "detail": detail}
+
+
+GITIGNORE_BLOCK = "# speckfish: run logs hold the agents' full transcripts; EGM is a pinned checkout"
+
+
+def ensure_gitignore(root: Path, entries: list[str]) -> list[str]:
+    """Add `entries` to the project's .gitignore if they are not there yet; returns what was added."""
+    path = root / ".gitignore"
+    try:
+        text = path.read_text(encoding="utf-8") if path.exists() else ""
+    except OSError:
+        return []
+    have = {ln.strip().rstrip("/") for ln in text.splitlines()}
+    missing = [e for e in entries if e.rstrip("/") not in have and e.strip("/") not in have]
+    if not missing:
+        return []
+    block = ("" if not text or text.endswith("\n") else "\n") + \
+        ("\n" if text else "") + GITIGNORE_BLOCK + "\n" + "\n".join(missing) + "\n"
+    try:
+        path.write_text(text + block, encoding="utf-8")
+    except OSError:
+        return []
+    return missing
+
+
+def is_git_ignored(root: Path, rel: str) -> bool | None:
+    """Does git ignore this path? None when it cannot tell (no repo, no git)."""
+    if not (root / ".git").exists():
+        return None
+    # a path *inside* the folder: a `dir/` pattern only matches a directory that already exists
+    probe = rel.rstrip("/") + "/.probe"
+    code, _o, _e = run_cmd([find_git(), "-C", str(root), "check-ignore", "-q", probe], timeout=30)
+    return {0: True, 1: False}.get(code)
 
 
 def do_doctor(cfg: Config) -> dict:
@@ -203,6 +288,8 @@ def do_doctor(cfg: Config) -> dict:
         info["egm"]["version"] = json.loads(
             (egm / "plugin.json").read_text(encoding="utf-8")).get("version")
         info["egm"]["skills"] = sorted(p.name for p in (egm / "skills").iterdir() if p.is_dir())
+        info["egm"]["commit"] = egm_commit(egm)
+        info["egm"]["pinned"] = info["egm"]["commit"] == EGM_COMMIT
         if info["harness"] and info["harness"].get("binary") == which("copilot"):
             code, o, e = run_cmd([which("copilot"), "--plugin-dir", norm(egm),
                                   "plugin", "list"], timeout=120,
@@ -213,6 +300,7 @@ def do_doctor(cfg: Config) -> dict:
         "has_git": (cfg.root / ".git").exists(),
         "has_specify": (cfg.root / ".specify").exists(),
         "has_claude_skills": (cfg.root / ".claude" / "skills").is_dir(),
+        "state_ignored": is_git_ignored(cfg.root, STATE_DIR),
         "feature": norm(latest_feature(cfg.root)) if latest_feature(cfg.root) else None,
     }
     return info
@@ -599,7 +687,12 @@ def json_object_with(text: str, key: str) -> dict:
     Harnesses without `--json-schema` (codex, copilot) answer the inventory in prose, so the JSON
     arrives inside the transcript instead of `structured_output` — and the same log may also contain
     JSON *schemas* (with `properties`) or one-item examples, which must not win.
+
+    Linear in the size of the text: decoding starts at an index (no copy of the rest of the text per
+    brace) and a transcript that never mentions the key is rejected without decoding anything.
     """
+    if f'"{key}"' not in text:
+        return {}
     decoder = json.JSONDecoder()
     best: dict = {}
     best_len = 0
@@ -610,7 +703,7 @@ def json_object_with(text: str, key: str) -> dict:
             break
         idx = start + 1
         try:
-            obj, end = decoder.raw_decode(text[start:])
+            obj, end = decoder.raw_decode(text, start)
         except ValueError:
             continue
         if not isinstance(obj, dict) or "$schema" in obj or "properties" in obj:
@@ -623,6 +716,7 @@ def json_object_with(text: str, key: str) -> dict:
         score = len(items) + sum(1 for i in items if i.get("description") or i.get("why"))
         if score > best_len:
             best, best_len = obj, score
+            idx = end                  # what was just accepted cannot contain a better candidate
     return best
 
 
@@ -693,9 +787,11 @@ def do_specify_split(cfg: Config, material: str, run_id: str | None = None,
     features = payload.get("features") or []
     out["features"] = [f.get("title", "") for f in features]
     # the inventory is the cheap, high-value half: let the user approve the cut before paying for N specs
-    (cfg.root / "specs").mkdir(parents=True, exist_ok=True)
-    (cfg.root / "specs" / "features.json").write_text(
-        json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
+    # never overwrite an approved cut with nothing: a --dry-run (or a failed inventory) has no features
+    if features and not dry_run:
+        (cfg.root / "specs").mkdir(parents=True, exist_ok=True)
+        (cfg.root / "specs" / "features.json").write_text(
+            json.dumps(payload, indent=2, ensure_ascii=False), encoding="utf-8")
     if dry_run or inventory_only:
         out["inventory_only"] = bool(inventory_only)
         out["dry_run"] = bool(dry_run)
@@ -875,7 +971,12 @@ def run_summary(cfg: Config, run_id: str) -> dict:
     state_path = cfg.runs_dir / run_id / "state.json"
     if not state_path.exists():
         return {}
-    state = json.loads(state_path.read_text(encoding="utf-8"))
+    try:
+        state = json.loads(state_path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}                        # unreadable: show the run as having no steps, not a traceback
+    if not isinstance(state, dict):
+        return {}
     state.update(run_totals(state.get("steps", {})))
     return state
 

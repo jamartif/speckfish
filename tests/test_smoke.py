@@ -369,8 +369,8 @@ def test_tasks_json_structure():
     assert "spfish: review" in labels and "spfish: review-interactive" in labels
     assert {i["id"] for i in data["inputs"]} >= {"idea", "stack", "principles"}
     for t in data["tasks"]:
-        assert t["command"] == "python -m speckfish"
-        assert t["type"] == "shell" and t["problemMatcher"] == []
+        assert t["command"] == "python" and t["args"][:2] == ["-m", "speckfish"]
+        assert t["type"] == "process" and t["problemMatcher"] == []
 
 
 def test_copilot_prompt_frontmatter():

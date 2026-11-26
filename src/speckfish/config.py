@@ -28,6 +28,18 @@ DEFAULTS = {
 }
 
 
+def env_number(name: str, default: float, minimum: float = 0.0) -> float:
+    """A numeric environment variable; anything unusable (text, negative) falls back to the default."""
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    try:
+        value = float(raw)
+    except ValueError:
+        return default
+    return value if value >= minimum else default
+
+
 def is_windows() -> bool:
     return os.name == "nt"
 
@@ -75,7 +87,13 @@ class Config:
         p = cls.path(root)
         cfg = cls(root=root)
         if p.exists():
-            data = json.loads(p.read_text(encoding="utf-8"))
+            try:
+                data = json.loads(p.read_text(encoding="utf-8"))
+            except (OSError, ValueError) as e:
+                raise SystemExit(f"cannot read {p}: {e}. Fix or delete it (`speckfish init` rewrites "
+                                 f"the defaults)") from e
+            if not isinstance(data, dict):
+                raise SystemExit(f"{p} must contain a JSON object, not {type(data).__name__}")
             # configs written by older builds stored every default, so a better timeout default
             # could never reach an existing project: drop that block once and migrate
             if int(data.get("schema") or 1) < cls.SCHEMA:

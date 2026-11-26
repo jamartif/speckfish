@@ -138,14 +138,21 @@ def detect_command(cfg: Config) -> str:
 # ---------------- VS Code tasks ----------------
 
 def tasks_json(cmd: str, prefix: str = DEFAULT_PREFIX) -> dict:
+    """VS Code tasks that start the process directly.
+
+    `"type": "shell"` would hand the user's input to a shell, which expands `$(...)`, backticks and
+    `$VAR` inside it (and a pasted Markdown snippet is full of backticks). `"type": "process"` passes
+    each argument untouched. `python -m speckfish` is split so the executable is `python`.
+    """
+    exe, *lead = cmd.split()
     tasks = []
     for key, spec in STEPS.items():
-        argv = spec["args"]
+        argv = lead + spec["args"]
         task = {
             "label": f"{prefix}: {key}",
             "detail": spec["desc"],
-            "type": "shell",
-            "command": cmd,
+            "type": "process",
+            "command": exe,
             "args": argv + ([f"${{input:{spec['input']['id']}}}"] if spec.get("input") else []),
             "problemMatcher": [],
             "presentation": {"reveal": "always", "panel": "dedicated", "clear": True},

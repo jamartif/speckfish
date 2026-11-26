@@ -424,14 +424,15 @@ speckfish ›
 
 ## 7. Plan de acción
 
-### Sprint 1: correcciones rápidas de alto impacto (1–2 PRs, ~1 día)
-- [ ] **B1**: no sobrescribir `features.json` en dry-run, con test.
-- [ ] **P1**: `json_object_with` lineal, con test de rendimiento.
-- [ ] **S3**: tareas de VS Code `type: process`, con test.
-- [ ] **S4**: `.speckfish/` en el `.gitignore` del proyecto durante `init`, más aviso en `doctor`.
-- [ ] **S2**: fijar `EGM_REF` y mostrar el commit en `doctor`.
-- [ ] **B4**: capturar config corrupta, variables de entorno no numéricas y fallo de `Popen`.
-- [ ] **P4**: intervalo de sondeo configurable (suite de 21 s a ~2 s).
+### Sprint 1: correcciones rápidas de alto impacto (1–2 PRs, ~1 día) — HECHO
+Regresión en `tests/test_sprint1.py` (33 tests). Suite: 344 en verde, de 21 s a 11 s.
+- [x] **B1**: no sobrescribir `features.json` en dry-run, con test.
+- [x] **P1**: `json_object_with` lineal, con test de rendimiento.
+- [x] **S3**: tareas de VS Code `type: process`, con test.
+- [x] **S4**: `.speckfish/` en el `.gitignore` del proyecto durante `init`, más aviso en `doctor`.
+- [x] **S2**: fijar `EGM_REF` (`v0.1.1`) y su commit, verificarlo al clonar y mostrarlo en `doctor`; `init --egm-ref` para cambiarlo a propósito.
+- [x] **B4**: capturar config corrupta, variables de entorno no numéricas y fallo de `Popen`.
+- [x] **P4**: intervalo de sondeo configurable (suite de 21 s a ~2 s).
 
 ### Sprint 2: estado y rendimiento (~2–3 días)
 - [ ] **B3**: escritura atómica (`os.replace`), `run_id` con sufijo y lock en `record_state`.
