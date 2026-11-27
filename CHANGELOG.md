@@ -3,6 +3,11 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## v0.3.1 — 2026-11-27
+
+- **A suspended computer is no longer read as a silent agent.** On Windows with Modern Standby (also sleep and hibernation) everything is frozen while the lid is closed. On waking, speckfish compared the clock with the agent's last output, concluded "the agent wrote nothing for 600s", killed the step and reported its duration as 248 minutes: a `codex` run of `implement` left running overnight lost its chunk that way. Now a pause longer than 30 seconds (`SPECKFISH_SUSPEND_SECONDS`) between two looks at the agent is taken as the computer being suspended: the pause is not counted as silence or as duration, the silence clock starts over (a healthy agent carries on; one that really stays silent is stopped after the idle limit of *awake* time, with a true reason), and speckfish says so: `the computer was suspended for 4h 08m; that time is not counted`. The step result has `suspended_s`, the summary a `note:` line, and `<step>.meta.json` records it.
+- **The duration is taken before the step is closed.** Joining the output readers and clearing the status line can block (a stuck console, a slow disk); that time was added to the agent's.
+
 ## v0.3.0 — 2026-11-26
 
 This release adds an interactive console, a permission model and a security and CI audit's worth of fixes. Five

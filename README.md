@@ -518,6 +518,11 @@ version, arguments without the prompt, the prompt's length and hash, permissions
 Turn the live line off with `--no-progress` (implied by `--quiet` and `--json`). Colour is only used on a terminal;
 `NO_COLOR` turns it off.
 
+**Sleep and standby.** If the computer is suspended while a step runs (sleep, hibernation, Modern Standby with the
+lid closed) everything is frozen, agent included. speckfish notices the pause, does not count it as the agent being
+silent or as part of the duration, and says so (`the computer was suspended for 4h 08m; that time is not counted`).
+For a long run overnight keep the machine awake: sleeping is Windows' decision, not something speckfish can prevent.
+
 **Ctrl+C.** It prints `Stopping the agent…`, stops the *whole* tree of processes the agent started, and checks
 that it is gone; if it could not, it says so and prints the exact command to do it by hand. A second Ctrl+C
 forces it.
@@ -952,6 +957,7 @@ $ speckfish review --interactive
 | `SPECKFISH_HOME` | where `trusted.json` lives (default `~/.speckfish`) |
 | `SPECKFISH_VERBOSE=1` · `SPECKFISH_FULLSCREEN=0` · `NO_COLOR` | keep every action / no full screen / no colour |
 | `SPECKFISH_IDLE_SECONDS` · `SPECKFISH_RESULT_GRACE` · `SPECKFISH_POLL_SECONDS` | how long a silent agent may run, how long one that printed its final event may linger, how often those are checked |
+| `SPECKFISH_SUSPEND_SECONDS` | a pause longer than this (default 30) between two looks at the agent is taken as the computer being suspended, and is not counted |
 
 ## How it works
 

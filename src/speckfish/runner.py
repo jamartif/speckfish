@@ -53,9 +53,20 @@ class StepResult:
     raw_tail: str = ""
     review: dict | None = None     # `specify --review`: the spec's review, as a result dict
     activity: dict | None = None   # what the agent did: actions, commands, files written, subagents
+    suspended_s: float = 0.0       # time the computer was suspended during the step (not counted)
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if k not in ("raw_tail",)}
+
+
+def format_span(seconds: float) -> str:
+    """`4h 08m`, `1m 35s`, `40s`: a length of time a person can read."""
+    total = round(seconds)
+    hours, rest = divmod(total, 3600)
+    minutes, secs = divmod(rest, 60)
+    if hours:
+        return f"{hours}h {minutes:02d}m"
+    return f"{minutes}m {secs:02d}s" if minutes else f"{secs}s"
 
 
 def new_run_id(cfg: Config | None = None) -> str:
@@ -109,7 +120,8 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
             run_dir: Path, timeout: int, stream: bool = True,
             progress: bool = True,
             label: str | None = None,
-            env_allowlist: str = "") -> tuple[int, str, str, float, bool, bool]:
+            env_allowlist: str = "",
+            stats: dict | None = None) -> tuple[int, str, str, float, bool, bool]:
     """Launch the subprocess, write the log and honour the timeout by killing the tree.
 
     stdout is read on a thread so the timeout does not depend on the child
@@ -195,27 +207,43 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     grace = int(env_number("SPECKFISH_RESULT_GRACE", 45))
     # how often the timeout and the inactivity rule are looked at: it is the latency of both
     poll = env_number("SPECKFISH_POLL_SECONDS", 1.0, minimum=0.01)
+    # A pause longer than this between two looks at the process is the computer being suspended (sleep,
+    # Modern Standby, hibernation), not the agent being silent: everything is frozen while it lasts. Counting
+    # it made a step "wrote nothing for 600s" and last four hours, and killed it on waking.
+    suspend_gap = env_number("SPECKFISH_SUSPEND_SECONDS", 30.0, minimum=1.0)
+    suspended = 0.0
     guard = proctree.ConsoleGuard(enabled=is_windows())
     try:
         with guard:
+            last_look = time.time()
             while True:
                 try:
                     proc.wait(timeout=poll)
-                    break
+                    exited = True
                 except subprocess.TimeoutExpired:
-                    guard.tick()                    # an agent that put the console in raw mode kills Ctrl+C
-                    now = time.time()
-                    limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
-                    if limit and now - activity["t"] >= limit:
-                        idle_closed = True
-                    elif now - started >= timeout:
-                        timed_out = True
-                    else:
-                        continue
-                    _stop_and_report(proc, job)
-                    with contextlib.suppress(subprocess.TimeoutExpired):
-                        proc.wait(timeout=30)
+                    exited = False
+                now = time.time()
+                gap, last_look = now - last_look, now
+                if gap > suspend_gap:
+                    lost = gap - poll
+                    suspended += lost
+                    started += lost                              # the deadlines move by what was lost
+                    activity["t"] = min(activity["t"] + lost, now)   # and so does the silence clock
+                    _say_suspended(meter, label or step, lost)
+                if exited:
                     break
+                guard.tick()                    # an agent that put the console in raw mode kills Ctrl+C
+                limit = min(idle_limit, grace) if activity["final"] and idle_limit else idle_limit
+                if limit and now - activity["t"] >= limit:
+                    idle_closed = True
+                elif now - started >= timeout:
+                    timed_out = True
+                else:
+                    continue
+                _stop_and_report(proc, job)
+                with contextlib.suppress(subprocess.TimeoutExpired):
+                    proc.wait(timeout=30)
+                break
     except KeyboardInterrupt:
         # Ctrl+C reaches speckfish, not the agent's own process group: stop the whole tree or it
         # keeps running (and writing, with the sandbox off) after the command is gone
@@ -228,6 +256,11 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         if job is not None:
             job.close()
         raise
+    # the clock stops here, before the work of closing: joining the readers and clearing the status line can
+    # block (a stuck console, a slow disk) and that is not time the agent spent
+    duration = time.time() - started
+    if stats is not None:
+        stats["suspended_s"] = suspended
     t_out.join(timeout=15)
     t_err.join(timeout=5)
     with contextlib.suppress(Exception):
@@ -236,8 +269,18 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
     if job is not None:
         job.close()                  # anything the agent left running goes with it (the job kills on close)
     code = 124 if timed_out else (proc.returncode if proc.returncode is not None else 1)
-    return (code, "".join(out_chunks), "".join(err_chunks), time.time() - started, timed_out,
+    return (code, "".join(out_chunks), "".join(err_chunks), duration, timed_out,
             idle_closed)
+
+
+def _say_suspended(meter, label: str, lost: float) -> None:
+    """Tell the person the computer was paused and that the pause is not counted."""
+    text = f"the computer was suspended for {format_span(lost)}; that time is not counted"
+    if getattr(meter, "enabled", False):
+        meter.activity(f"warning: {text}", milestone=True, style="yellow")
+    else:
+        sys.stderr.write(f"[{label}] {text}\n")
+        sys.stderr.flush()
 
 
 def _is_final_event(line: str) -> bool:
@@ -470,7 +513,7 @@ def write_meta(cfg: Config, harness: Harness, inv: StepInvocation, prompt: str, 
     describe = getattr(harness, "permissions", None)
     meta = {
         "label": label, "kind": kind, "speckfish": __version__, "started_at": started_at,
-        "ok": res.ok, "exit_code": res.exit_code, "duration_s": res.duration_s,
+        "ok": res.ok, "exit_code": res.exit_code, "duration_s": res.duration_s, "suspended_s": res.suspended_s,
         "cost": res.cost, "cost_unit": res.cost_unit, "model": res.model,
         "harness": harness.name, "harness_version": _agent_version(harness),
         "argv": argv, "prompt_via": "stdin" if getattr(inv, "stdin", None) is not None else "argv",
@@ -520,9 +563,10 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     before_git = git_snapshot(Path(cwd)) if is_implement else None
     from . import progress as _progress
     _progress.take_last()                       # forget what an earlier step left
+    stats: dict = {}
     code, out, err, duration, timed_out, idle_closed = execute(
         harness, inv, step, cwd, run_dir, timeout, stream, progress, label=label,
-        env_allowlist=cfg.env_allowlist)
+        env_allowlist=cfg.env_allowlist, stats=stats)
     activity = _progress.take_last()
     idle_limit = int(env_number("SPECKFISH_IDLE_SECONDS", 600))
     if idle_closed and not timed_out:
@@ -552,6 +596,7 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
         res.error_kind = error_kind(out, err)
     res.run_id = run_id
     res.activity = activity
+    res.suspended_s = round(stats.get("suspended_s", 0.0), 1)
     postprocess(res, step, artifact_dir, cwd, before=before_tasks, git_before=before_git, kind=kind)
     if idle_closed:
         # the work landed but the CLI never exited: keep it when the step's own output is there

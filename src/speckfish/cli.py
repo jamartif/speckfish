@@ -96,6 +96,10 @@ def summarize(res: dict, root: str | None = None) -> str:
         head += f"  ·  exit {res['exit_code']}"
     lines = [head]
 
+    if res.get("suspended_s"):
+        from .runner import format_span
+        lines.append(f"  note: the computer was suspended for {format_span(res['suspended_s'])} during this step; "
+                     f"it is not counted in the time above")
     done = _activity_line(res.get("activity"))
     if done:
         lines.append(done)
