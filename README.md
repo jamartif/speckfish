@@ -949,7 +949,7 @@ $ speckfish review --interactive
 | `language` | `en` | language of the generated documents |
 | `profile` | `speckit` | review criteria profile |
 | `permissions` | `scoped` | `scoped`: read-only steps (`review`, `drift`, the `--split` inventory) get no shell; `open`: every step gets every tool |
-| `unsafe` | `false` | accept an agent that runs with no sandbox (codex) |
+| `unsafe` | `false` | accept an agent that runs with no sandbox (codex). Saved for this project in `~/.speckfish/unsafe.json`, not in the repo: an `unsafe` inside `.speckfish/config.json` is ignored |
 | `env_allowlist` | — | `NAME,PREFIX_*`: the only variables the agent inherits (plus what it needs to start and its provider's) |
 | `keep_runs` | `50` | old run folders deleted after each command (`0` = never); a run `status` or `report` still needs is kept |
 | `fullscreen` | `true` | the console takes the whole terminal |

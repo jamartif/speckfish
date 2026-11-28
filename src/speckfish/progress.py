@@ -61,12 +61,16 @@ _MAX_ACTIVITY = 100
 _EXE_PREFIX = re.compile(r'^(?:"[^"]*(?:powershell|pwsh|cmd|bash|sh|node)\.exe"'
                          r'|[^"\s]*(?:powershell|pwsh|cmd|bash|sh|node)\.exe"?'
                          r'|/[^\s]*(?:bash|sh|zsh)|(?:bash|sh|zsh))\s+', re.I)
+_OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)?")
+_CONTROL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f-\x9f]")
 _FLAG = re.compile(r'^-{1,2}[A-Za-z][\w-]*$')
 
 
 def _short(text: str, limit: int = _MAX_ACTIVITY) -> str:
     """One readable line: drop the shell wrapper, collapse whitespace, cap the length."""
-    text = " ".join(str(text or "").split())
+    # an agent's command or path can carry terminal escape sequences (a window title, cursor moves): drop them
+    text = _CONTROL.sub("", _OSC.sub("", str(text or "")))
+    text = " ".join(text.split())
     # `"C:\...\powershell.exe" -NoProfile -Command "Get-Content ..."` -> `Get-Content ...`
     prefix = _EXE_PREFIX.match(text)
     if prefix:

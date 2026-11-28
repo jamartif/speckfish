@@ -62,6 +62,19 @@ class Job:
                         ("ProcessMemoryLimit", ctypes.c_size_t), ("JobMemoryLimit", ctypes.c_size_t),
                         ("PeakProcessMemoryUsed", ctypes.c_size_t), ("PeakJobMemoryUsed", ctypes.c_size_t)]
 
+        for name, restype, argtypes in (
+                ("CreateJobObjectW", wintypes.HANDLE, None),
+                ("SetInformationJobObject", wintypes.BOOL,
+                 [wintypes.HANDLE, ctypes.c_int, ctypes.c_void_p, wintypes.DWORD]),
+                ("AssignProcessToJobObject", wintypes.BOOL, [wintypes.HANDLE, wintypes.HANDLE]),
+                ("TerminateJobObject", wintypes.BOOL, [wintypes.HANDLE, wintypes.UINT]),
+                ("CloseHandle", wintypes.BOOL, [wintypes.HANDLE])):
+            # without these, ctypes takes every return value for a 32-bit int and truncates a 64-bit handle
+            with contextlib.suppress(Exception):
+                fn = getattr(self.k, name)
+                fn.restype = restype
+                if argtypes is not None:
+                    fn.argtypes = argtypes
         handle = self.k.CreateJobObjectW(None, None)
         if not handle:
             return False
@@ -122,6 +135,14 @@ def kill_tree(proc: subprocess.Popen, job: Job | None = None, wait: float = 8.0,
     """
     windows = (os.name == "nt") if windows is None else windows
     tried: list[str] = []
+    if not windows and job is None:
+        # The agent is started in its own session, so its process group id is its pid. Signal the group even
+        # when the process we launched is already gone: its children (a shell, `node`) can outlive it, and
+        # `getpgid` would fail for a pid that has been collected.
+        with contextlib.suppress(ProcessLookupError, PermissionError, OSError):
+            os.killpg(proc.pid, signal.SIGKILL)   # type: ignore[attr-defined,unused-ignore]
+        if proc.poll() is not None:
+            return True, "already finished"
     if proc.poll() is not None and job is None:
         return True, "already finished"
     if windows:
@@ -141,7 +162,7 @@ def kill_tree(proc: subprocess.Popen, job: Job | None = None, wait: float = 8.0,
     else:
         tried.append("process group")                      # POSIX only: Windows takes the branch above
         with contextlib.suppress(Exception):
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)   # type: ignore[attr-defined,unused-ignore]
+            os.killpg(proc.pid, signal.SIGKILL)               # type: ignore[attr-defined,unused-ignore]
     tried.append("kill")
     with contextlib.suppress(Exception):
         proc.kill()
@@ -179,6 +200,9 @@ class ConsoleGuard:
             return self
         try:
             self.k = self.k if self.k is not None else _kernel32()
+            with contextlib.suppress(Exception):
+                from ctypes import wintypes
+                self.k.GetStdHandle.restype = wintypes.HANDLE
             self.handle = self.k.GetStdHandle(STD_INPUT_HANDLE)
             self.original = self._mode()
         except Exception:

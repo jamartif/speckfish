@@ -11,7 +11,7 @@ from pathlib import Path
 
 from . import __version__
 from . import steps as S
-from .config import Config, norm
+from .config import Config, norm, valid_model
 from .flow import CHUNK_DEFAULT
 from .harnesses import get_harness
 from .prompts import SKILL_SPECS
@@ -981,6 +981,9 @@ def cmd_config(run: Run) -> int:
             run.emit({"error": msg}, f"ERROR: {msg}")
             return EXIT_ENV
         value = value.strip()
+        if key == "model" and value and not valid_model(value):
+            run.emit({"error": "invalid model name"}, f"ERROR: {value!r} is not a model name (letters, digits and . _ : / @ + - only)")
+            return EXIT_ENV
         if key == "permissions" and value not in ("scoped", "open"):
             run.emit({"error": "permissions must be scoped or open"}, "ERROR: permissions must be scoped or open")
             return EXIT_ENV
@@ -996,7 +999,15 @@ def cmd_config(run: Run) -> int:
             if value.lower() not in ("true", "false", "1", "0", "yes", "no", "on", "off"):
                 run.emit({"error": f"{key} must be true or false"}, f"ERROR: {key} must be true or false")
                 return EXIT_ENV
-            setattr(cfg, key, value.lower() in ("true", "1", "yes", "on"))
+            on = value.lower() in ("true", "1", "yes", "on")
+            if key == "unsafe":
+                from .config import set_unsafe_consent
+                set_unsafe_consent(cfg.root, on)      # in ~/.speckfish: a repository cannot grant it to itself
+                run.emit({"saved": "~/.speckfish/unsafe.json", key: on},
+                         f"saved unsafe={str(on).lower()} for this project in ~/.speckfish/unsafe.json "
+                         f"(not in the repository)")
+                return EXIT_OK
+            setattr(cfg, key, on)
             path = cfg.save()
             run.emit({"saved": norm(path), key: getattr(cfg, key)},
                      f"saved {key}={str(getattr(cfg, key)).lower()} → {norm(path)}")
@@ -1354,6 +1365,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.harness:
         cfg.harness = args.harness
     if args.model:
+        if not valid_model(args.model):
+            msg = f"{args.model!r} is not a model name (letters, digits and . _ : / @ + - only)"
+            emit({"error": msg}, args.json, f"ERROR: {msg}")
+            return EXIT_ENV
         cfg.model = args.model
     if getattr(args, "unsafe", False):
         cfg.unsafe = True

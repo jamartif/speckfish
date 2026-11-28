@@ -7,9 +7,10 @@ import re
 import shutil
 import subprocess
 from dataclasses import asdict, dataclass, field
+from datetime import datetime
 from pathlib import Path
 
-from .store import write_json_atomic
+from .store import read_json_cached, write_json_atomic
 
 STATE_DIR = ".speckfish"
 
@@ -28,6 +29,41 @@ DEFAULTS = {
     "budgets": {"claude": {"specify": 1.5, "plan": 2.0, "review": 3.0, "drift": 1.5},
                 "copilot": {"specify": 30, "plan": 30, "review": 30, "drift": 30}},
 }
+
+
+_MODEL_OK = re.compile(r"[A-Za-z0-9][\w.:/@+-]{0,99}")
+
+
+def valid_model(name: str) -> bool:
+    """A model name is a plain identifier. It is passed to the agent CLI as an argument, and the repository's
+    config decides it: a value like `--dangerously-skip-permissions` must never reach the command line."""
+    return bool(_MODEL_OK.fullmatch(name or ""))
+
+
+def _consent_file() -> Path:
+    return Path(os.environ.get("SPECKFISH_HOME") or (Path.home() / ".speckfish")) / "unsafe.json"
+
+
+def unsafe_accepted(root: Path) -> bool:
+    """Has the person running speckfish accepted an agent with no sandbox for this project?
+
+    Kept in the user's own folder, never in the repository: `.speckfish/config.json` travels with a clone, and
+    consent that arrives with the code is not consent.
+    """
+    data = read_json_cached(_consent_file())
+    return isinstance(data, dict) and str(Path(root).resolve()) in (data.get("projects") or {})
+
+
+def set_unsafe_consent(root: Path, accepted: bool) -> None:
+    path = _consent_file()
+    data = read_json_cached(path)
+    projects = dict(data.get("projects") or {}) if isinstance(data, dict) else {}
+    key = str(Path(root).resolve())
+    if accepted:
+        projects[key] = datetime.now().isoformat(timespec="seconds")
+    else:
+        projects.pop(key, None)
+    write_json_atomic(path, {"projects": projects})
 
 
 def env_number(name: str, default: float, minimum: float = 0.0) -> float:
@@ -74,7 +110,8 @@ class Config:
     language: str = "en"
     fallback: str = ""            # second agent CLI for a step that stops on quota/auth
     permissions: str = "scoped"   # scoped: read-only steps get no shell | open: every step gets every tool
-    unsafe: bool = False          # allow an agent that runs with no sandbox (codex)
+    unsafe: bool = False          # allow an agent that runs with no sandbox (codex): from ~/.speckfish, --unsafe or env
+    unsafe_in_repo: bool = field(default=False, repr=False)         # runtime only: the repo's config asked for it
     keep_runs: int = 50           # old run folders deleted after each command (0 = never)
     fullscreen: bool = True       # the console takes the whole terminal (alternate screen)
     require_tools: str = ""       # comma list of commands `implement` needs on PATH, besides the detected ones
@@ -108,9 +145,12 @@ class Config:
             if int(data.get("schema") or 1) < cls.SCHEMA:
                 data.pop("timeouts", None)
             for k in ("harness", "egm_root", "specify", "model", "profile", "language", "fallback",
-                  "permissions", "unsafe", "env_allowlist", "fullscreen", "require_tools"):
+                  "permissions", "env_allowlist", "fullscreen", "require_tools"):
                 if k in data:
                     setattr(cfg, k, data[k])
+            cfg.unsafe_in_repo = data.get("unsafe") is True          # read, never obeyed
+            if cfg.model and not valid_model(cfg.model):
+                cfg.model = ""                                       # a repo cannot slip an option in here
             if isinstance(data.get("keep_runs"), int) and data["keep_runs"] >= 0:
                 cfg.keep_runs = data["keep_runs"]
             for k in ("timeouts", "budgets"):
@@ -118,6 +158,7 @@ class Config:
                     merged = dict(getattr(cfg, k))
                     merged.update(data[k] or {})
                     setattr(cfg, k, merged)
+        cfg.unsafe = unsafe_accepted(root)
         env_h = os.environ.get("SPECKFISH_HARNESS")
         if env_h:
             cfg.harness = env_h
@@ -135,6 +176,8 @@ class Config:
         data = asdict(self)
         data.pop("root", None)
         data.pop("egm_root_from_env", None)
+        data.pop("unsafe", None)                 # consent lives in ~/.speckfish, not in a file that gets cloned
+        data.pop("unsafe_in_repo", None)
         data["schema"] = self.SCHEMA
         # never write a default back: a stored default would outlive a better one in a later build
         if data.get("timeouts") == DEFAULTS["timeouts"]:

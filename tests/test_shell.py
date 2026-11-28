@@ -604,7 +604,7 @@ def test_choosing_codex_from_the_picker_asks_and_saving_keeps_the_consent(tmp_pa
     c = Console(tmp_path, ["/harness codex --save", "y", "/exit"])
     c.shell.run()
     cfg = Config.load(tmp_path)
-    assert (cfg.harness, cfg.unsafe) == ("codex", True) and "including that you accept it" in c.screen
+    assert (cfg.harness, cfg.unsafe) == ("codex", True) and "kept in ~/.speckfish, not in the repo" in c.screen
 
 
 def test_harness_auto_goes_back_to_the_first_installed_and_unknown_is_refused(tmp_path):

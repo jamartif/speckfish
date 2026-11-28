@@ -40,6 +40,7 @@ class AltScreen:
         self.stream = stream if stream is not None else sys.stdout
         self.title = title
         self.active = False
+        self._exit_hook = False
         self._old_handlers: dict[int, object] = {}
 
     @property
@@ -56,7 +57,9 @@ class AltScreen:
             return self.active
         self._write(ENTER + TITLE.format(self.title))
         self.active = True
-        atexit.register(self.leave)
+        if not self._exit_hook:
+            self._exit_hook = True
+            atexit.register(self.leave)         # once, however many times the screen is entered
         self._catch_signals()
         return True
 

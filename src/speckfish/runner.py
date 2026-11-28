@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import subprocess
 import sys
 import time
@@ -227,7 +228,11 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
                     exited = False
                 now = time.time()
                 gap, last_look = now - last_look, now
-                if gap > suspend_gap:
+                if gap < 0:
+                    # the clock was set back (NTP, a manual change): keep the deadlines where they were
+                    started += gap
+                    activity["t"] += gap
+                elif gap > suspend_gap:
                     lost = gap - poll
                     suspended += lost
                     started += lost                              # the deadlines move by what was lost
@@ -251,6 +256,8 @@ def execute(harness: Harness, inv: StepInvocation, step: str, cwd: Path,
         # Ctrl+C reaches speckfish, not the agent's own process group: stop the whole tree or it
         # keeps running (and writing, with the sandbox off) after the command is gone
         meter.stop()
+        if stats is not None:
+            stats["suspended_s"] = suspended
         sys.stderr.write("\nStopping the agent…  (Ctrl+C again forces it)\n")
         sys.stderr.flush()
         _stop_and_report(proc, job)
@@ -454,7 +461,12 @@ def record_state(cfg: Config, run_dir: Path, run_id: str, res: StepResult,
     with file_lock(state_path):
         # missing or not JSON (an older interrupted write): start it again. A file that is merely busy is
         # retried and then raised, never taken for empty (that would erase the run's history)
-        state = read_json_retry(state_path) or {}
+        state = read_json_retry(state_path)
+        if state is None and state_path.exists() and state_path.stat().st_size:
+            # there is something in it that is not JSON: keep it before the next write replaces it
+            with contextlib.suppress(OSError):
+                shutil.copy2(state_path, state_path.with_name(f"state.json.corrupt-{int(time.time())}"))
+        state = state or {}
         if not isinstance(state, dict):
             state = {}
         state.setdefault("run_id", run_id)

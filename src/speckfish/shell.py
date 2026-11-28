@@ -24,7 +24,7 @@ from pathlib import Path
 
 from . import __version__
 from . import steps as S
-from .config import Config, norm
+from .config import Config, norm, valid_model
 from .harnesses import REGISTRY, detect_order
 from .screen import AltScreen, page
 
@@ -584,9 +584,11 @@ class Shell:
             cfg = self.cfg()
             cfg.harness = value
             if unsafe_accepted:
-                cfg.unsafe = True                 # they just confirmed it: do not ask again next time
+                from .config import set_unsafe_consent
+                set_unsafe_consent(cfg.root, True)      # they just confirmed it: kept in ~/.speckfish, not the repo
             cfg.save()
-            where = "saved in .speckfish/config.json" + (" (including that you accept it)" if unsafe_accepted else "")
+            where = "saved in .speckfish/config.json" + (
+                "; that you accept it is kept in ~/.speckfish, not in the repo" if unsafe_accepted else "")
         self.say(f"harness = {value}  ({where}{'' if save else '; add --save to keep it'})")
         self.offer_skills(value)
         return True
@@ -605,6 +607,9 @@ class Shell:
             self.run_cli(["init", "--integration", name])
 
     def use_model(self, value: str, save: bool) -> bool:
+        if value not in ("default", "auto") and not valid_model(value):
+            self.say(f"{value!r} is not a model name (letters, digits and . _ : / @ + - only)")
+            return True
         self.model = None if value in ("default", "auto") else value
         where = "this session only"
         if save:

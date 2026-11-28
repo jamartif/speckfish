@@ -3,6 +3,22 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## Unreleased
+
+From a review of 0.3.0 and 0.3.1, each point checked against the code before it was changed:
+
+- **Security: a repository can no longer grant itself "no sandbox".** `config unsafe=true` and `/harness codex --save` wrote `unsafe: true` into `.speckfish/config.json`, which travels with a clone: whoever cloned the repository inherited the consent. It is now kept per project in `~/.speckfish/unsafe.json`, an `unsafe` in the repo's config is ignored (and the refusal says so), and it is never written to the repo. If you had saved it, run `speckfish config unsafe=true` once more.
+- **Security: a model name is a name.** A repo's config could carry `model: "--dangerously-…"` into the agent's command line. Names must now be plain identifiers (`config model=`, `--model`, `/model`); an invalid one in the repo's config is ignored.
+- **Linux and macOS: the agent's children are stopped even when the process we launched had already exited** (a shell that leaves a background child). The group is signalled by its id (the pid, as it is started in its own session) instead of being skipped or looked up with `getpgid`.
+- **Windows: the job-object and console calls declare their types** (`restype`/`argtypes`), so a 64-bit handle is no longer truncated to 32 bits. The small window between starting the agent and putting it in the job is documented.
+- **A terminal escape sequence in an agent's command or path is not printed** (window titles, cursor moves, control characters are stripped from the status line).
+- **A `state.json` that is not valid JSON is kept as `state.json.corrupt-<time>`** before the run's history is rewritten.
+- **A read-only folder no longer makes every step wait 10 s for a lock** that can never be taken.
+- **The alternate-screen exit hook is registered once**, not on every entry.
+- **A clock set back during a step no longer extends its timeout**, and a step cancelled with Ctrl+C reports its suspended time.
+
+Not changed, on purpose: the stale-lock takeover race remains (two processes seeing the same old lock; the second can delete the first's new one) and so does the use of the wall clock to detect a suspension, which cannot tell a long NTP step forward from a sleep on Linux.
+
 ## v0.4.0 — 2026-11-28
 
 Includes v0.3.1 (below), which was never tagged on its own.

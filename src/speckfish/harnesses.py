@@ -475,13 +475,15 @@ def detect_order() -> list[str]:
 
 
 UNSAFE_HELP = ("`{name}` runs with its sandbox and approvals switched off, so it can read and write anything "
-               "on this machine. Say you accept that: `speckfish config unsafe=true`, or `--unsafe` for one run "
+               "on this machine. Say you accept that: `speckfish config unsafe=true` (kept in your own ~/.speckfish, not in the repo), or `--unsafe` for one run "
                "(or SPECKFISH_UNSAFE=1 in CI, inside a disposable container).")
 
 
 def _checked(cfg: Config, h: Harness) -> Harness:
     if getattr(h, "unsafe", False) and not cfg.unsafe:
-        raise SystemExit(UNSAFE_HELP.format(name=h.name))
+        note = ("\nThis project's .speckfish/config.json says unsafe=true: a repository cannot grant that, so it "
+                "is ignored." if getattr(cfg, "unsafe_in_repo", False) else "")
+        raise SystemExit(UNSAFE_HELP.format(name=h.name) + note)
     return h
 
 

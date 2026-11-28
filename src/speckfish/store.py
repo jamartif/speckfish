@@ -72,6 +72,9 @@ def file_lock(path: Path, timeout: float = 10.0, stale: float = 60.0) -> Iterato
     """
     lock = Path(str(path) + ".lock")
     lock.parent.mkdir(parents=True, exist_ok=True)
+    if not os.access(lock.parent, os.W_OK):
+        yield False                          # read-only folder: nothing can be locked, do not wait the timeout out
+        return
     deadline = time.time() + timeout
     held = False
     while True:
