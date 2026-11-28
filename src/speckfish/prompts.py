@@ -299,6 +299,14 @@ SKILL_SPECS = {
 }
 
 
+def skill_name_for(kind: str) -> str:
+    """The Spec Kit skill a kind of step asks the agent to run ('' for steps that are not a skill)."""
+    if kind in ("specify", "plan"):
+        return f"speckit-{kind}"
+    spec = SKILL_SPECS.get(kind)
+    return str(spec["skill"]) if spec else ""
+
+
 def skill_prompt(skill: str, args: str, artifact_dir: Path,
                  cfg_root: Path | None = None, feature_dir=None) -> str:
     """Prompt for a Spec Kit skill that is not specify/plan."""

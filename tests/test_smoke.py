@@ -378,7 +378,7 @@ def test_copilot_prompt_frontmatter():
     txt = copilot_prompt("review", STEPS["review"], "speckfish")
     assert txt.startswith("---\n")
     assert "name: 'spfish-review'" in txt          # short prefix, does not blur into /speckit-*
-    assert "agent: 'agent'" in txt
+    assert "disable-model-invocation: true" in txt and "agent:" not in txt
     assert "speckfish review" in txt
 
 
@@ -398,7 +398,7 @@ def test_generate_writes_every_target(tmp_path):
     out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish",
                    str(codex_home), force=True)
     assert (tmp_path / ".vscode" / "tasks.json").exists()
-    assert (tmp_path / ".github" / "prompts" / "spfish-review.prompt.md").exists()
+    assert (tmp_path / ".github" / "skills" / "spfish-review" / "SKILL.md").exists()
     assert (tmp_path / ".claude" / "commands" / "spfish-review.md").exists()
     assert (codex_home / "prompts" / "spfish-review.md").exists()
     from speckfish.editors import STEPS as EDITOR_STEPS
@@ -418,7 +418,7 @@ def test_custom_prefix_renames_every_command(tmp_path):
     out = generate(cfg, ["vscode", "copilot", "claude", "codex"], "speckfish", None,
                    force=True, prefix="xyz")
     assert out["prefix"] == "xyz"
-    assert (tmp_path / ".github" / "prompts" / "xyz-review.prompt.md").exists()
+    assert (tmp_path / ".github" / "skills" / "xyz-review" / "SKILL.md").exists()
     assert (tmp_path / ".claude" / "commands" / "xyz-drift.md").exists()
     assert not list((tmp_path / ".claude" / "commands").glob("spfish-*"))
     assert tasks_json("speckfish", prefix="xyz")["tasks"][0]["label"].startswith("xyz: ")
@@ -2094,3 +2094,16 @@ def test_implement_prompt_demands_ticking_the_checkbox(tmp_path):
     from speckfish import prompts as P
     text = P.SKILL_SPECS["implement"]["headless_note"].lower()
     assert "checkbox" in text and "- [x]" in text
+
+
+def test_old_copilot_prompt_files_are_replaced_by_skills(tmp_path):
+    """Copilot's newer runtime asks to migrate `.github/prompts/spfish-*.prompt.md`: they are removed, yours stay."""
+    from speckfish.editors import generate
+    prompts = tmp_path / ".github" / "prompts"
+    prompts.mkdir(parents=True)
+    (prompts / "spfish-review.prompt.md").write_text("old", encoding="utf-8")
+    (prompts / "mine.prompt.md").write_text("user file", encoding="utf-8")
+    out = generate(Config(root=tmp_path), ["copilot"], "speckfish", None, force=True)
+    assert not (prompts / "spfish-review.prompt.md").exists() and (prompts / "mine.prompt.md").exists()
+    assert (tmp_path / ".github" / "skills" / "spfish-review" / "SKILL.md").exists()
+    assert any("spfish-review.prompt.md" in r for r in out["removed"])

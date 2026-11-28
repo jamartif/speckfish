@@ -70,7 +70,22 @@ ERROR_HINTS = {
     "quota": "fix: wait for the limit to reset, or run the same step with another agent "
              "(`--harness copilot`). Nothing was lost: retry the same command.",
     "auth": "fix: authenticate the agent CLI (`claude` / `copilot` login) and retry.",
+    "blocked": "fix: do what the agent names (install the tool, connect the device, decide), or mark the "
+               "task [MANUAL] in tasks.md if it is yours to do, then run the same command again.",
 }
+
+
+def _said(label: str, text: str | None, limit: int = 12, width: int = 94, indent: str = "  ") -> list[str]:
+    """What the agent said, quoted under a label: the reason it stopped is often only there."""
+    body = [ln.strip() for ln in (text or "").splitlines() if ln.strip()]
+    if not body:
+        return []
+    out = [f"{indent}{label}:"]
+    for ln in body:
+        out += [f"{indent}  {w}" for w in textwrap.wrap(ln, width=width) or [""]]
+    if len(out) > limit + 1:
+        out = [*out[:limit + 1], f"{indent}  …"]
+    return out
 
 
 def _tasks_note(res: dict) -> str:
@@ -83,7 +98,7 @@ def _tasks_note(res: dict) -> str:
 def summarize(res: dict, root: str | None = None) -> str:
     """One screen of plain text: what ran, what it found, where the report is."""
     ok = res.get("ok")
-    mark = "OK" if ok else "FAILED"
+    mark = "OK" if ok else ("BLOCKED" if res.get("error_kind") == "blocked" else "FAILED")
     head = f"{mark}  {res.get('step')}  ·  {_dur(res.get('duration_s'))}"
     if res.get("model"):
         head += f"  ·  {res['model']}"
@@ -96,6 +111,10 @@ def summarize(res: dict, root: str | None = None) -> str:
         head += f"  ·  exit {res['exit_code']}"
     lines = [head]
 
+    if res.get("suspended_s"):
+        from .runner import format_span
+        lines.append(f"  note: the computer was suspended for {format_span(res['suspended_s'])} during this step; "
+                     f"it is not counted in the time above")
     done = _activity_line(res.get("activity"))
     if done:
         lines.append(done)
@@ -146,6 +165,8 @@ def summarize(res: dict, root: str | None = None) -> str:
         hint = ERROR_HINTS.get(res.get("error_kind") or "")
         if hint:
             lines.append(f"  {hint}")
+    if not ok:
+        lines += _said("agent said", res.get("agent_message"))
     if res.get("artifact_dir"):
         lines.append("")
         lines.append(f"  artifacts: {_rel(res['artifact_dir'], root)}")
@@ -329,6 +350,16 @@ def doctor_summary(info: dict) -> str:
                  f"agent-skills={yn(p.get('has_claude_skills'))}")
     if p.get("feature"):
         lines.append(f"         latest feature: {p['feature']}")
+    skills = p.get("skills") or {}
+    if skills:
+        lines.append("         Spec Kit skills: " + " · ".join(f"{n} {yn(v)}" for n, v in skills.items()))
+        active = (info.get("harness") or {}).get("harness")
+        if active in skills and not skills[active]:
+            lines.append(f"         WARNING: {active} is the agent in use and has no Spec Kit skills here: "
+                         f"run `speckfish init --integration {active}`")
+    if p.get("build_tools_missing"):
+        lines.append("         WARNING: build tools not installed: " + "; ".join(p["build_tools_missing"])
+                     + " (`implement` will not start without them)")
     if p.get("state_ignored") is False:
         lines.append("         WARNING: .speckfish/ is not in .gitignore — its logs hold the agents' "
                      "full transcripts. Run `speckfish init` or add it")
@@ -872,7 +903,7 @@ def cmd_implement(run: Run) -> int:
                                      stream=run.stream, dry_run=args.dry_run)
         st = flow.feature_state(cfg, feat)
         result["state"] = {k: st[k] for k in ("spec", "plan", "tasks", "tasks_done", "tasks_total",
-                                              "blockers", "review_current")}
+                                              "tasks_manual", "blockers", "review_current")}
         out["features"][feat.name] = result
         if result["stopped"]:
             out["ok"] = False
@@ -1072,12 +1103,14 @@ def flow_summary(out: dict) -> str:
     for name, feat in (out.get("features") or {}).items():
         st = feat.get("state") or {}
         tasks = f"  tasks {st['tasks_done']}/{st['tasks_total']}" if st.get("tasks_total") else ""
+        if st.get("tasks_manual"):
+            tasks += f" (+{len(st['tasks_manual'])} for you)"
         review = ""
         if st.get("blockers") is not None:
             review = f"  review: {st['blockers']} blocker(s)"
         lines.append(f"{name}{tasks}{review}")
         for s in feat.get("steps") or []:
-            mark = "OK    " if s.get("ok") else "FAILED"
+            mark = "OK    " if s.get("ok") else ("BLOCKED" if s.get("error_kind") == "blocked" else "FAILED")
             cost = ""
             if s.get("cost"):
                 unit = s.get("cost_unit") or "usd"
@@ -1087,6 +1120,10 @@ def flow_summary(out: dict) -> str:
             lines.append(f"  fallback {sw}")
         if feat.get("stopped"):
             lines.append(f"  stopped at {feat['stopped']}: {feat.get('reason')}")
+            failed = [s for s in feat.get("steps") or [] if not s.get("ok")]
+            if failed:
+                lines += _said("agent said", failed[-1].get("agent_message"))
+                lines += _said("reconcile said", failed[-1].get("reconcile_message"))
         elif feat.get("reason"):
             lines.append(f"  {feat['reason']}")
     if out.get("spent"):
@@ -1098,11 +1135,12 @@ def flow_summary(out: dict) -> str:
 
 
 def flow_exit_code(out: dict) -> int:
-    """0 clean · 1 blockers left after the rounds · 2 a step failed · 3 quota/auth/budget."""
+    """0 clean · 1 blockers left after the rounds · 2 a step failed · 3 quota/auth/budget/blocked."""
     if out.get("ok"):
         return EXIT_OK
     feats = list((out.get("features") or {}).values())
-    if any(f.get("error_kind") in ("quota", "auth") or f.get("stopped") == "budget" for f in feats):
+    if any(f.get("error_kind") in ("quota", "auth", "blocked") or f.get("stopped") in ("budget", "blocked")
+           for f in feats):
         return EXIT_ENV
     if feats and all(f.get("stopped") in (None, "revise") for f in feats) and out.get("blockers"):
         return EXIT_BLOCKERS
@@ -1230,11 +1268,15 @@ def status_summary(rows: list[dict], spent: dict[str, float]) -> str:
     for r in rows:
         arts = "".join("+" if r[k] else "-" for k in ("spec", "plan", "tasks"))
         tasks = f"{r['tasks_done']}/{r['tasks_total']}" if r["tasks_total"] else "-"
+        if r.get("tasks_manual"):
+            tasks += f" (+{len(r['tasks_manual'])} yours)"
         if r["blockers"] is not None:
             review = f"{r['blockers']} blocker(s)"
         else:
             review = "stale" if r["review"] else "never"
         lines.append(f"{r['name']:<34} [{arts}]  tasks {tasks:<7} review: {review}")
+        if r.get("tasks_manual"):
+            lines.append(f"  yours to do (marked [MANUAL]): {', '.join(r['tasks_manual'])}")
         nxt = r["next"]
         lines.append(f"  next: {nxt['why']}" + (f"  ->  {nxt['command']}" if nxt["command"] else ""))
     if spent:

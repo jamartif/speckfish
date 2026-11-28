@@ -83,6 +83,20 @@ class Harness:
         """One line a person can read before approving a step: what this agent gets for this kind of step."""
         return "the agent's default permissions"
 
+    # ---- Spec Kit's skills: installed per agent, so a project set up for one has none for another ----
+    skill_dirs: ClassVar[tuple[str, ...]] = ()       # where this agent's skills or commands live
+
+    def has_skill(self, root: Path, skill: str) -> bool:
+        """Is `skill` (e.g. speckit-implement) installed for this agent in the project?"""
+        dotted = skill.replace("-", ".", 1)           # older layouts: speckit.implement.md
+        for folder in self.skill_dirs:
+            base = Path(root) / folder
+            if (base / skill / "SKILL.md").is_file():
+                return True
+            if base.is_dir() and any(p.is_file() for pat in (f"{skill}*", f"{dotted}*") for p in base.glob(pat)):
+                return True
+        return False
+
     # ---- models ----
     def known_models(self) -> list[tuple[str, str]]:
         """[(name, where it comes from)] for `--model`. Only what this CLI lets us find out: no guessing.
@@ -99,6 +113,7 @@ class Harness:
 
 class ClaudeHarness(Harness):
     name = "claude"
+    skill_dirs = (".claude/skills", ".claude/commands")
     slash_commands = True
     supports_schema = True
     supports_budget = True
@@ -205,6 +220,7 @@ class ClaudeHarness(Harness):
 
 class CopilotHarness(Harness):
     name = "copilot"
+    skill_dirs = (".github/skills", ".github/prompts", ".github/agents")
     supports_schema = False
     supports_budget = True
     verified = True
@@ -346,6 +362,7 @@ CODEX_FILE_HINT = (
 
 class CodexHarness(Harness):
     unsafe = True              # runs with the sandbox and the approvals off: needs explicit consent
+    skill_dirs = (".agents/skills",)
     name = "codex"
     echo_stdout = False        # `codex exec --json` prints NDJSON: translated into activity lines
     supports_schema = False

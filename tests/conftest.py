@@ -19,6 +19,8 @@ def isolated_user_state(monkeypatch, tmp_path_factory):
     """Never read or write the real ~/.speckfish, and do not make every test record an EGM trust entry."""
     monkeypatch.setenv("SPECKFISH_HOME", str(tmp_path_factory.mktemp("speckfish-home")))
     monkeypatch.setenv("SPECKFISH_TRUST_ALL", "1")
+    monkeypatch.setenv("SPECKFISH_SKIP_SKILL_CHECK", "1")     # tests run steps in folders with no skills
+    monkeypatch.setenv("SPECKFISH_SKIP_TOOL_CHECK", "1")      # same for the project's build tools
     for name in ("SPECKFISH_UNSAFE", "SPECKFISH_ENV_ALLOWLIST", "SPECKFISH_EGM_ROOT"):
         monkeypatch.delenv(name, raising=False)
 

@@ -11,12 +11,12 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import prompts
+from . import prompts, toolchain
 from . import steps as S
 from .config import Config, find_report, norm, parse_consolidated
 from .runner import StepResult, run_step
 from .store import read_json_cached, write_json_atomic
-from .workspace import changed_besides, count_tasks, git_snapshot, next_chunk, parse_tasks
+from .workspace import changed_besides, count_tasks, git_snapshot, next_chunk, open_manual, parse_tasks
 
 _MARKS = re.compile(r"\[[ xX]\]")
 
@@ -145,7 +145,8 @@ def _review_counts(review: dict | None) -> tuple[int, int]:
 
 def feature_state(cfg: Config, feature: Path) -> dict:
     name = feature.name
-    done, total = count_tasks(feature / "tasks.md")
+    tasks = parse_tasks(feature / "tasks.md")
+    done, total = sum(1 for t in tasks if t["done"]), len(tasks)
     review = latest_record(cfg, "review", name)
     current = review_is_current(feature, review)           # stats the documents: once, not twice
     blockers, majors = _review_counts(review) if current else (None, None)
@@ -154,6 +155,8 @@ def feature_state(cfg: Config, feature: Path) -> dict:
         "spec": (feature / "spec.md").exists(), "plan": (feature / "plan.md").exists(),
         "tasks": (feature / "tasks.md").exists(),
         "tasks_done": done, "tasks_total": total,
+        "tasks_pending": len(next_chunk(tasks, 0)),      # what the agent can still do
+        "tasks_manual": open_manual(tasks),              # what is left for a person
         "review": review, "review_current": current,
         "blockers": blockers, "majors": majors,
         "analyzed": _ok_record(latest_record(cfg, "analyze", name)),
@@ -187,10 +190,14 @@ def next_step(cfg: Config, feature: Path, implement: bool = False, analyze: bool
         return "revise", f"the review left {st['majors']} major finding(s)"
     if not implement:
         return None, "design reviewed with no blockers; add --implement --yes to write the code"
-    if st["tasks_total"] and st["tasks_done"] < st["tasks_total"]:
-        return "implement", f"{st['tasks_total'] - st['tasks_done']} task(s) pending"
+    pending = st["tasks_pending"] if "tasks_pending" in st else st["tasks_total"] - st["tasks_done"]
+    if st["tasks_total"] and pending > 0:
+        return "implement", f"{pending} task(s) pending"
     if drift and not st["drift"]:
         return "drift", "code written; compare it with the design"
+    manual = st.get("tasks_manual") or []
+    if manual:
+        return None, f"done, except {len(manual)} [MANUAL] task(s) left for you: {', '.join(manual)}"
     return None, "done"
 
 
@@ -297,7 +304,9 @@ def chunk_args(chunk: list[dict]) -> str:
         f"Write the real code and tests each one asks for. The moment a task is finished (its code "
         f"exists and the project builds), change that task's `- [ ]` to `- [x]` in tasks.md: one "
         f"edit per task, never left for the end. Do not start any other task. When all of them are "
-        f"done, or one is blocked, stop and say which.")
+        f"done, or one is blocked, stop and say which. For every task you could not finish (a missing "
+        f"tool, a device, a decision you cannot make) do not tick it and end your final message with one "
+        f"line per task: `BLOCKED: <task id> - <the reason>`.")
 
 
 def reconcile_prompt(feature: Path, tasks: list[dict]) -> str:
@@ -340,6 +349,7 @@ def do_implement_chunk(cfg: Config, feature: Path, rid: str, harness, chunk: int
         rec = run_step(cfg, harness, unique_label(cfg, rid, f"reconcile-{name}"),
                        S.with_language(reconcile_prompt(feature, left), cfg), cfg.root, rid,
                        cfg.egm_path(), kind="reconcile", stream=stream)
+        res.reconcile_message = rec.agent_message
         if rec.cost:
             res.cost = float(res.cost or 0) + float(rec.cost)
         text_after = tasks_md.read_text(encoding="utf-8", errors="replace")
@@ -364,6 +374,11 @@ def do_implement_chunk(cfg: Config, feature: Path, rid: str, harness, chunk: int
         res.ok = False
         res.error = (f"none of the {len(ids)} task(s) of this chunk got ticked, "
                      f"even after checking the code against them")
+    if not ticked and res.blocked:
+        # the agent said why: that is the news, not "ticked nothing". Do not retry what it cannot do
+        res.ok = False
+        res.error_kind = "blocked"
+        res.error = "blocked: " + "; ".join(res.blocked)[:400]
     return res
 
 
@@ -374,10 +389,20 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
     budget = budget or Budget(None)
     out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
     stalled, sticky = 0, {}
+    gone = [] if dry_run else toolchain.missing(cfg.root, cfg.require_tools, feature / "plan.md")
+    if gone and next_chunk(parse_tasks(feature / "tasks.md"), 0):
+        out.update(stopped="blocked", error_kind="blocked",
+                   reason="not installed: " + "; ".join(gone) + ". Install it (or set "
+                          "SPECKFISH_SKIP_TOOL_CHECK=1) and run `implement` again; nothing was started")
+        return out
     for _ in range(max_chunks or 10_000):
-        done, total = count_tasks(feature / "tasks.md")
-        if not total or done >= total:
-            out["reason"] = f"all {total} task(s) ticked"
+        tasks = parse_tasks(feature / "tasks.md")
+        done, total = sum(1 for t in tasks if t["done"]), len(tasks)
+        if not total or not next_chunk(tasks, 0):
+            manual = open_manual(tasks)
+            out["reason"] = (f"all {total} task(s) ticked" if not manual else
+                             f"the agent's part is done; {len(manual)} task(s) marked [MANUAL] are left for "
+                             f"you: {', '.join(manual)}")
             return out
         if budget.exhausted:
             out.update(stopped="budget",
@@ -390,8 +415,8 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
         budget.add(res)
         out["steps"].append({"kind": "implement", **res.to_dict()})
         if not res.ok:
-            out.update(stopped="implement", reason=res.error or "the chunk failed",
-                       error_kind=res.error_kind)
+            out.update(stopped="blocked" if res.error_kind == "blocked" else "implement",
+                       reason=res.error or "the chunk failed", error_kind=res.error_kind)
             return out
         if dry_run:
             return out
@@ -642,7 +667,7 @@ def do_go(cfg: Config, idea: str, *, stack: str = "", split: bool | None = None,
                          chunk=chunk, budget=meter, stream=stream, dry_run=dry_run)
         st = feature_state(cfg, f)
         result["state"] = {k: st[k] for k in ("spec", "plan", "tasks", "tasks_done", "tasks_total",
-                                              "blockers", "review_current")}
+                                              "tasks_manual", "blockers", "review_current")}
         out["features"][f.name] = result
         if st["blockers"]:
             out["blockers"] += int(st["blockers"])

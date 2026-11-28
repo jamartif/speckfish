@@ -143,8 +143,25 @@ _FENCE = re.compile(r"^\s*(```|~~~)")
 _WORDS = re.compile(r"\s+")
 
 
+# `[MANUAL]` in a task's text: a person has to do it (a physical device, a decision, a login). speckfish does
+# not hand it to the agent, and lists it as yours instead of calling the feature unfinished.
+_MANUAL = re.compile(r"\[manual\]|\(manual\)", re.I)
+# what the agent writes when it cannot finish a task: `BLOCKED: T002 - needs the phone` (or `**Blocked:** ...`)
+_BLOCKED = re.compile(r"^[\s*_>#`-]*blocked[\s*_`]*[:：][\s*_`]*(.+?)\s*$", re.I | re.M)
+
+
+def parse_blocked(text: str) -> list[str]:
+    """The reasons an agent gave for not finishing, one per `BLOCKED:` line of its final message."""
+    return [m.group(1).strip(" *_`")[:300] for m in _BLOCKED.finditer(text or "") if m.group(1).strip(" *_`")]
+
+
+def open_manual(tasks: list[dict]) -> list[str]:
+    """Ids of the `[MANUAL]` tasks that are still open."""
+    return [t["id"] for t in tasks if t.get("manual") and not t["done"]]
+
+
 def parse_tasks(path: Path) -> list[dict]:
-    """Every task of a tasks.md in order: {id, done, text, phase}."""
+    """Every task of a tasks.md in order: {id, done, text, phase, manual}."""
     try:
         lines = path.read_text(encoding="utf-8", errors="replace").splitlines()
     except OSError:
@@ -164,11 +181,15 @@ def parse_tasks(path: Path) -> list[dict]:
             text = m.group("text")
             # a task without a T-number is named by its text, so an inserted line does not shift it
             ident = m.group("id") or "~" + _WORDS.sub(" ", text).strip().lower()[:80]
-            tasks.append({"id": ident, "done": m.group("mark") != " ", "text": text, "phase": phase})
+            tasks.append({"id": ident, "done": m.group("mark") != " ", "text": text, "phase": phase,
+                          "manual": bool(_MANUAL.search(text))})
     return tasks
 
 
 def next_chunk(tasks: list[dict], size: int) -> list[dict]:
-    """The next `size` pending tasks, in file order (size <= 0: every pending task)."""
-    pending = [t for t in tasks if not t["done"]]
+    """The next `size` pending tasks the agent can do, in file order (size <= 0: all of them).
+
+    `[MANUAL]` tasks are left out: they are for a person.
+    """
+    pending = [t for t in tasks if not t["done"] and not t.get("manual")]
     return pending if size <= 0 else pending[:size]

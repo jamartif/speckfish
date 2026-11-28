@@ -51,6 +51,7 @@ def paint(text: str, *styles: str, on: bool = True) -> str:
 _LINE_RULES = (
     (re.compile(r"^(OK\b)"), ("green", "bold")),
     (re.compile(r"^(FAILED\b)"), ("red", "bold")),
+    (re.compile(r"^(\s*)(BLOCKED\b)"), ("yellow", "bold")),
     (re.compile(r"^(\s*)(BLOCKER|ERROR)\b"), ("red",)),
     (re.compile(r"^(\s*)WARNING\b"), ("yellow",)),
     (re.compile(r"^(\s*)(artifacts|log|agent):"), ("grey",)),

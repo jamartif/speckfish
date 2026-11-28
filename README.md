@@ -326,6 +326,13 @@ implements in chunks of `--chunk` tasks (default 5, each ticked in `tasks.md`), 
 implements once more. `--budget` stops before the next step once that much was spent. Exit codes:
 `0` clean · `1` blockers left after the rounds · `2` a step failed · `3` quota, credentials or budget.
 
+### Tasks only a person can do, and tasks the agent cannot finish
+
+- Mark a task `[MANUAL]` in `tasks.md` (e.g. `- [ ] T002 [MANUAL] Measure on the phone`) and `implement` never hands it to the agent; when only those are left the loop ends and lists them as yours. `status` shows `(+N yours)`.
+- The agent is asked to end with `BLOCKED: <task id> - <reason>` for any task it cannot finish. A chunk that ticks nothing and says so is reported as `blocked` (exit code 3) with the agent's words, and is not retried.
+- Before `implement` starts, the project's build tools are checked (from the project's files and from the stack in the feature's `plan.md`: `gradlew`/Kotlin → java, `package.json` → node, `Cargo.toml` → cargo, `go.mod`, `*.csproj`, `pom.xml`…). Add your own with `speckfish config require_tools "java,adb"`; `SPECKFISH_SKIP_TOOL_CHECK=1` turns it off.
+- Each Spec Kit step checks that the agent in use has its skills in the project (`speckfish doctor` shows which agents do); if not, it tells you to run `speckfish init --integration <agent>`. `SPECKFISH_SKIP_SKILL_CHECK=1` turns the check off.
+
 ### Step by step
 
 ```bash
@@ -517,6 +524,11 @@ the line is erased and the summary takes over, including what the agent did (`ag
 version, arguments without the prompt, the prompt's length and hash, permissions, EGM commit and trust, cost).
 Turn the live line off with `--no-progress` (implied by `--quiet` and `--json`). Colour is only used on a terminal;
 `NO_COLOR` turns it off.
+
+**Sleep and standby.** If the computer is suspended while a step runs (sleep, hibernation, Modern Standby with the
+lid closed) everything is frozen, agent included. speckfish notices the pause, does not count it as the agent being
+silent or as part of the duration, and says so (`the computer was suspended for 4h 08m; that time is not counted`).
+For a long run overnight keep the machine awake: sleeping is Windows' decision, not something speckfish can prevent.
 
 **Ctrl+C.** It prints `Stopping the agent…`, stops the *whole* tree of processes the agent started, and checks
 that it is gone; if it could not, it says so and prints the exact command to do it by hand. A second Ctrl+C
@@ -772,7 +784,7 @@ speckfish init --no-editors           # project setup without editor files
 | Target | Files | How you invoke it |
 |---|---|---|
 | `vscode` | `.vscode/tasks.json` | Command Palette → **Run Task** → *spfish: review* (works with any agent, no extension needed) |
-| `copilot` | `.github/prompts/spfish-*.prompt.md` | Copilot Chat: `/spfish-review`, `/spfish-specify`, `/spfish-plan`, `/spfish-drift`, `/spfish-doctor` |
+| `copilot` | `.github/skills/spfish-*/SKILL.md` | Copilot Chat: `/spfish-review`, `/spfish-specify`, `/spfish-plan`, `/spfish-drift`, `/spfish-doctor` |
 | `claude` | `.claude/commands/spfish-*.md` | Claude Code: `/spfish-review` (custom slash commands, merged into skills) |
 | `codex` | `$CODEX_HOME/prompts/spfish-*.md` (default `~/.codex/prompts`) | Codex CLI/IDE: `/prompts:spfish-review` |
 
@@ -952,6 +964,7 @@ $ speckfish review --interactive
 | `SPECKFISH_HOME` | where `trusted.json` lives (default `~/.speckfish`) |
 | `SPECKFISH_VERBOSE=1` · `SPECKFISH_FULLSCREEN=0` · `NO_COLOR` | keep every action / no full screen / no colour |
 | `SPECKFISH_IDLE_SECONDS` · `SPECKFISH_RESULT_GRACE` · `SPECKFISH_POLL_SECONDS` | how long a silent agent may run, how long one that printed its final event may linger, how often those are checked |
+| `SPECKFISH_SUSPEND_SECONDS` | a pause longer than this (default 30) between two looks at the agent is taken as the computer being suspended, and is not counted |
 
 ## How it works
 
