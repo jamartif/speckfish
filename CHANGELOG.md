@@ -3,7 +3,9 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
-## Unreleased
+## v0.4.0 — 2026-11-28
+
+Includes v0.3.1 (below), which was never tagged on its own.
 
 Found by reading a real `implement` run (codex, 17 minutes, nothing ticked, and the only message was "finished without ticking a single task"):
 
