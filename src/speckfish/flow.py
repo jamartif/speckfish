@@ -11,7 +11,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import prompts
+from . import prompts, toolchain
 from . import steps as S
 from .config import Config, find_report, norm, parse_consolidated
 from .runner import StepResult, run_step
@@ -389,6 +389,12 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
     budget = budget or Budget(None)
     out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
     stalled, sticky = 0, {}
+    gone = [] if dry_run else toolchain.missing(cfg.root, cfg.require_tools)
+    if gone and next_chunk(parse_tasks(feature / "tasks.md"), 0):
+        out.update(stopped="blocked", error_kind="blocked",
+                   reason="not installed: " + "; ".join(gone) + ". Install it (or set "
+                          "SPECKFISH_SKIP_TOOL_CHECK=1) and run `implement` again; nothing was started")
+        return out
     for _ in range(max_chunks or 10_000):
         tasks = parse_tasks(feature / "tasks.md")
         done, total = sum(1 for t in tasks if t["done"]), len(tasks)

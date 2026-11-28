@@ -357,6 +357,9 @@ def doctor_summary(info: dict) -> str:
         if active in skills and not skills[active]:
             lines.append(f"         WARNING: {active} is the agent in use and has no Spec Kit skills here: "
                          f"run `speckfish init --integration {active}`")
+    if p.get("build_tools_missing"):
+        lines.append("         WARNING: build tools not installed: " + "; ".join(p["build_tools_missing"])
+                     + " (`implement` will not start without them)")
     if p.get("state_ignored") is False:
         lines.append("         WARNING: .speckfish/ is not in .gitignore — its logs hold the agents' "
                      "full transcripts. Run `speckfish init` or add it")

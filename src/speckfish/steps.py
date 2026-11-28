@@ -6,7 +6,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 
-from . import prompts
+from . import prompts, toolchain
 from .config import STATE_DIR, Config, find_git, norm, run_cmd, which
 from .harnesses import REGISTRY, Harness, get_harness
 from .runner import StepResult, new_run_id, run_dir_for, run_interactive, run_step
@@ -311,6 +311,7 @@ def do_doctor(cfg: Config) -> dict:
         "state_ignored": is_git_ignored(cfg.root, STATE_DIR),
         "skills": {name: cls(cfg).has_skill(cfg.root, "speckit-specify")
                    for name, cls in REGISTRY.items() if cls.skill_dirs},
+        "build_tools_missing": toolchain.missing(cfg.root, cfg.require_tools),
         "feature": norm(latest) if (latest := latest_feature(cfg.root)) else None,
     }
     return info
