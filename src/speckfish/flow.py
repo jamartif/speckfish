@@ -303,7 +303,10 @@ def chunk_args(chunk: list[dict]) -> str:
         f"Implement ONLY these {len(chunk)} task(s), in order, and nothing else:\n{listing}\n\n"
         f"Write the real code and tests each one asks for. The moment a task is finished (its code "
         f"exists and the project builds), change that task's `- [ ]` to `- [x]` in tasks.md: one "
-        f"edit per task, never left for the end. Do not start any other task. When all of them are "
+        f"edit per task, never left for the end. Do not start any other task. If the build or the "
+        f"tests fail, fix the cause even when it is in code from an earlier task or outside these "
+        f"tasks (the smallest change that makes them pass): a task is not done on a broken build. "
+        f"Do not stop at a build error you can fix. When all of them are "
         f"done, or one is blocked, stop and say which. For every task you could not finish (a missing "
         f"tool, a device, a decision you cannot make) do not tick it and end your final message with one "
         f"line per task: `BLOCKED: <task id> - <the reason>`.")
