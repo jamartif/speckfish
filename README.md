@@ -330,7 +330,7 @@ implements once more. `--budget` stops before the next step once that much was s
 
 - Mark a task `[MANUAL]` in `tasks.md` (e.g. `- [ ] T002 [MANUAL] Measure on the phone`) and `implement` never hands it to the agent; when only those are left the loop ends and lists them as yours. `status` shows `(+N yours)`.
 - The agent is asked to end with `BLOCKED: <task id> - <reason>` for any task it cannot finish. A chunk that ticks nothing and says so is reported as `blocked` (exit code 3) with the agent's words, and is not retried.
-- Before `implement` starts, the project's build tools are checked (`gradlew` → java, `package.json` → node, `Cargo.toml` → cargo, `go.mod`, `*.csproj`, `pom.xml`…). Add your own with `speckfish config require_tools "java,adb"`; `SPECKFISH_SKIP_TOOL_CHECK=1` turns it off.
+- Before `implement` starts, the project's build tools are checked (from the project's files and from the stack in the feature's `plan.md`: `gradlew`/Kotlin → java, `package.json` → node, `Cargo.toml` → cargo, `go.mod`, `*.csproj`, `pom.xml`…). Add your own with `speckfish config require_tools "java,adb"`; `SPECKFISH_SKIP_TOOL_CHECK=1` turns it off.
 - Each Spec Kit step checks that the agent in use has its skills in the project (`speckfish doctor` shows which agents do); if not, it tells you to run `speckfish init --integration <agent>`. `SPECKFISH_SKIP_SKILL_CHECK=1` turns the check off.
 
 ### Step by step

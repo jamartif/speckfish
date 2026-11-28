@@ -79,3 +79,50 @@ def test_doctor_warns(tmp_path, check):
     info = S.do_doctor(Config(root=tmp_path))
     assert info["project"]["build_tools_missing"] == ["java (the project has gradlew)"]
     assert "build tools not installed: java (the project has gradlew)" in C.doctor_summary(info)
+
+
+PLAN = """# Plan
+## Technical Context
+**Language/Version**: Kotlin 2.0 (JDK 17)
+**Primary Dependencies**: Jetpack Compose, Gradle 8
+**Testing**: JUnit 5
+**Storage**: NEEDS CLARIFICATION
+**Notes**: we mention Node in prose here, which is not a context line
+"""
+
+
+def test_a_new_solution_is_read_from_its_plan(tmp_path, check):
+    plan = tmp_path / "plan.md"
+    plan.write_text(PLAN, encoding="utf-8")
+    assert list(toolchain.from_plan(plan)) == ["java"]
+    assert toolchain.missing(tmp_path, "", plan) == [
+        "java (plan.md says: language/version: Kotlin 2.0 (JDK 17))"]
+    assert toolchain.from_plan(tmp_path / "nope.md") == {}
+
+
+@pytest.mark.parametrize("value,tool", [("TypeScript 5, Node 22", "node"), ("Python 3.12", "python"),
+                                        ("Rust 1.80", "cargo"), ("Go 1.22", "go"), ("C# / .NET 10", "dotnet"),
+                                        ("JavaScript", "node"), ("Dart / Flutter", "flutter")])
+def test_each_stack_maps_to_its_tool(tmp_path, value, tool):
+    plan = tmp_path / "plan.md"
+    plan.write_text(f"**Language/Version**: {value}\n", encoding="utf-8")
+    assert list(toolchain.from_plan(plan)) == [tool]
+
+
+def test_javascript_is_not_java_and_undecided_stacks_ask_for_nothing(tmp_path):
+    plan = tmp_path / "plan.md"
+    plan.write_text("**Language/Version**: JavaScript\n**Testing**: NEEDS CLARIFICATION (Java?)\n", encoding="utf-8")
+    assert list(toolchain.from_plan(plan)) == ["node"]
+
+
+def test_python_is_found_as_python3(tmp_path, monkeypatch):
+    monkeypatch.setattr(toolchain.shutil, "which", lambda t, path=None: "/usr/bin/python3" if t == "python3" else None)
+    assert toolchain._have("python") is True
+
+
+def test_implement_reads_the_plan_of_the_feature(tmp_path, check, monkeypatch):
+    feat = _feature(tmp_path)
+    (feat / "plan.md").write_text(PLAN, encoding="utf-8")
+    monkeypatch.setattr(flow, "do_implement_chunk", lambda *a, **k: None)
+    out = flow.implement_loop(Config(root=tmp_path), feat, "rid", NS(name="fake"))
+    assert out["stopped"] == "blocked" and "not installed: java (plan.md says" in out["reason"]

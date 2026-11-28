@@ -389,7 +389,7 @@ def implement_loop(cfg: Config, feature: Path, rid: str, harness, *, chunk: int 
     budget = budget or Budget(None)
     out: dict = {"name": feature.name, "steps": [], "stopped": None, "reason": "", "switched": []}
     stalled, sticky = 0, {}
-    gone = [] if dry_run else toolchain.missing(cfg.root, cfg.require_tools)
+    gone = [] if dry_run else toolchain.missing(cfg.root, cfg.require_tools, feature / "plan.md")
     if gone and next_chunk(parse_tasks(feature / "tasks.md"), 0):
         out.update(stopped="blocked", error_kind="blocked",
                    reason="not installed: " + "; ".join(gone) + ". Install it (or set "
