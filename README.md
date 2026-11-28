@@ -326,6 +326,12 @@ implements in chunks of `--chunk` tasks (default 5, each ticked in `tasks.md`), 
 implements once more. `--budget` stops before the next step once that much was spent. Exit codes:
 `0` clean · `1` blockers left after the rounds · `2` a step failed · `3` quota, credentials or budget.
 
+### Tasks only a person can do, and tasks the agent cannot finish
+
+- Mark a task `[MANUAL]` in `tasks.md` (e.g. `- [ ] T002 [MANUAL] Measure on the phone`) and `implement` never hands it to the agent; when only those are left the loop ends and lists them as yours. `status` shows `(+N yours)`.
+- The agent is asked to end with `BLOCKED: <task id> - <reason>` for any task it cannot finish. A chunk that ticks nothing and says so is reported as `blocked` (exit code 3) with the agent's words, and is not retried.
+- Each Spec Kit step checks that the agent in use has its skills in the project (`speckfish doctor` shows which agents do); if not, it tells you to run `speckfish init --integration <agent>`. `SPECKFISH_SKIP_SKILL_CHECK=1` turns the check off.
+
 ### Step by step
 
 ```bash

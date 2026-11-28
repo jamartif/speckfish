@@ -8,7 +8,7 @@ from pathlib import Path
 
 from . import prompts
 from .config import STATE_DIR, Config, find_git, norm, run_cmd, which
-from .harnesses import Harness, get_harness
+from .harnesses import REGISTRY, Harness, get_harness
 from .runner import StepResult, new_run_id, run_dir_for, run_interactive, run_step
 from .store import read_json_cached, write_json_atomic
 
@@ -309,6 +309,8 @@ def do_doctor(cfg: Config) -> dict:
         "has_specify": (cfg.root / ".specify").exists(),
         "has_claude_skills": (cfg.root / ".claude" / "skills").is_dir(),
         "state_ignored": is_git_ignored(cfg.root, STATE_DIR),
+        "skills": {name: cls(cfg).has_skill(cfg.root, "speckit-specify")
+                   for name, cls in REGISTRY.items() if cls.skill_dirs},
         "feature": norm(latest) if (latest := latest_feature(cfg.root)) else None,
     }
     return info

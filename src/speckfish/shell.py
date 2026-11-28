@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import contextlib
 import io
+import os
 import shlex
 import shutil
 import sys
@@ -587,7 +588,21 @@ class Shell:
             cfg.save()
             where = "saved in .speckfish/config.json" + (" (including that you accept it)" if unsafe_accepted else "")
         self.say(f"harness = {value}  ({where}{'' if save else '; add --save to keep it'})")
+        self.offer_skills(value)
         return True
+
+    def offer_skills(self, name: str) -> None:
+        """Spec Kit installs its skills per agent: a project set up for claude has none for codex."""
+        cls = REGISTRY.get(name)
+        if (cls is None or not cls.skill_dirs or not (self.root / ".specify").is_dir()
+                or os.environ.get("SPECKFISH_SKIP_SKILL_CHECK") == "1"):
+            return
+        if cls(self.cfg()).has_skill(self.root, "speckit-specify"):
+            return
+        self.say(f"{name} has no Spec Kit skills in this project (it was set up for another agent), so its "
+                 f"steps would fail.")
+        if self.confirm(f"Install them now (speckfish init --integration {name})?"):
+            self.run_cli(["init", "--integration", name])
 
     def use_model(self, value: str, save: bool) -> bool:
         self.model = None if value in ("default", "auto") else value

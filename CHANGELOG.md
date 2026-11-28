@@ -3,6 +3,15 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## Unreleased
+
+Found by reading a real `implement` run (codex, 17 minutes, nothing ticked, and the only message was "finished without ticking a single task"):
+
+- **A step is not launched at a skill that is not installed.** `specify init` installs the Spec Kit skills for one agent (`.claude/skills`, `.github/skills`, `.agents/skills`); run with another one, the agent was told to read a file that did not exist. `specify`, `plan`, `tasks`, `implement` and `constitution` now stop first with the fix (`speckfish init --integration <agent>`). `doctor` lists which agents have their skills, and `/harness` in the console offers to install them when you switch. `--dry-run` is not checked; `SPECKFISH_SKIP_SKILL_CHECK=1` turns it off.
+- **What the agent said is shown when a step fails.** The final message (and the reconcile's) is quoted under `agent said:` instead of being lost in `.out`.
+- **`BLOCKED` is a result of its own.** The chunk prompt asks the agent to end with `BLOCKED: <task id> - <reason>` for tasks it cannot finish (a missing tool, a device, a decision). A chunk that ticked nothing and reported that is `blocked` (exit code 3, with a hint), not a generic failure, and the loop stops instead of retrying it.
+- **`[MANUAL]` tasks are yours.** A task marked `[MANUAL]` (or `(manual)`) is never handed to the agent; the loop finishes when only those are left and lists them (`status` shows `(+N yours)`).
+
 ## v0.3.1 — 2026-11-27
 
 - **A suspended computer is no longer read as a silent agent.** On Windows with Modern Standby (also sleep and hibernation) everything is frozen while the lid is closed. On waking, speckfish compared the clock with the agent's last output, concluded "the agent wrote nothing for 600s", killed the step and reported its duration as 248 minutes: a `codex` run of `implement` left running overnight lost its chunk that way. Now a pause longer than 30 seconds (`SPECKFISH_SUSPEND_SECONDS`) between two looks at the agent is taken as the computer being suspended: the pause is not counted as silence or as duration, the silence clock starts over (a healthy agent carries on; one that really stays silent is stopped after the idle limit of *awake* time, with a true reason), and speckfish says so: `the computer was suspended for 4h 08m; that time is not counted`. The step result has `suspended_s`, the summary a `note:` line, and `<step>.meta.json` records it.

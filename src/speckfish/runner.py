@@ -54,6 +54,9 @@ class StepResult:
     review: dict | None = None     # `specify --review`: the spec's review, as a result dict
     activity: dict | None = None   # what the agent did: actions, commands, files written, subagents
     suspended_s: float = 0.0       # time the computer was suspended during the step (not counted)
+    agent_message: str = ""        # the agent's last message: why it stopped, in its own words
+    reconcile_message: str = ""    # what the reconcile pass said about the tasks that were not ticked
+    blocked: list[str] = field(default_factory=list)   # `BLOCKED:` lines of an implement step
 
     def to_dict(self) -> dict:
         return {k: v for k, v in self.__dict__.items() if k not in ("raw_tail",)}
@@ -526,6 +529,26 @@ def write_meta(cfg: Config, harness: Harness, inv: StepInvocation, prompt: str, 
     write_json_atomic(run_dir / "logs" / f"{label}.meta.json", meta)
 
 
+def require_skill(harness: Harness, root: Path, kind: str) -> None:
+    """Stop before launching an agent at a Spec Kit skill that is not installed for it.
+
+    Seen with codex on a project set up for Claude: the prompt said "read .agents/skills/speckit-implement/
+    SKILL.md", the file did not exist, and the agent improvised for 17 minutes. `SPECKFISH_SKIP_SKILL_CHECK=1`
+    turns this off.
+    """
+    from . import prompts
+    skill = prompts.skill_name_for(kind)
+    dirs = tuple(getattr(harness, "skill_dirs", ()) or ())
+    has = getattr(harness, "has_skill", None)
+    if os.environ.get("SPECKFISH_SKIP_SKILL_CHECK") == "1" or not skill or not dirs or not callable(has):
+        return
+    if not has(Path(root), skill):
+        raise SystemExit(
+            f"{harness.name} has no `{skill}` skill in this project (looked in {', '.join(dirs)}). Spec Kit "
+            f"installs its skills per agent, and this project was set up for another one: run "
+            f"`speckfish init --integration {harness.name}`, or use the agent it was set up for (--harness).")
+
+
 def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
              run_id: str, egm_root: Path | None, timeout: int | None = None,
              budget: float | None = None, schema: dict | None = None,
@@ -542,6 +565,8 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     from .registry import timeout_key
 
     trust.require(cfg, egm_root)             # before anything is created or launched
+    if not dry_run:
+        require_skill(harness, cwd, kind or step_kind(_base_step(cfg, step)))
     run_dir = run_dir_for(cfg, run_id)
     # a batch runs the same step once per feature: each one needs its own folder and log or they overwrite
     label = artifact_name or step
@@ -585,6 +610,12 @@ def run_step(cfg: Config, harness: Harness, step: str, prompt: str, cwd: Path,
     res.model = parsed.get("model") or (cfg.model or None)
     res.denials = parsed.get("denials") or []
     res.raw_tail = parsed.get("text_tail") or parsed.get("result_text") or parsed.get("raw_tail") or ""
+    said = str(parsed.get("text_tail") or parsed.get("result_text") or "").strip()
+    if not said.startswith("{"):                       # a transcript tail of raw events is not a message
+        res.agent_message = said[-2000:]
+    if kind == "implement":
+        from .workspace import parse_blocked
+        res.blocked = parse_blocked(res.agent_message)
     if timed_out:
         res.error = (f"timed out after {timeout}s — the agent may simply need longer. "
                      f"Raise it with `speckfish config timeout.{timeout_key(kind)}="
