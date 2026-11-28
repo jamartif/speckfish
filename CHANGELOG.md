@@ -3,6 +3,10 @@
 Every release is published with the wheel, the source distribution and `SHA256SUMS.txt` on
 <https://github.com/jamartif/speckfish/releases>.
 
+## v0.4.1 — 2026-11-28
+
+- **`implement` fixes a broken build instead of stopping at it.** The chunk prompt said "implement ONLY these tasks, and nothing else" and "if one is blocked, stop"; a build that failed because of code from an earlier task (a real case: a Room/kapt compiler error in an entity written by a previous chunk) was read as "blocked", so the agent diagnosed it, ticked nothing and stopped, and every retry hit the same error. The chunk prompt and the `implement` headless note now tell the agent to fix the cause of a failing build or test, even in earlier code, with the smallest change, and to report `BLOCKED` only for what it tried and could not fix.
+
 ## v0.4.0 — 2026-11-28
 
 Includes v0.3.1 (below), which was never tagged on its own.

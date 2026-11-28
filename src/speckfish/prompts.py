@@ -283,7 +283,8 @@ SKILL_SPECS = {
         "headless_note": "Nobody can answer questions: implement the tasks. Create and edit the real "
                          "files listed in tasks.md and run the build/tests. Do not stop at a "
                          "preparation or validation report, and do not only describe what you would "
-                         "do — write the code. As you finish each task, change its `- [ ]` checkbox "
+                         "do — write the code. If the build or the tests fail, fix the cause even when it comes "
+                         "from earlier code: do not stop at a build error you can fix. As you finish each task, change its `- [ ]` checkbox "
                          "to `- [x]` in tasks.md: that is the only record of what is done, and the "
                          "next run resumes from there.",
         "writes": "source code and tests (destructive: it writes files)",
