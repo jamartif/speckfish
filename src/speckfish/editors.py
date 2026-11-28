@@ -3,7 +3,8 @@
 Per tool, using the formats its documentation defines:
 
 - VS Code tasks      -> .vscode/tasks.json          (Command Palette: Run Task, works for every agent)
-- GitHub Copilot     -> .github/prompts/*.prompt.md (Copilot Chat slash commands, `agent:` frontmatter)
+- GitHub Copilot     -> .github/skills/<name>/SKILL.md (Copilot Chat slash commands; the `.prompt.md` files
+                        of older builds are replaced: Copilot's newer runtime asks to migrate them)
 - Claude Code        -> .claude/commands/*.md       (custom slash commands; merged into skills)
 - Codex CLI / IDE    -> $CODEX_HOME/prompts/*.md    (slash commands as /prompts:<name>, user-global)
 
@@ -165,13 +166,13 @@ def tasks_json(cmd: str, prefix: str = DEFAULT_PREFIX) -> dict:
     return {"version": "2.0.0", "tasks": tasks, "inputs": inputs}
 
 
-# ---------------- GitHub Copilot prompt files ----------------
+# ---------------- GitHub Copilot skills ----------------
 
 COPILOT_TMPL = """---
 name: '{prefix}-{key}'
 description: '{desc}'
-agent: 'agent'
 argument-hint: '{hint}'
+disable-model-invocation: true
 ---
 
 Run the repository's planning pipeline for {ph_arg}.
@@ -193,7 +194,7 @@ Run the repository's planning pipeline for {ph_arg}.
 
 def copilot_prompt(key: str, spec: dict, cmd: str, prefix: str = DEFAULT_PREFIX) -> str:
     cli = " ".join(spec["args"])
-    argpart = " ${input:args}" if spec["hint"] else ""
+    argpart = " <what the user typed after the command name>" if spec["hint"] else ""
     return COPILOT_TMPL.format(key=key, desc=spec["desc"], hint=spec["hint"] or "",
                                ph_arg=spec["args"][0], cmd=cmd, cli=cli, argpart=argpart,
                                prefix=prefix)
@@ -271,7 +272,7 @@ def generate(cfg: Config, targets: list[str] | None = None, cmd: str | None = No
 
     if "copilot" in wanted:
         for key, spec in STEPS.items():
-            put(root / ".github" / "prompts" / f"{prefix}-{key}.prompt.md",
+            put(root / ".github" / "skills" / f"{prefix}-{key}" / "SKILL.md",
                 copilot_prompt(key, spec, cmd, prefix))
 
     if "claude" in wanted:
@@ -287,7 +288,7 @@ def generate(cfg: Config, targets: list[str] | None = None, cmd: str | None = No
     # drop commands from older prefixes: they would show up twice in the editor menu
     out_dirs = []
     if "copilot" in wanted:
-        out_dirs.append((root / ".github" / "prompts", ".prompt.md"))
+        out_dirs.append((root / ".github" / "prompts", ".prompt.md"))     # what older builds wrote here
     if "claude" in wanted:
         out_dirs.append((root / ".claude" / "commands", ".md"))
     if "codex" in wanted:
@@ -295,8 +296,9 @@ def generate(cfg: Config, targets: list[str] | None = None, cmd: str | None = No
     for folder, suffix in out_dirs:
         if not folder.is_dir():
             continue
-        for old_prefix in LEGACY_PREFIXES:
-            if old_prefix == prefix:
+        own = folder.name == "prompts" and folder.parent.name == ".github"
+        for old_prefix in LEGACY_PREFIXES + ((prefix,) if own else ()):
+            if old_prefix == prefix and not own:
                 continue
             for f in folder.glob(f"{old_prefix}-*{suffix}"):
                 try:
